@@ -8,8 +8,7 @@ and you have everything you need to write, run, and serve a plugin.
 pip install 3lc-plugin-sdk          # import name: tlc_plugin_sdk
 ```
 
-> **Distribution `3lc-plugin-sdk` · import `tlc_plugin_sdk`.** (Same `3lc-`-dist /
-> `tlc_`-import convention as the rest of the 3LC Python packages.)
+> **Distribution `3lc-plugin-sdk` · import `tlc_plugin_sdk`.**
 
 ## What it gives you
 
