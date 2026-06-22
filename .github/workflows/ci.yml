@@ -41,12 +41,15 @@ jobs:
       - name: pytest
         run: uv run --python 3.12 pytest -q
         env:
-          # tlc activates its API key at IMPORT time, so even the import-light test (which
-          # imports tlc_plugin_sdk -> tlc) needs a valid key in a fresh runner — TLC_AUTH_MODE=dev
-          # does NOT work with a released wheel. The SDK tests only import tlc (no data ops), so
-          # TLC_API_KEY alone is enough — unlike 3lc-examples, no RUNTIME_*/ENVIRONMENT_* env
-          # pointing is needed. (ruff + mypy above are static analysis and need no key.)
+          # tlc activates its key when imported. Auth mirrors the tlc-monorepo pytest steps:
+          # TLC_AUTH_MODE=dev installs a dev handle so `import tlc` skips the prod AccountService
+          # round-trip (needs the paired dev key), and TLC_SENTRY_ENVIRONMENT=testing keeps
+          # Sentry out of prod. Only the dev/testing key is a secret; the rest are safe inline.
+          # (ruff + mypy above are static analysis and need no key.)
+          TLC_AUTH_MODE: dev
+          TLC_SENTRY_ENVIRONMENT: testing
           TLC_API_KEY: ${{ secrets.TLC_API_KEY }}
+          TLC_API_KEY_USER_EMAIL: automatedtest@3lc.ai
 
       - name: Minimize uv cache
         run: uv cache prune --ci
