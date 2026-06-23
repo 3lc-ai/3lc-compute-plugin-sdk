@@ -41,22 +41,21 @@ allow-direct-references = true
 packages = ["src/tlc_plugin_sdk"]
 core-metadata-version = "2.1"
 
-# ── DEV-ONLY (build-out week) — remove before any real publish ────────────────────
-# 3lc is not yet on a public index for this dev flow, so during the extraction build-out
-# we source it from the local monorepo checkout (sibling of this repo). The host
-# (3lc-compute) editable-sources THIS package the same way. See the 3lc-insights arc
-# tracker. The shippable form sources 3lc from the 3lc index instead.
 [tool.uv]
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'", "sys_platform == 'win32'"]
 
+# 3lc resolves from the public 3LC releases index — no credentials needed, same as the host
+# (3lc-compute) and 3lc-examples. CI relies on this.
 [[tool.uv.index]]
 name = "3lc-releases"
 url = "https://pypi.3lc.ai/public/repositories/releases-public"
 explicit = true
 
 [tool.uv.sources]
-# DEV-ONLY: build 3lc from the local monorepo checkout for this interpreter.
-3lc = { path = "../tlc-monorepo", editable = true }
+# 3lc from the releases index (the shippable form). LOCAL DEV: if your interpreter lacks a
+# prebuilt 3lc wheel on the index, override locally (uncommitted) with
+# `3lc = { path = "../tlc-monorepo", editable = true }`.
+3lc = { index = "3lc-releases" }
 
 [tool.ruff]
 line-length = 120
@@ -80,19 +79,14 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 
-# Untyped / not-a-dep boundary: 3lc + its native pieces ship no stubs; torch is not an
+# Untyped / not-a-dep boundary: some 3lc submodules ship no stubs, and torch is not an
 # SDK dependency at all (it's an optional ML extra a plugin venv brings) but the shared
 # model-storage helper references it lazily, so mypy needs it treated as Any here.
 [[tool.mypy.overrides]]
 module = [
     "tlc",
     "tlc.*",
-    "tlcurl",
     "tlcurl.*",
-    "_tlcsaas",
-    "_tlcsaas.*",
-    "pandas",
-    "pandas.*",
     "torch",
     "torch.*",
 ]

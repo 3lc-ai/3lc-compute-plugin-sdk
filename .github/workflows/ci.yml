@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-type-test:
+    name: ruff · mypy · pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.8.15"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --python 3.12 --dev --locked
+
+      - name: Ruff lint
+        run: uv run --python 3.12 ruff check .
+
+      - name: Ruff format check
+        run: uv run --python 3.12 ruff format --check .
+
+      - name: mypy (strict)
+        run: uv run --python 3.12 mypy src/
+
+      - name: pytest
+        run: uv run --python 3.12 pytest -q
+        env:
+          TLC_API_KEY: ${{ secrets.TLC_API_KEY }}
+          ${{ secrets.RUNTIME_NAME }}: ${{ secrets.RUNTIME_VALUE }}
+          ${{ secrets.ENVIRONMENT_NAME }}: ${{ secrets.ENVIRONMENT_VALUE }}
+
+      - name: Minimize uv cache
+        run: uv cache prune --ci

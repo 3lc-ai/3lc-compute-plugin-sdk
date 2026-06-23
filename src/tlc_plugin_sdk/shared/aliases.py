@@ -136,11 +136,12 @@ def get_table_aliases(table_url: str) -> list[dict[str, str]]:
     for m in _ALIAS_TOKEN_RE.finditer(input_url):
         found_tokens.add(m.group(1))
 
-    # Check a sample row from URL columns
-    # _url_columns can be [['image']] (nested) or ['image'] (flat)
+    # Check a sample row from URL columns. `_url_columns` is a private 3lc attribute that
+    # is not part of the typed public API and may be absent depending on the 3lc version,
+    # so reach it defensively via getattr. It can be [['image']] (nested) or ['image'] (flat).
     url_col_names: list[str] = []
     try:
-        raw_cols = list(table._url_columns)
+        raw_cols = list(getattr(table, "_url_columns", []))
         for entry in raw_cols:
             if isinstance(entry, list):
                 url_col_names.extend(entry)
