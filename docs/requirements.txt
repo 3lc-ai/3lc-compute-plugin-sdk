@@ -1,0 +1,7 @@
+# Docs toolchain (kept out of the package's runtime deps).
+# Installed as an overlay on top of the synced project env so autodoc can
+# import tlc_plugin_sdk and its dependencies. See docs/conf.py and
+# .github/workflows/docs.yml.
+sphinx>=8.0
+furo                # clean, zero-config theme
+myst-parser>=4.0    # render the Markdown guides (docs/*.md) alongside autodoc
