@@ -288,11 +288,14 @@ def list_image_urls(folder: Any, max_count: int = 10000) -> list[str]:
         max_count: Maximum number of paths to return.
 
     Returns:
-        Sorted list of image URLs/paths. Empty if the folder does not exist
-        or cannot be listed.
+        Sorted list of image URLs/paths. Empty if the folder does not exist or
+        exists but contains no images.
 
     Raises:
         ValueError: If ``folder`` contains an alias that is not registered.
+        OSError: If the folder exists but cannot be listed — e.g. a cloud auth,
+            region, or permission misconfiguration. (A merely non-existent
+            folder returns an empty list, not an error.)
 
     """
     import tlc
@@ -309,15 +312,31 @@ def list_image_urls(folder: Any, max_count: int = 10000) -> list[str]:
     root = tlc.Url(str(folder)).expand_aliases(allow_unexpanded=False).to_absolute()
     found: list[str] = []
     stack = [root]
+    is_root = True
     while stack:
         current = stack.pop()
         try:
             entries = list(UrlAdapterRegistry.list_dir(current))
-        except Exception:
-            # Missing or unlistable folder — empty result mirrors the old
-            # Path.exists() guard, but log why (e.g. cloud auth errors).
-            logger.debug("Could not list folder %s", current, exc_info=True)
+        except FileNotFoundError:
+            # The folder simply does not exist — a benign empty result, same as
+            # the old Path.exists() guard. (Deeper in the walk this would be a
+            # race: a subfolder vanished between listing and visiting it.)
+            logger.debug("Folder does not exist: %s", current)
+            is_root = False
             continue
+        except Exception as exc:
+            if is_root:
+                # The top-level folder exists but could not be listed: a real
+                # misconfiguration (cloud auth, bad region, denied access). Raise
+                # it — returning [] here would read as a benign "no images found"
+                # and send the caller hunting for the wrong problem.
+                msg = f"Could not list folder {current}: {exc}"
+                raise OSError(msg) from exc
+            # Tolerate an unlistable subfolder mid-walk so a partial listing is
+            # still useful, but log why it was skipped.
+            logger.warning("Skipping unlistable subfolder %s: %s", current, exc)
+            continue
+        is_root = False
         for entry in entries:
             if entry.is_dir():
                 stack.append(tlc.Url(entry.path))
