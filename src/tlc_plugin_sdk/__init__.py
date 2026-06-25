@@ -44,4 +44,23 @@ try:
 except PackageNotFoundError:  # running from a raw checkout that was never installed
     SDK_CONTRACT_VERSION = "0.0.0"
 
-__all__ = ["SDK_CONTRACT_VERSION", "ComputePlugin", "JobContext"]
+# Capability markers for feature-detection — decoupled from the wheel/SemVer pin.
+#
+# ``SDK_CONTRACT_VERSION`` above is the package version: the *dependency pin* a plugin
+# resolves against (``3lc-plugin-sdk>=X,<Y``). The two constants below are finer-grained
+# *capability* markers a plugin (or the host) can feature-detect against at runtime:
+#
+#   * ``PY_CONTRACT`` — the Python-side contract: ``ComputePlugin`` / ``JobContext`` and
+#     the ``tlc_plugin_sdk.shared.*`` helpers (what a plugin's Python programs against).
+#   * ``JS_CONTRACT`` — the browser-side contract: the ``PLUGIN_API`` / ``PluginJobs`` /
+#     ``TlcData`` surface a plugin's ``ui.html`` programs against (see
+#     ``contract/plugin-api.d.ts``; the ``PluginJobs`` client ships from THIS package).
+#
+# Each MINOR axis increments **independently** as features are added to one side without
+# the other. Both are always ``<= `` the package version (a capability can only exist in a
+# shipped wheel). Bump the package version when EITHER ``PY_CONTRACT`` or ``JS_CONTRACT``
+# moves — the wheel is the thing a plugin actually pins, so it must cover both axes.
+PY_CONTRACT = "0.2"
+JS_CONTRACT = "0.2"
+
+__all__ = ["JS_CONTRACT", "PY_CONTRACT", "SDK_CONTRACT_VERSION", "ComputePlugin", "JobContext"]

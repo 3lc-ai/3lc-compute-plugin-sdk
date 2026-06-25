@@ -20,7 +20,9 @@ from __future__ import annotations
 import subprocess
 import sys
 
-_HEAVY = ("litestar", "socketio", "uvicorn")
+# ``tlc`` (the data plane) is an optional extra used only lazily by ``shared.*`` — importing
+# the contract surface must not pull it either, so the base can stay featherweight.
+_HEAVY = ("litestar", "socketio", "uvicorn", "tlc")
 
 
 def test_import_is_light() -> None:

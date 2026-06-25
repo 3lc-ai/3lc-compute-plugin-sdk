@@ -296,6 +296,50 @@ startup.
 
 ## The PLUGIN_API Bridge
 
+> **Typed declaration.** The full browser surface below is declared in
+> `tlc_plugin_sdk/contract/plugin-api.d.ts` (ships in this wheel; lands at
+> `<site-packages>/tlc_plugin_sdk/contract/plugin-api.d.ts`). A plain-JS `ui.html` can opt
+> into editor type-checking without a build step:
+>
+> ```javascript
+> /// <reference types="3lc-plugin-sdk/contract/plugin-api" />
+> var API = window.PLUGIN_API;   // now typed
+> ```
+>
+> That file is the source of truth for **`JS_CONTRACT` (0.2)** — the browser-side contract.
+> The Hub frontend (`3lc-hub-frontend/frontend/static/js/plugin-loader.js`, `mountPlugin`)
+> **implements** `PLUGIN_API`; `window.PluginJobs` **ships from this package** (it is layered
+> on top of the bridge, not part of it). See "Two version axes" below.
+
+### How a fragment reaches the browser
+
+The frontend is a thin Flask + Jinja2 *shell* that renders page skeletons and does **all**
+data fetching client-side — it holds zero plugin knowledge and never proxies plugin data.
+The mount lifecycle:
+
+```
+Browser (3lc-hub-frontend, vanilla JS)            Compute service (:5020)
+  │  user opens /plugin/{id}  (Flask route → plugin_host.html)
+  ├─ TlcPlugins.mountPlugin(id, el, ctx) ───────▶  GET /api/plugins/{id}/ui  → HTML fragment
+  │     1. innerHTML = fragment
+  │     2. window.PLUGIN_API = {…}   (the bridge, built in mountPlugin)
+  │     3. re-exec the fragment's <script> tags
+  │
+  │  fragment JS now runs, talking back through PLUGIN_API:
+  ├─ PLUGIN_API.authFetch(.../compute?…) ───────▶  GET  /api/plugins/{id}/compute   → compute()
+  ├─ window.PluginJobs.run(id, params, cbs) ────▶  POST /api/plugins/{id}/run       → run_job()
+  │     └─ subscribes to SocketIO namespace "/{id}", event "job_update" (generic schema)
+  └─ PLUGIN_API.authFetch(.../{subpath}) ───────▶  ANY  /api/plugins/{id}/{subpath} → route handler
+```
+
+A plugin fragment is plain HTML+JS+CSS and is the **same bytes** whether the plugin runs
+in-process (`host` mode) or in an isolated venv worker (reverse-proxied) — the frontend
+can't tell. `PLUGIN_API` is the **single** host→fragment JS contract; a fragment should
+reach for nothing else (the `API` shorthand some plugins use is just
+`var API = window.PLUGIN_API`).
+
+### The bridge object
+
 When a plugin UI fragment is mounted, the frontend creates a global `PLUGIN_API` object:
 
 ```javascript
@@ -316,13 +360,15 @@ PLUGIN_API = {
   authFetch: TlcApi.authFetch,        // fetch() with auth headers
   data: TlcData,                      // Cached data (projects, tables, runs)
 
-  // Vendor libraries
+  computeFetch: TlcApi.computeFetch,  // authFetch joined to the compute-service base URL
+
+  // Vendor libraries (each null if the host didn't load it). Stability tiers (frozen):
   libs: {
-    Chart: Chart,                     // Chart.js
-    html2canvas: html2canvas,         // Screenshot export
-    PptxGenJS: PptxGenJS,             // PowerPoint export
-    cytoscape: cytoscape,             // Graph visualization
-    io: io,                           // Socket.IO client
+    io: io,                           // Socket.IO client — STABLE (the job channel rides it)
+    Chart: Chart,                     // Chart.js          — best-effort (may change w/o bump)
+    html2canvas: html2canvas,         // Screenshot export — best-effort
+    PptxGenJS: PptxGenJS,             // PowerPoint export — best-effort
+    cytoscape: cytoscape,             // Graph viz         — best-effort
   },
 
   // Utilities
@@ -332,6 +378,23 @@ PLUGIN_API = {
   getIcon: function(id) { ... },      // Get SVG icon for this plugin (or another by ID)
 }
 ```
+
+**Notes on the bridge surface** (full signatures in `plugin-api.d.ts`):
+
+- **`getConfig(key)`** recognizes exactly three keys — `compute_service_url`, `dashboard_url`,
+  `object_service_url`. Any other key returns `''`. `compute_service_url` is the GPU/CPU-routed
+  service for *this* plugin.
+- **`authFetch(url, opts)`** is the most-used member: it waits for auth to resolve, injects the
+  `Authorization` header and a JSON `Accept`, and aborts after `opts.timeout` ms (default 10000,
+  a custom non-standard option deleted before the real `fetch`) unless you pass your own `signal`.
+  It rejects non-ok responses with the parsed error detail.
+- **`libs` stability tiers (frozen contract):** `io` (socket.io) is **stable** — the job-tracker
+  channel rides it and it is the only `libs` member a plugin may depend on. `Chart`, `cytoscape`,
+  `html2canvas`, `PptxGenJS` are **best-effort** — exposed for convenience but may be swapped or
+  removed without a contract bump; a plugin that needs one should be prepared to vendor its own.
+- **`compute` / `objects` / `data` / `computeFetch` / `navigate` / `getIcon` / `container`** are
+  part of the declared surface but rarely used directly by `ui.html` (plugins reach data through
+  `authFetch`); they are documented in the `.d.ts` for completeness.
 
 ### Common patterns
 
@@ -694,6 +757,40 @@ curl -X POST http://localhost:5020/api/admin/plugins/my-plugin/unload
 ## Version & Compatibility
 
 All versions use **SemVer** (`MAJOR.MINOR.PATCH`).
+
+### Two version axes — never conflate them
+
+There are **two independent** kinds of "version" in play. Keep them separate:
+
+**(a) CONTRACT capability — what a plugin *programs against*.** Pinned at build/install time
+via the `3lc-plugin-sdk` dependency. The SDK exposes three constants in `tlc_plugin_sdk`:
+
+| Constant | Covers | Value |
+|----------|--------|-------|
+| `SDK_CONTRACT_VERSION` | the wheel/SemVer — the actual dependency *pin* (`3lc-plugin-sdk>=X,<Y`) | = package version (`0.2.0`) |
+| `PY_CONTRACT` | the Python surface: `ComputePlugin` / `JobContext` / `shared.*` | `0.2` |
+| `JS_CONTRACT` | the browser surface: `PLUGIN_API` / `PluginJobs` / `TlcData` (see `plugin-api.d.ts`) | `0.2` |
+
+`PY_CONTRACT` and `JS_CONTRACT` are **feature-detection markers** that increment *independently*
+as features are added to one side without the other. Both are always `<=` the package version (a
+capability can only exist in a shipped wheel). **Bump the package version when *either* moves.**
+A plugin that needs a newer capability raises its `3lc-plugin-sdk` floor; it can also
+feature-detect at runtime by reading `tlc_plugin_sdk.PY_CONTRACT` / `JS_CONTRACT`.
+
+**(b) SERVICE compatibility — what a plugin *runs against*.** Negotiated at *runtime*, not pinned.
+The compute-service and frontend version independently (separate repos); a plugin declares floors
+in its manifest and the host gates them (over `/health`, which reports the service `mode`/version):
+
+| Manifest field | Meaning |
+|----------------|---------|
+| `min_service_version` | minimum compute-service version this plugin needs |
+| `max_service_version` | maximum service version (empty = no upper bound) |
+| `min_frontend_version` | minimum frontend version this plugin's UI needs |
+
+An incompatible plugin is **loaded but disabled** (shown with an "update" badge), never silently
+dropped. So: **contract capability** is a compile/install-time pin against this SDK; **service
+compatibility** is a runtime negotiation against the host services. The SDK wheel does not pin a
+service version, and the manifest floors do not pin a contract version — they are orthogonal.
 
 ### Plugin Version Fields
 

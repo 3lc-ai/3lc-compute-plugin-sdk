@@ -13,7 +13,23 @@ package's own docstrings.
    :members:
 
 .. autodata:: tlc_plugin_sdk.SDK_CONTRACT_VERSION
+
+.. autodata:: tlc_plugin_sdk.PY_CONTRACT
+
+.. autodata:: tlc_plugin_sdk.JS_CONTRACT
 ```
+
+`SDK_CONTRACT_VERSION` is the wheel/SemVer — the dependency *pin* a plugin resolves
+against (`3lc-plugin-sdk>=X,<Y`). `PY_CONTRACT` and `JS_CONTRACT` are finer-grained
+**capability markers** for runtime feature-detection: `PY_CONTRACT` covers the Python
+surface (`ComputePlugin` / `JobContext`), `JS_CONTRACT` the browser surface
+(`PLUGIN_API` / `PluginJobs` / `TlcData`, declared in
+`tlc_plugin_sdk/contract/plugin-api.d.ts`). Both increment independently and are always
+`<=` the package version. See `docs/plugin-guide.md` → "Two version axes".
+
+The `.d.ts` ships in the wheel at
+`<site-packages>/tlc_plugin_sdk/contract/plugin-api.d.ts`; a plain-JS `ui.html` references
+it with `/// <reference types="3lc-plugin-sdk/contract/plugin-api" />`.
 
 ## The worker
 

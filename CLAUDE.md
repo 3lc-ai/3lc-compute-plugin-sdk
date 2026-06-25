@@ -17,12 +17,16 @@ contract a plugin programs against. It was extracted from the private `3lc-insig
 1. **No back-edge to the host.** `tlc_plugin_sdk` must never import `tlc_compute` (or anything
    host-side). The SDK is the root of the dependency graph; the host depends on the SDK, never the
    reverse. The whole point — a plugin built against just this wheel runs in its own isolated venv.
-2. **Import-light.** Importing `tlc_plugin_sdk` must not eagerly pull the server stack. `litestar`
-   and `uvicorn` are deps but are imported **lazily** (only when a worker actually serves), and the
+2. **Import-light.** Importing `tlc_plugin_sdk` must not eagerly pull the server stack *or the data
+   plane*. `litestar` and `uvicorn` are base deps but are imported **lazily** (only when a worker
+   actually serves); `tlc` is an optional extra imported lazily only by `shared.*`; and the
    host-only SocketIO server must not be importable from here at all. `tests/test_import_light.py`
-   enforces this — keep it green.
-3. **Dependencies stay minimal.** Only `3lc` + `uvicorn` + `litestar`. Adding a dep widens what
-   every plugin venv must install — justify it.
+   enforces this (guards `litestar`/`socketio`/`uvicorn`/`tlc`) — keep it green.
+3. **Dependencies stay minimal.** Base = `uvicorn` + `litestar` only. `3lc` is an optional extra
+   (`3lc-plugin-sdk[data]`) used solely by the `shared.*` helpers — the contract core needs no data
+   plane, so light consumers (e.g. the Hub frontend) install the bare SDK. Adding a base dep widens
+   what every plugin venv must install — justify it. (Direction: as `shared.*` graduates into the
+   core, `3lc` likely returns to base with `[data]` kept as a no-op alias.)
 4. **The contract is published — every public symbol is forever-ish.** Pre-1.0 we can still
    change it, but treat additions as the safe move and reshaping `JobContext`/`ComputePlugin` as
    breaking. The version is the contract version (see below).

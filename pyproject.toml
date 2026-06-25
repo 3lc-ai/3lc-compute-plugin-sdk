@@ -17,15 +17,28 @@ authors = [{ name = "3LC", email = "support@3lc.ai" }]
 # repo is "all rights reserved" by default. Do NOT publish to public PyPI before this lands.
 keywords = ["3lc", "plugin", "sdk", "machine-learning", "data-curation"]
 
-# The SDK is the ROOT of the plugin dependency graph: it depends only on the data plane
-# (3lc), the ASGI server the worker runs on (uvicorn, imported lazily), and the route
-# framework a plugin authors against (litestar). It must NEVER depend back on the host
-# (3lc-compute) or on any plugin. A plugin venv installs THIS, not the full service.
+# The SDK is the ROOT of the plugin dependency graph: the base depends only on the ASGI
+# server the worker runs on (uvicorn, imported lazily) and the route framework a plugin
+# authors against (litestar). It must NEVER depend back on the host (3lc-compute) or on any
+# plugin. A plugin venv installs THIS, not the full service.
+#
+# The data plane (3lc) is an OPTIONAL extra: only `tlc_plugin_sdk.shared.*` (image / modality
+# / alias / url / model-storage helpers) imports `tlc`, and it does so lazily. Consumers that
+# use those helpers install `3lc-plugin-sdk[data]`; the contract core (ComputePlugin,
+# JobContext, the worker, the version constants, the .d.ts) needs no `tlc`. This keeps the base
+# featherweight for light consumers (e.g. the Hub frontend, which wants only JS_CONTRACT).
+# NOTE (direction): much of `shared.*` is expected to graduate into the core over time; when it
+# does, `3lc` likely returns to the base deps and `[data]` is kept as a no-op alias.
 dependencies = [
-    "3lc[pandas]>=3.0.0,<4.0.0",
     "uvicorn>=0.34.0",
     "litestar>=2.22.0,<3.0.0",
 ]
+
+[project.optional-dependencies]
+# The data plane for `tlc_plugin_sdk.shared.*`. Required by any consumer that uses the shared
+# image/modality/alias/url/model-storage helpers (the host and the heavy venv plugins). The
+# shared modules import `tlc` lazily and raise a clear ImportError if it is missing.
+data = ["3lc[pandas]>=3.0.0,<4.0.0"]
 
 [dependency-groups]
 dev = [
@@ -40,6 +53,18 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/tlc_plugin_sdk"]
 core-metadata-version = "2.1"
+# Ship non-Python package data in the wheel. ``py.typed`` marks the package typed;
+# ``contract/*.d.ts`` is the JS_CONTRACT browser-surface declaration a plugin's
+# ``ui.html`` references (lands at ``<site-packages>/tlc_plugin_sdk/contract/plugin-api.d.ts``).
+# Hatchling includes package files by default, but declare these explicitly so a future
+# include/exclude narrowing can't silently drop the contract assets.
+artifacts = [
+    "src/tlc_plugin_sdk/py.typed",
+    "src/tlc_plugin_sdk/contract/*.d.ts",
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/tlc_plugin_sdk/contract/plugin-api.d.ts" = "tlc_plugin_sdk/contract/plugin-api.d.ts"
 
 [tool.uv]
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'", "sys_platform == 'win32'"]
