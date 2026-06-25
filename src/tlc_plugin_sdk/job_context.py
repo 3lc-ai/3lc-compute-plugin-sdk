@@ -1,12 +1,5 @@
-# =============================================================================
-# <copyright>
-# Copyright (c) 2026 3LC Inc. All rights reserved.
-#
-# All rights are reserved. Reproduction or transmission in whole or in part, in
-# any form or by any means, electronic, mechanical or otherwise, is prohibited
-# without the prior written permission of the copyright owner.
-# </copyright>
-# =============================================================================
+# Copyright 2026 3LC Inc.
+# SPDX-License-Identifier: Apache-2.0
 """``JobContext`` — the surface a plugin's ``run_job`` programs against.
 
 This is the v2 job-execution contract from ``docs/plugin-isolation.md``. A plugin
