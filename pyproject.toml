@@ -16,6 +16,20 @@ authors = [{ name = "3LC", email = "support@3lc.ai" }]
 # 3lc-insights deployment doc §14.6 — the license audit is the long pole). Until then the
 # repo is "all rights reserved" by default. Do NOT publish to public PyPI before this lands.
 keywords = ["3lc", "plugin", "sdk", "machine-learning", "data-curation"]
+# "Private :: Do Not Upload" is a hard guard: public PyPI rejects any upload carrying it,
+# which enforces the no-public-PyPI rule above while the license is unset. Private indexes
+# (the 3lc releases index / CodeArtifact) ignore it, so it does not block our actual target.
+classifiers = [
+    "Private :: Do Not Upload",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
 
 # The SDK is the ROOT of the plugin dependency graph: the base depends only on the ASGI
 # server the worker runs on (uvicorn, imported lazily) and the route framework a plugin
@@ -33,6 +47,10 @@ dependencies = [
     "uvicorn>=0.34.0",
     "litestar>=2.22.0,<3.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/3lc-ai/3lc-plugin-sdk"
+Repository = "https://github.com/3lc-ai/3lc-plugin-sdk"
 
 [project.optional-dependencies]
 # The data plane behind `tlc_plugin_sdk.shared.*` (the extra is named for the module it unlocks).
