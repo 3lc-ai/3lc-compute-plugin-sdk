@@ -1,12 +1,5 @@
-# =============================================================================
-# <copyright>
-# Copyright (c) 2026 3LC Inc. All rights reserved.
-#
-# All rights are reserved. Reproduction or transmission in whole or in part, in
-# any form or by any means, electronic, mechanical or otherwise, is prohibited
-# without the prior written permission of the copyright owner.
-# </copyright>
-# =============================================================================
+# Copyright 2026 3LC Inc.
+# SPDX-License-Identifier: Apache-2.0
 """The plugin SDK contract surface must stay cheap to import.
 
 Importing ``tlc_plugin_sdk`` (which every venv plugin's module does) must not *eagerly*
@@ -20,7 +13,9 @@ from __future__ import annotations
 import subprocess
 import sys
 
-_HEAVY = ("litestar", "socketio", "uvicorn")
+# ``tlc`` (the data plane) is an optional extra used only lazily by ``shared.*`` — importing
+# the contract surface must not pull it either, so the base can stay featherweight.
+_HEAVY = ("litestar", "socketio", "uvicorn", "tlc")
 
 
 def test_import_is_light() -> None:

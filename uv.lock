@@ -94,9 +94,13 @@ name = "3lc-plugin-sdk"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "3lc", extra = ["pandas"], marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "litestar", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "uvicorn", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[package.optional-dependencies]
+shared = [
+    { name = "3lc", extra = ["pandas"], marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -108,10 +112,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "3lc", extras = ["pandas"], specifier = ">=3.0.0,<4.0.0", index = "https://pypi.3lc.ai/public/repositories/releases-public" },
+    { name = "3lc", extras = ["pandas"], marker = "extra == 'shared'", specifier = ">=3.0.0,<4.0.0", index = "https://pypi.3lc.ai/public/repositories/releases-public" },
     { name = "litestar", specifier = ">=2.22.0,<3.0.0" },
     { name = "uvicorn", specifier = ">=0.34.0" },
 ]
+provides-extras = ["shared"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -12,20 +12,55 @@ description = "Public Python SDK for building 3LC compute-service plugins (the i
 requires-python = ">=3.10"
 readme = "README.md"
 authors = [{ name = "3LC", email = "support@3lc.ai" }]
-# NOTE: license intentionally unset pending the OSS license decision (see the private
-# 3lc-insights deployment doc §14.6 — the license audit is the long pole). Until then the
-# repo is "all rights reserved" by default. Do NOT publish to public PyPI before this lands.
+# Apache-2.0: the SDK is the public plugin contract, intended to go open-source. `{ text }`
+# keeps the metadata at the pinned core-metadata 2.1 (the SPDX string form would force 2.4);
+# the OSI classifier below carries the machine-readable signal. Full text in ./LICENSE.
+license = { text = "Apache-2.0" }
 keywords = ["3lc", "plugin", "sdk", "machine-learning", "data-curation"]
+# "Private :: Do Not Upload" is a hard guard: public PyPI rejects any upload carrying it.
+# The license is now set (Apache-2.0), so this no longer gates on the license — it enforces
+# the "private until release" policy (we publish to the 3lc private index / CodeArtifact,
+# which ignore the classifier). Drop this line when the package goes public.
+classifiers = [
+    "Private :: Do Not Upload",
+    "License :: OSI Approved :: Apache Software License",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
 
-# The SDK is the ROOT of the plugin dependency graph: it depends only on the data plane
-# (3lc), the ASGI server the worker runs on (uvicorn, imported lazily), and the route
-# framework a plugin authors against (litestar). It must NEVER depend back on the host
-# (3lc-compute) or on any plugin. A plugin venv installs THIS, not the full service.
+# The SDK is the ROOT of the plugin dependency graph: the base depends only on the ASGI
+# server the worker runs on (uvicorn, imported lazily) and the route framework a plugin
+# authors against (litestar). It must NEVER depend back on the host (3lc-compute) or on any
+# plugin. A plugin venv installs THIS, not the full service.
+#
+# The data plane (3lc) is an OPTIONAL extra: only `tlc_plugin_sdk.shared.*` (image / modality
+# / alias / url / model-storage helpers) imports `tlc`, and it does so lazily. Consumers that
+# use those helpers install `3lc-plugin-sdk[shared]`; the contract core (ComputePlugin,
+# JobContext, the worker, the version constants, the .d.ts) needs no `tlc`. This keeps the base
+# featherweight for light consumers (e.g. the Hub frontend, which wants only JS_CONTRACT).
+# NOTE (direction): much of `shared.*` is expected to graduate into the core over time; when it
+# does, `3lc` likely returns to the base deps and `[shared]` is kept as a no-op alias.
 dependencies = [
-    "3lc[pandas]>=3.0.0,<4.0.0",
     "uvicorn>=0.34.0",
     "litestar>=2.22.0,<3.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/3lc-ai/3lc-plugin-sdk"
+Repository = "https://github.com/3lc-ai/3lc-plugin-sdk"
+
+[project.optional-dependencies]
+# The data plane behind `tlc_plugin_sdk.shared.*` (the extra is named for the module it unlocks).
+# Required by any consumer that uses the shared image/modality/alias/url/model-storage helpers
+# (the host and the heavy venv plugins). Those modules import `tlc` lazily, so a consumer that
+# never touches `shared.*` (e.g. the Hub frontend) installs the bare SDK and gets no `tlc`.
+shared = ["3lc[pandas]>=3.0.0,<4.0.0"]
 
 [dependency-groups]
 dev = [
@@ -40,6 +75,18 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/tlc_plugin_sdk"]
 core-metadata-version = "2.1"
+# Ship non-Python package data in the wheel. ``py.typed`` marks the package typed;
+# ``contract/*.d.ts`` is the JS_CONTRACT browser-surface declaration a plugin's
+# ``ui.html`` references (lands at ``<site-packages>/tlc_plugin_sdk/contract/plugin-api.d.ts``).
+# Hatchling includes package files by default, but declare these explicitly so a future
+# include/exclude narrowing can't silently drop the contract assets.
+artifacts = [
+    "src/tlc_plugin_sdk/py.typed",
+    "src/tlc_plugin_sdk/contract/*.d.ts",
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/tlc_plugin_sdk/contract/plugin-api.d.ts" = "tlc_plugin_sdk/contract/plugin-api.d.ts"
 
 [tool.uv]
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'", "sys_platform == 'win32'"]
@@ -79,9 +126,11 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 
-# Untyped / not-a-dep boundary: some 3lc submodules ship no stubs, and torch is not an
-# SDK dependency at all (it's an optional ML extra a plugin venv brings) but the shared
-# model-storage helper references it lazily, so mypy needs it treated as Any here.
+# Untyped / not-installed boundary. CI type-checks the base+dev env, NOT the [shared] extra,
+# so the shared.* data-plane helpers' deps aren't present: tlc + Pillow (PIL) reach the env
+# only via [shared] (the image helper uses PIL), and torch is not an SDK dep at all (an ML
+# extra a plugin venv brings) — the shared model-storage helper references it lazily. mypy
+# treats all of these as Any here.
 [[tool.mypy.overrides]]
 module = [
     "tlc",
@@ -89,5 +138,7 @@ module = [
     "tlcurl.*",
     "torch",
     "torch.*",
+    "PIL",
+    "PIL.*",
 ]
 ignore_missing_imports = true

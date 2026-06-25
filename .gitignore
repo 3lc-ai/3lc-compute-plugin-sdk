@@ -15,6 +15,9 @@ venv/
 .ruff_cache/
 .pytest_cache/
 
+# Docs build output
+docs/_build/
+
 # Editors / OS
 .vscode/
 .idea/
