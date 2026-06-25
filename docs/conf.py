@@ -47,7 +47,7 @@ source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 myst_heading_anchors = 3
 
 # The author guide cross-links a couple of docs that live only in the private
-# 3lc-insights monorepo (plugin-isolation.md, plugin-migration.md). Those targets
+# 3lc-compute host repo (plugin-isolation.md, plugin-migration.md). Those targets
 # don't exist in this repo, so don't let `-W` turn the dangling links into a build
 # failure. This is scoped to MyST link resolution only — autodoc/reference errors
 # stay fatal. Remove once the guide's cross-doc links are repointed or inlined.

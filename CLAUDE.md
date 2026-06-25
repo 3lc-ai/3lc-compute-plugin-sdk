@@ -1,7 +1,7 @@
 # 3lc-plugin-sdk — agent & contributor orientation
 
 This repo is the **public Python plugin SDK** for the 3LC compute service: the import-light
-contract a plugin programs against. It was extracted from the private `3lc-insights` monorepo
+contract a plugin programs against. It was extracted from the private `3lc-compute` host repo
 (provenance: commit `b3aefd7`), where the host runtime and the full design history live.
 
 ## What this package is (and is not)
@@ -42,7 +42,7 @@ host implements a range. Don't reintroduce a separately-maintained version const
 ## Where the rest of the context lives
 
 The design rationale (the plugin-architecture arc, isolation model, contract-gap analysis,
-distribution/freeze plan) lives in the **private `3lc-insights` monorepo** under `docs/`
+distribution/freeze plan) lives in the **private `3lc-compute` host repo** under `docs/`
 (`plugin-arc-tracker.md`, `plugin-isolation.md`, `plugin-contract-gaps.md`, the deployment doc
 §14). The author-facing slice travels with this repo as `docs/plugin-guide.md`. If you're an
 internal agent with monorepo access, read those for the "why."
