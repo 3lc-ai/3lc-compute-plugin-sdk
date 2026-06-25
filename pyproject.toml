@@ -126,9 +126,11 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 
-# Untyped / not-a-dep boundary: some 3lc submodules ship no stubs, and torch is not an
-# SDK dependency at all (it's an optional ML extra a plugin venv brings) but the shared
-# model-storage helper references it lazily, so mypy needs it treated as Any here.
+# Untyped / not-installed boundary. CI type-checks the base+dev env, NOT the [shared] extra,
+# so the shared.* data-plane helpers' deps aren't present: tlc + Pillow (PIL) reach the env
+# only via [shared] (the image helper uses PIL), and torch is not an SDK dep at all (an ML
+# extra a plugin venv brings) — the shared model-storage helper references it lazily. mypy
+# treats all of these as Any here.
 [[tool.mypy.overrides]]
 module = [
     "tlc",
@@ -136,5 +138,7 @@ module = [
     "tlcurl.*",
     "torch",
     "torch.*",
+    "PIL",
+    "PIL.*",
 ]
 ignore_missing_imports = true
