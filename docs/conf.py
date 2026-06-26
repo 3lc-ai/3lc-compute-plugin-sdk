@@ -70,6 +70,7 @@ def ts_type_xref_formatter(config: object, xref: object) -> str:
             return f":js:{kind}:`{name}`"
     return name
 
+
 # .md -> MyST, .rst -> reStructuredText (the eval-rst blocks in api.md).
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 

@@ -44,6 +44,4 @@ needs `tlc_plugin_sdk`, it is portable across host versions and can run in its o
 
 ## Status
 
-Pre-1.0 — the contract is still being hardened toward a freeze. License is pending (see
-`CLAUDE.md`). Extracted from the private `3lc-compute` host repo, which holds the host and the
-internal design docs.
+Pre-1.0 — the contract is still being hardened toward a freeze.
