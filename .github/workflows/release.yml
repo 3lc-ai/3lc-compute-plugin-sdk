@@ -1,20 +1,25 @@
 name: Release
 
-# Publish a tagged release of 3lc-plugin-sdk to PUBLIC PyPI (pypi.org) via OIDC
-# trusted publishing — no long-lived API token, no stored secrets.
+# Publish a tagged release of 3lc-plugin-sdk to 3LC CloudRepo (pypi.3lc.ai) via `uv publish`.
 #
-# === ONE-TIME SETUP (everything below is ready; this is all that's left) ===
-# 1. On PyPI, register a "pending" trusted publisher (Account -> Publishing) BEFORE the
-#    first release, since the project does not exist yet. Bind it to:
-#      PyPI Project Name : 3lc-plugin-sdk
-#      Owner             : 3lc-ai
-#      Repository name   : 3lc-plugin-sdk
-#      Workflow name     : release.yml
-#      Environment name  : release
-#    Use a 3LC-org-owned PyPI account as the project owner (not a personal one).
-# 2. Create a GitHub Environment named "release" (repo Settings -> Environments). For OIDC it
-#    needs NO secrets — it only has to exist (the name is part of the trusted-publisher bind
-#    above). Optionally add required reviewers to gate publishes.
+# WHY CloudRepo (not PyPI): public-PyPI OIDC trusted publishing is the intended end state, but
+# the PyPI project/publish is still blocked — so the beta ships over CloudRepo as the interim
+# route (same workaround as 3lc-compute / 3lc-hub-frontend). To flip back to PyPI later, restore
+# the OIDC variant from git history (commit 4e1e2a3: `uv publish --trusted-publishing always`
+# + `id-token: write`, no env/secrets) and drop the CloudRepo `release` environment.
+#
+# === ONE-TIME SETUP ===
+# Create a GitHub Environment named "release" (repo Settings -> Environments) holding:
+#   Secrets:
+#     CLOUDREPO_USERNAME    - CloudRepo upload user (≈ the ACCESS_KEY)
+#     CLOUDREPO_PASSWORD    - CloudRepo upload password/token (≈ the SECRET_KEY)
+#   Variables:
+#     CLOUDREPO_PUBLISH_URL - upload endpoint. The SDK is open + beta, so target the PUBLIC
+#                             prerelease repo, mirroring 3lc-compute:
+#                             https://pypi.3lc.ai/public/repositories/prereleases-public/
+#                             (confirm the exact UPLOAD url with whoever owns the CloudRepo —
+#                              the read mount and the upload endpoint can differ.)
+# Optionally add required reviewers on the "release" environment to gate publishes.
 #
 # To cut a release: bump `version` in pyproject.toml, commit, then push a tag `vX.Y.Z`
 # that matches it (or run via workflow_dispatch).
@@ -34,9 +39,10 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     environment: release
-    # OIDC: GitHub mints a short-lived token PyPI trades for an upload scope. No secrets.
-    permissions:
-      id-token: write
+    env:
+      UV_PUBLISH_URL: ${{ vars.CLOUDREPO_PUBLISH_URL }}
+      UV_PUBLISH_USERNAME: ${{ secrets.CLOUDREPO_USERNAME }}
+      UV_PUBLISH_PASSWORD: ${{ secrets.CLOUDREPO_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -53,10 +59,16 @@ jobs:
           echo "pyproject=$PKG tag=$TAG"
           [ "$PKG" = "$TAG" ] || { echo "::error::tag $GITHUB_REF_NAME ($TAG) != pyproject version $PKG"; exit 1; }
 
+      - name: Verify the 'release' environment is configured
+        run: |
+          : "${UV_PUBLISH_URL:?set the CLOUDREPO_PUBLISH_URL variable on the 'release' environment}"
+          : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'release' environment}"
+          : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'release' environment}"
+
       # --no-sources strips [tool.uv.sources] so the released wheel never bakes in a dev
-      # index/path override (the published artifact resolves deps from public indexes).
+      # index/path override (the published artifact resolves deps from the configured index).
       - name: Build
         run: uv build --no-sources
 
-      - name: Publish to PyPI (OIDC trusted publishing)
-        run: uv publish --trusted-publishing always
+      - name: Publish to CloudRepo
+        run: uv publish
