@@ -90,7 +90,7 @@ pandas = [
 ]
 
 [[package]]
-name = "3lc-plugin-sdk"
+name = "3lc-compute-plugin-sdk"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
