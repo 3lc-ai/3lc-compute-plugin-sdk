@@ -1,4 +1,4 @@
-"""Sphinx configuration for the 3lc-plugin-sdk docs.
+"""Sphinx configuration for the 3lc-compute-plugin-sdk docs.
 
 Minimal, autodoc-driven: the API reference is generated from the package's own
 docstrings (Google-style, via napoleon), and the Markdown author guides render
@@ -20,12 +20,12 @@ from importlib.metadata import version as _pkg_version
 sys.path.insert(0, os.path.abspath("../src"))
 
 # -- Project information ------------------------------------------------------
-project = "3lc-plugin-sdk"
+project = "3lc-compute-plugin-sdk"
 author = "3LC"
 copyright = "2026 3LC Inc."  # noqa: A001 — Sphinx-reserved name
 
 try:
-    release = _pkg_version("3lc-plugin-sdk")
+    release = _pkg_version("3lc-compute-plugin-sdk")
 except PackageNotFoundError:  # raw checkout, never installed
     release = "0.0.0"
 version = release
@@ -108,4 +108,4 @@ intersphinx_mapping = {
 
 # -- HTML output --------------------------------------------------------------
 html_theme = "furo"
-html_title = f"3lc-plugin-sdk {release}"
+html_title = f"3lc-compute-plugin-sdk {release}"

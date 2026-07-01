@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "3lc-plugin-sdk"
+name = "3lc-compute-plugin-sdk"
 # The plugin-contract (ABI) version. This IS tlc_plugin_sdk.SDK_CONTRACT_VERSION
 # (read back via importlib.metadata) — one source of truth. SemVer MAJOR.MINOR.PATCH;
 # < 1.0 signals the contract is not yet frozen. See docs/plugin-guide.md.
@@ -36,7 +36,7 @@ classifiers = [
 #
 # The data plane (3lc) is an OPTIONAL extra: only `tlc_plugin_sdk.shared.*` (image / modality
 # / alias / url / model-storage helpers) imports `tlc`, and it does so lazily. Consumers that
-# use those helpers install `3lc-plugin-sdk[shared]`; the contract core (ComputePlugin,
+# use those helpers install `3lc-compute-plugin-sdk[shared]`; the contract core (ComputePlugin,
 # JobContext, the worker, the version constants, the .d.ts) needs no `tlc`. This keeps the base
 # featherweight for light consumers (e.g. the Hub frontend, which wants only JS_CONTRACT).
 # NOTE (direction): much of `shared.*` is expected to graduate into the core over time; when it
@@ -47,8 +47,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/3lc-ai/3lc-plugin-sdk"
-Repository = "https://github.com/3lc-ai/3lc-plugin-sdk"
+Homepage = "https://github.com/3lc-ai/3lc-compute-plugin-sdk"
+Repository = "https://github.com/3lc-ai/3lc-compute-plugin-sdk"
 
 [project.optional-dependencies]
 # The data plane behind `tlc_plugin_sdk.shared.*` (the extra is named for the module it unlocks).

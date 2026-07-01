@@ -1,11 +1,11 @@
-# 3lc-plugin-sdk
+# 3lc-compute-plugin-sdk
 
 The public Python SDK for building [3LC](https://3lc.ai) compute-service plugins —
 the **import-light contract** a plugin programs against. Install this (not the full
 service) and you have everything you need to write, run, and serve a plugin.
 
 ```bash
-pip install 3lc-plugin-sdk          # import name: tlc_plugin_sdk
+pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
 ```
 
 ## What it gives you

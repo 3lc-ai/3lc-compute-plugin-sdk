@@ -38,6 +38,6 @@ def test_exposes_contract() -> None:
     from importlib.metadata import version
 
     assert isinstance(tlc_plugin_sdk.SDK_CONTRACT_VERSION, str)
-    assert version("3lc-plugin-sdk") == tlc_plugin_sdk.SDK_CONTRACT_VERSION
+    assert version("3lc-compute-plugin-sdk") == tlc_plugin_sdk.SDK_CONTRACT_VERSION
     # A plugin subclasses ComputePlugin — there is no register() to export.
     assert not hasattr(tlc_plugin_sdk, "register")

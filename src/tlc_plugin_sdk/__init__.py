@@ -16,7 +16,7 @@ manifest, and the host discovers the plugin via its manifest ``entrypoint``.
 The contract is **defined here**, in :mod:`tlc_plugin_sdk.contract`, so it lives
 next to :class:`JobContext` and the venv worker on the import-light side of the SDK
 boundary — nothing in this package pulls in the server stack. This is the standalone
-public ``3lc-plugin-sdk`` distribution: the light base a venv plugin installs (the
+public ``3lc-compute-plugin-sdk`` distribution: the light base a venv plugin installs (the
 host ``3lc-compute`` depends on it, never the reverse). See ``CLAUDE.md``.
 """
 
@@ -33,14 +33,14 @@ from tlc_plugin_sdk.job_context import JobContext
 # separately maintained constant. A plugin declares the contract it targets via its
 # manifest's ``sdk_version``.
 try:
-    SDK_CONTRACT_VERSION = _pkg_version("3lc-plugin-sdk")
+    SDK_CONTRACT_VERSION = _pkg_version("3lc-compute-plugin-sdk")
 except PackageNotFoundError:  # running from a raw checkout that was never installed
     SDK_CONTRACT_VERSION = "0.0.0"
 
 # Capability markers for feature-detection — decoupled from the wheel/SemVer pin.
 #
 # ``SDK_CONTRACT_VERSION`` above is the package version: the *dependency pin* a plugin
-# resolves against (``3lc-plugin-sdk>=X,<Y``). The two constants below are finer-grained
+# resolves against (``3lc-compute-plugin-sdk>=X,<Y``). The two constants below are finer-grained
 # *capability* markers a plugin (or the host) can feature-detect against at runtime:
 #
 #   * ``PY_CONTRACT`` — the Python-side contract: ``ComputePlugin`` / ``JobContext`` and

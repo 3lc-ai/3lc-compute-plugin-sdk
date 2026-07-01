@@ -1,14 +1,14 @@
-# 3lc-plugin-sdk
+# 3lc-compute-plugin-sdk
 
 The public Python SDK for building [3LC](https://3lc.ai) compute-service plugins — the
 **import-light contract** a plugin programs against. Install this (not the full service)
 and you have everything you need to write, run, and serve a plugin.
 
 ```bash
-pip install 3lc-plugin-sdk          # import name: tlc_plugin_sdk
+pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
 ```
 
-> **Distribution `3lc-plugin-sdk` · import `tlc_plugin_sdk`.**
+> **Distribution `3lc-compute-plugin-sdk` · import `tlc_plugin_sdk`.**
 
 ## What it gives you
 
@@ -32,7 +32,7 @@ format, custom routes, the job model, UI fragment, checklist).
 ## The contract version
 
 `tlc_plugin_sdk.SDK_CONTRACT_VERSION` is this package's own version — one source of truth.
-A plugin pins the SDK (`3lc-plugin-sdk>=X,<Y`) and declares the contract it targets via its
+A plugin pins the SDK (`3lc-compute-plugin-sdk>=X,<Y`) and declares the contract it targets via its
 manifest. The host implements a contract range and the SDK version is the lingua franca that
 both sides agree on. Versions are SemVer; `< 1.0` means the contract is not yet frozen.
 

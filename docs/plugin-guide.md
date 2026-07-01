@@ -778,18 +778,18 @@ All versions use **SemVer** (`MAJOR.MINOR.PATCH`).
 There are **two independent** kinds of "version" in play. Keep them separate:
 
 **(a) CONTRACT capability — what a plugin *programs against*.** Pinned at build/install time
-via the `3lc-plugin-sdk` dependency. The SDK exposes three constants in `tlc_plugin_sdk`:
+via the `3lc-compute-plugin-sdk` dependency. The SDK exposes three constants in `tlc_plugin_sdk`:
 
 | Constant | Covers | Value |
 |----------|--------|-------|
-| `SDK_CONTRACT_VERSION` | the wheel/SemVer — the actual dependency *pin* (`3lc-plugin-sdk>=X,<Y`) | = package version (`0.1.0`) |
+| `SDK_CONTRACT_VERSION` | the wheel/SemVer — the actual dependency *pin* (`3lc-compute-plugin-sdk>=X,<Y`) | = package version (`0.1.0`) |
 | `PY_CONTRACT` | the Python surface: `ComputePlugin` / `JobContext` / `shared.*` | `0.1` |
 | `JS_CONTRACT` | the browser surface: `PLUGIN_API` / `PluginJobs` / `TlcData` (see `plugin-api.d.ts`) | `0.1` |
 
 `PY_CONTRACT` and `JS_CONTRACT` are **feature-detection markers** that increment *independently*
 as features are added to one side without the other. Both are always `<=` the package version (a
 capability can only exist in a shipped wheel). **Bump the package version when *either* moves.**
-A plugin that needs a newer capability raises its `3lc-plugin-sdk` floor; it can also
+A plugin that needs a newer capability raises its `3lc-compute-plugin-sdk` floor; it can also
 feature-detect at runtime by reading `tlc_plugin_sdk.PY_CONTRACT` / `JS_CONTRACT`.
 
 **(b) SERVICE compatibility — what a plugin *runs against*.** Negotiated at *runtime*, not pinned.

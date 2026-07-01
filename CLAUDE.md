@@ -1,4 +1,4 @@
-# 3lc-plugin-sdk — agent & contributor orientation
+# 3lc-compute-plugin-sdk — agent & contributor orientation
 
 This repo is the **public Python plugin SDK** for the 3LC compute service: the import-light
 contract a plugin programs against. The compute-service host that discovers and runs plugins lives
@@ -7,7 +7,7 @@ in a separate repository and is **not** a dependency of this SDK.
 ## What this package is (and is not)
 
 - **Is:** the contract surface — `ComputePlugin`, `JobContext`, the worker entrypoint, and the
-  `tlc_plugin_sdk.shared.*` helpers. Distribution `3lc-plugin-sdk`, import `tlc_plugin_sdk`.
+  `tlc_plugin_sdk.shared.*` helpers. Distribution `3lc-compute-plugin-sdk`, import `tlc_plugin_sdk`.
 - **Is not:** the host. The compute service (`3lc-compute` / import `tlc_compute`) is a separate
   package that *discovers and runs* plugins. It is not a dependency of this SDK and its source is
   not here.
@@ -23,7 +23,7 @@ in a separate repository and is **not** a dependency of this SDK.
    host-only SocketIO server must not be importable from here at all. `tests/test_import_light.py`
    enforces this (guards `litestar`/`socketio`/`uvicorn`/`tlc`) — keep it green.
 3. **Dependencies stay minimal.** Base = `uvicorn` + `litestar` only. `3lc` is an optional extra
-   (`3lc-plugin-sdk[shared]`, named for the `shared.*` module it unlocks) used solely by those
+   (`3lc-compute-plugin-sdk[shared]`, named for the `shared.*` module it unlocks) used solely by those
    helpers — the contract core needs no data plane, so light consumers (e.g. the Hub frontend)
    install the bare SDK. Adding a base dep widens what every plugin venv must install — justify it.
    (Direction: as `shared.*` graduates into the core, `3lc` likely returns to base with `[shared]`
@@ -36,13 +36,13 @@ in a separate repository and is **not** a dependency of this SDK.
 
 `SDK_CONTRACT_VERSION` is read from this package's own version via `importlib.metadata` — one
 source of truth (`[project] version` in `pyproject.toml`). Bump it (SemVer) when the contract
-changes; `< 1.0` signals it is not yet frozen. Plugins pin a range (`3lc-plugin-sdk>=X,<Y`); the
+changes; `< 1.0` signals it is not yet frozen. Plugins pin a range (`3lc-compute-plugin-sdk>=X,<Y`); the
 host implements a range. Don't reintroduce a separately-maintained version constant.
 
 ## Where the rest of the context lives
 
 The author guide and API reference travel with this repo (`docs/plugin-guide.md`, `docs/api.md`)
-and are published at <https://3lc-ai.github.io/3lc-plugin-sdk/>. That guide is the canonical,
+and are published at <https://3lc-ai.github.io/3lc-compute-plugin-sdk/>. That guide is the canonical,
 self-contained source for building a plugin against this contract — including how isolation works
 and how to port an existing plugin.
 

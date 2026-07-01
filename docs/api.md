@@ -20,7 +20,7 @@ package's own docstrings.
 ```
 
 `SDK_CONTRACT_VERSION` is the wheel/SemVer — the dependency *pin* a plugin resolves
-against (`3lc-plugin-sdk>=X,<Y`). `PY_CONTRACT` and `JS_CONTRACT` are finer-grained
+against (`3lc-compute-plugin-sdk>=X,<Y`). `PY_CONTRACT` and `JS_CONTRACT` are finer-grained
 **capability markers** for runtime feature-detection: `PY_CONTRACT` covers the Python
 surface (`ComputePlugin` / `JobContext`), `JS_CONTRACT` the browser surface
 (`PLUGIN_API` / `PluginJobs` / `TlcData`, declared in
