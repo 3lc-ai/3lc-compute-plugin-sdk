@@ -1,5 +1,8 @@
 # 3lc-compute-plugin-sdk
 
+[![Docs](https://img.shields.io/badge/docs-3lc--ai.github.io-blue)](https://3lc-ai.github.io/3lc-compute-plugin-sdk/)
+[![Try it](https://img.shields.io/badge/try%20it-use%20the%20plugin%20template-brightgreen)](https://github.com/3lc-ai/3lc-compute-plugin-template/generate)
+
 The public Python SDK for building [3LC](https://3lc.ai) compute-service plugins — the
 **import-light contract** a plugin programs against. Install this (not the full service)
 and you have everything you need to write, run, and serve a plugin.
