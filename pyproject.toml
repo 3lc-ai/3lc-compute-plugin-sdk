@@ -7,7 +7,7 @@ name = "3lc-compute-plugin-sdk"
 # The plugin-contract (ABI) version. This IS tlc_plugin_sdk.SDK_CONTRACT_VERSION
 # (read back via importlib.metadata) — one source of truth. SemVer MAJOR.MINOR.PATCH;
 # the 0.x line is additive-only (see README → Status).
-version = "0.1.0"
+version = "0.1.1"
 description = "Public Python SDK for building 3LC compute-service plugins (the import-light plugin contract)."
 requires-python = ">=3.10"
 readme = "README.md"
