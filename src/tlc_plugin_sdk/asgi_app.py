@@ -44,7 +44,20 @@ def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
 
     @get("/health", sync_to_thread=False)
     def health() -> dict[str, Any]:
-        return {"ok": True, "plugin": getattr(plugin, "id", "?")}
+        # The version fields are the worker half of a handshake: a venv worker imports its
+        # *own* install of this SDK, so the host cannot know which contract is live inside
+        # the venv unless the worker says so. The host compares them against its own and
+        # flags skew on the plugin card. Reported from the same constants a plugin
+        # feature-detects against, so there is one source of truth per axis.
+        from tlc_plugin_sdk import JS_CONTRACT, PY_CONTRACT, SDK_CONTRACT_VERSION
+
+        return {
+            "ok": True,
+            "plugin": getattr(plugin, "id", "?"),
+            "sdk_version": SDK_CONTRACT_VERSION,
+            "py_contract": PY_CONTRACT,
+            "js_contract": JS_CONTRACT,
+        }
 
     # def + sync_to_thread: get_ui_fragment()/compute() are synchronous and may do
     # blocking work, so Litestar runs them in a threadpool, off the event loop.
