@@ -838,6 +838,73 @@ The manifest reserves fields the host's plugin catalog uses for update signaling
 
 A host without a configured catalog leaves them empty.
 
+## Publishing via a Catalog
+
+Dropping a `plugin.toml`-bearing folder into a host's plugin directory works great for your
+own dev loop, but it doesn't scale to "let a few other people try this." For that, publish a
+**catalog** — a single static JSON document a host can point at to discover your plugin
+without anyone touching that host's filesystem or building a wheel.
+
+### Minimal catalog.json
+
+A catalog lists one or more plugins, each with one or more installable versions. The
+`manifest` field is just your `plugin.toml` (`[tool.tlc-compute]` table), reproduced as JSON,
+so the host can list it and check compatibility **without** importing or downloading
+anything:
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-31T00:00:00Z",
+  "plugins": [
+    {
+      "id": "my-plugin",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "source": "github:your-org/your-repo@v1.0.0",
+          "manifest": {
+            "id": "my-plugin",
+            "name": "My Plugin",
+            "version": "1.0.0",
+            "min_service_version": "0.1.0",
+            "ui": { "display_mode": "sidebar", "section": "Tools" },
+            "runtime": { "isolation": "venv", "entrypoint": "tlc_plugin_my_plugin:MyPlugin" }
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### The `source` field
+
+`source` is the install spec the host hands off unchanged — it accepts the same forms
+whether or not your plugin has a published wheel:
+
+| Your plugin is... | `source` looks like |
+|---|---|
+| a plain git/GitHub repo, no published wheel (the common case for a one-off or a plugin you're sharing to test) | `"github:your-org/your-repo@v1.0.0"` or `"git+https://github.com/your-org/your-repo.git@v1.0.0"` |
+| published to a package index | `"my-plugin==1.0.0"` or `"my-dist[extra]==1.0.0"` |
+
+Most hosts default to a conservative install policy that only trusts sources a **catalog**
+names — a bare git URL typically needs an operator to explicitly loosen that policy first.
+Wrapping your repo in a catalog like the one above is the normal path for a git-hosted
+plugin, not a workaround.
+
+### Trying it out
+
+Host the JSON somewhere reachable — a raw GitHub file URL is the easiest — and point a
+tester's Hub at it: **Settings → Plugins → Catalogs → add URL**. Your plugin then shows up
+as an installable card; Install resolves whatever `source` you declared. (A local `file://`
+path works too for testing on your own machine; plaintext `http://` is only accepted for a
+loopback host.)
+
+If your entry doesn't show up after that, check that the tester's compute-service build
+actually supports catalogs at all (its version is on `GET /health`) — it's a newer Hub
+capability, not something every deployment has yet.
+
 ## Checklist
 
 - [ ] `plugin.toml` manifest present with all metadata (id, name, `[ui]`, `[runtime]`)
