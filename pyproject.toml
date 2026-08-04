@@ -132,7 +132,6 @@ module = [
     "tlc.*",
     "tlcurl.*",
     "torch",
-    "torch.*",
     "PIL",
     "PIL.*",
 ]
