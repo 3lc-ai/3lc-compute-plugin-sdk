@@ -901,9 +901,8 @@ as an installable card; Install resolves whatever `source` you declared. (A loca
 path works too for testing on your own machine; plaintext `http://` is only accepted for a
 loopback host.)
 
-If your entry doesn't show up after that, check that the tester's compute-service build
-actually supports catalogs at all (its version is on `GET /health`) — it's a newer Hub
-capability, not something every deployment has yet.
+If your entry doesn't show up after that, check that the tester's compute-service version
+(on `GET /health`) is recent enough to support catalogs.
 
 ## Checklist
 

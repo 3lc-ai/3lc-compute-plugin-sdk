@@ -48,7 +48,7 @@ def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
         # *own* install of this SDK, so the host cannot know which contract is live inside
         # the venv unless the worker says so. The host compares them against its own and
         # flags skew on the plugin card. Reported from the same constants a plugin
-        # feature-detects against, so there is one source of truth per axis.
+        # feature-detects against, so worker and plugin can never disagree.
         from tlc_plugin_sdk import JS_CONTRACT, PY_CONTRACT, SDK_CONTRACT_VERSION
 
         return {

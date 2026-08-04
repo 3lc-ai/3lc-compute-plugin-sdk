@@ -37,9 +37,6 @@ jobs:
       - name: mypy (strict)
         run: uv run --python 3.12 mypy src/
 
-      # The tests are import-light by design and authenticate against nothing. If real-3LC
-      # tests are ever added, inject a scoped testing key behind a protected environment
-      # (like release.yml does) — never the org-wide key (ADO 17966 / 17972).
       - name: pytest
         run: uv run --python 3.12 pytest -q
 
