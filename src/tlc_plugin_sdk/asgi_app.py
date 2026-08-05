@@ -84,9 +84,9 @@ def build_plugin_app(
 
     Args:
         plugin: The plugin instance whose behavior the routes invoke.
-        extra_handlers: Worker-only handlers (the ``/jobs/{id}/run`` stream and
-            ``/jobs/{id}/cancel``); omitted for the host in-process app, whose job
-            lifecycle is owned by the host ``JobManager``.
+        extra_handlers: Worker-only handlers (the ``/jobs/{id}/run`` stream,
+            ``/jobs/{id}/cancel``, and ``/reclaim``); omitted for the host in-process
+            app, whose job lifecycle is owned by the host ``JobManager``.
         debug: Litestar debug flag.
 
     Returns:

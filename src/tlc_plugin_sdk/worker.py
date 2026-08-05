@@ -19,6 +19,14 @@ it adds the venv job channel the host supervisor drives:
                                      **streams NDJSON events** (progress/metric/log)
                                      ending in a terminal ``done``/``error`` event.
 - ``POST /jobs/{job_id}/cancel``   → cooperative cancel (sets ``ctx.cancelled``).
+- ``POST /reclaim``                → release cached GPU memory now (see
+                                     :func:`release_gpu_memory`).
+
+GPU memory is reclaimed automatically after every job, before the terminal event is
+emitted. ``/reclaim`` exists because only the host can see *across* workers: this
+process cannot know that another plugin's worker needs the card. The host decides
+when; the worker is the only side that can act, because a CUDA allocator is
+per-process and the supervisor's only in-process lever is killing the worker.
 
 Because the worker runs a real Litestar app, a plugin's custom routes get the same
 router, validation, multipart, and binary/streaming behavior they get in host mode —
@@ -31,6 +39,7 @@ package surface.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
@@ -56,6 +65,48 @@ logger = logging.getLogger(__name__)
 
 # Terminal event names that end a streamed /run response.
 _TERMINAL = ("done", "error")
+
+
+def release_gpu_memory() -> bool:
+    """Return this process's cached-but-unused GPU memory to the driver.
+
+    PyTorch's caching allocator keeps freed blocks for reuse instead of handing them
+    back, so a finished job's peak allocation stays charged to this process until it
+    exits. A worker is long-lived and serves many jobs, so without this a completed
+    job keeps pinning VRAM that nothing is using, and the next GPU job — here or in
+    another plugin's worker — can fail to allocate against it. A job that died of
+    ``OutOfMemoryError`` is the worst case: it has the largest cache to release, and
+    the natural response to that error is an immediate retry.
+
+    ``torch`` is deliberately **not** imported. It is not an SDK dependency (only an ML
+    plugin's own venv brings it), and a worker whose plugin never loaded it has nothing
+    to reclaim; the module is used only if the plugin already put it in
+    :data:`sys.modules`. This keeps the SDK's import-light invariant intact.
+
+    Safe to call at any time, including while a job runs: releasing cached blocks never
+    touches memory that is still referenced.
+
+    Returns:
+        True if a CUDA cache was released; False if this worker has no loaded ``torch``,
+        no usable CUDA device, or the release failed.
+
+    """
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return False
+    try:
+        if not torch.cuda.is_available():
+            return False
+        # Collect first: tensors trapped in reference cycles are not freed until the
+        # collector runs, and empty_cache() cannot reclaim a block still referenced.
+        gc.collect()
+        torch.cuda.empty_cache()
+    except Exception:
+        # Reclaim is an optimisation, and this runs on the path that reports a job's
+        # outcome — a failure here must never turn a completed job into a failed one.
+        logger.debug("GPU memory release failed", exc_info=True)
+        return False
+    return True
 
 
 class _Worker:
@@ -108,14 +159,20 @@ class _Job:
         try:
             self._plugin.run_job(self.ctx)
             status = "cancelled" if self.ctx.cancelled else "completed"
-            self.events.put({"event": "done", "status": status, "job_id": self.job_id})
+            terminal: dict[str, Any] = {"event": "done", "status": status, "job_id": self.job_id}
         except Exception as exc:  # surfaced to the host as a terminal error event
             logger.exception("run_job failed for job %s", self.job_id)
-            self.events.put({"event": "error", "message": f"{type(exc).__name__}: {exc}", "job_id": self.job_id})
+            terminal = {"event": "error", "message": f"{type(exc).__name__}: {exc}", "job_id": self.job_id}
+        # Reclaim *before* announcing the terminal state, not after: the host may dispatch
+        # the next GPU job the moment it sees this event, and it would then be racing this
+        # job's still-cached allocation. Runs for the error path too — see
+        # release_gpu_memory() on why a failed job is the case that matters most.
+        release_gpu_memory()
+        self.events.put(terminal)
 
 
-def _job_handlers(worker: _Worker) -> list[BaseRouteHandler]:
-    """The venv job channel (``/jobs/{id}/run`` stream + ``/jobs/{id}/cancel``)."""
+def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
+    """The venv control channel the host supervisor drives (job lifecycle + reclaim)."""
 
     @post("/jobs/{job_id:str}/run")
     async def run_job(job_id: str, request: Request[Any, Any, Any]) -> Stream:
@@ -140,7 +197,14 @@ def _job_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         ok = worker.cancel_job(job_id)
         return Response(content={"cancelling": ok, "job_id": job_id}, status_code=200 if ok else 404)
 
-    return [run_job, cancel_job]
+    @post("/reclaim")
+    async def reclaim() -> Response[dict[str, Any]]:
+        # Off the event loop: a collect + empty_cache pass on a large heap is not
+        # instant, and this worker still has to answer /health while it runs.
+        released = await anyio.to_thread.run_sync(release_gpu_memory)
+        return Response(content={"released": released, "plugin_id": worker.plugin_id}, status_code=200)
+
+    return [run_job, cancel_job, reclaim]
 
 
 def _load_plugin(entry: str) -> ComputePlugin:
@@ -200,7 +264,7 @@ def serve(
     if socket_path is not None and os.path.exists(socket_path):
         os.unlink(socket_path)
 
-    app = build_plugin_app(plugin, extra_handlers=_job_handlers(worker))
+    app = build_plugin_app(plugin, extra_handlers=_control_handlers(worker))
 
     bind: dict[str, Any] = {"uds": socket_path} if socket_path is not None else {"host": host, "port": port}
     target = f"uds={socket_path}" if socket_path is not None else f"{host}:{port}"
