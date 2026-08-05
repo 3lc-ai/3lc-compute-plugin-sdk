@@ -367,6 +367,7 @@ PLUGIN_API = {
   objects: TlcApi.objectService,      // Object service methods
   authFetch: TlcApi.authFetch,        // fetch() with auth headers
   data: TlcData,                      // Cached data (projects, tables, runs)
+  location: TlcLocation,              // Location renderers (chips/labels for project roots) — JS_CONTRACT 0.2
 
   computeFetch: TlcApi.computeFetch,  // authFetch joined to the compute-service base URL
 
@@ -403,6 +404,11 @@ PLUGIN_API = {
 - **`compute` / `objects` / `data` / `computeFetch` / `navigate` / `getIcon` / `container`** are
   part of the declared surface but rarely used directly by `ui.html` (plugins reach data through
   `authFetch`); they are documented in the `.d.ts` for completeness.
+- **`location`** (JS_CONTRACT 0.2) exposes the host's shared location renderers (`TlcLocationApi`):
+  chips and labels for the project roots / scan URLs that tables, runs, and projects from
+  `PLUGIN_API.data` resolve to (their `location` / `locations` fields, also 0.2). Every renderer
+  returns `''` on single-root installs, so output can be concatenated unconditionally. Feature-detect
+  (`PLUGIN_API.location && ...`) — hosts predating 0.2 set neither the member nor the data fields.
 
 ### Common patterns
 

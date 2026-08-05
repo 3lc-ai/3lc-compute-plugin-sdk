@@ -1,7 +1,7 @@
 // Copyright 2026 3LC Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// JS_CONTRACT 0.1 — the browser-side plugin contract.
+// JS_CONTRACT 0.2 — the browser-side plugin contract.
 //
 // This file DECLARES the JavaScript surface a plugin's `ui.html` programs against.
 // It does not implement it:
@@ -70,12 +70,42 @@ export interface PluginFetchOptions extends RequestInit {
 
 // ── TlcData (cached project/table/run indexing tables) ─────────────────────────
 
+/**
+ * The root a project lives under (the Object Service's project root or one of
+ * its scan URLs). Resolved by the frontend from `api://Configuration` plus the
+ * object URLs themselves; hosts predating JS_CONTRACT 0.2 never set it, so
+ * treat every location member as optional.
+ */
+export interface TlcDataLocation {
+  /** The root URL as configured or inferred (e.g. "s3://bucket/projects"). */
+  root: string;
+  /** Canonical prefix (file:// stripped, one trailing slash) — use for equality tests. */
+  key: string;
+  /** URL scheme: 'file', 's3', 'gs', ... */
+  scheme: string;
+  /** Short display name: alias name > bucket/last path segment > 'Local'. */
+  label: string;
+  /** True for the Object Service's primary project root. */
+  is_default: boolean;
+  /** True when `label` came from a configured alias. */
+  is_alias: boolean;
+}
+
+/** Per-location slice of a project's contents (a project can span several roots). */
+export interface TlcDataProjectLocation {
+  location: TlcDataLocation;
+  table_count: number;
+  run_count: number;
+}
+
 export interface TlcDataProject {
   project_name: string;
   table_count: number;
   run_count: number;
   dataset_count: number;
   last_modified: number;
+  /** Locations this project's contents resolve to. Absent on hosts predating JS_CONTRACT 0.2. */
+  locations?: TlcDataProjectLocation[];
 }
 
 export interface TlcDataTable {
@@ -89,6 +119,8 @@ export interface TlcDataTable {
   type: string;
   is_url_writable: boolean;
   input_table_urls: string[];
+  /** Root this table lives under; null if unresolvable. Absent on hosts predating JS_CONTRACT 0.2. */
+  location?: TlcDataLocation | null;
 }
 
 export interface TlcDataRun {
@@ -103,6 +135,8 @@ export interface TlcDataRun {
   constants: object;
   metrics: any[];
   is_url_writable: boolean;
+  /** Root this run lives under; null if unresolvable. Absent on hosts predating JS_CONTRACT 0.2. */
+  location?: TlcDataLocation | null;
 }
 
 export interface TlcDataSummary {
@@ -139,6 +173,17 @@ export interface TlcData {
   getRuns(projectName?: string): TlcDataRun[];
   /** Dashboard summary counts. */
   getSummary(): TlcDataSummary;
+  /**
+   * Resolve which root an object URL lives under (longest-prefix match against
+   * configured roots, falling back to inference from the URL structure).
+   * Absent on hosts predating JS_CONTRACT 0.2 — feature-detect before calling.
+   */
+  resolveLocation?(url: string, projectName?: string): TlcDataLocation | null;
+  /**
+   * All locations relevant to this install: configured roots plus roots inferred
+   * from the loaded data. Absent on hosts predating JS_CONTRACT 0.2.
+   */
+  getLocations?(): TlcDataLocation[];
 }
 
 // ── Optional vendored third-party libs ─────────────────────────────────────────
@@ -161,6 +206,27 @@ export interface PluginLibs {
   html2canvas: any | null;
   PptxGenJS: any | null;
   cytoscape: any | null;
+}
+
+// ── TlcLocation (shared location renderers) ─────────────────────────────────────
+
+/**
+ * The global `TlcLocation` helper: shared renderers for project locations.
+ * Referenced from `PLUGIN_API.location`. Implemented by the frontend
+ * (location.js). Every renderer returns '' when the install has a single root
+ * (`isMultiRoot() === false`), so output can be concatenated unconditionally.
+ */
+export interface TlcLocationApi {
+  /** True when the install has more than one known root. */
+  isMultiRoot(): boolean;
+  /** Inline SVG string: folder glyph for 'file', cylinder for bucket schemes. */
+  iconSvg(scheme: string): string;
+  /** Small chip (icon + label, root in tooltip) for one location; '' when hidden. */
+  chipHtml(loc: TlcDataLocation | null): string;
+  /** Chip for a project rollup: its location, or "N locations"; '' when hidden. */
+  projectChipHtml(project: TlcDataProject | null): string;
+  /** Muted mono path line for project cards; '' when hidden. */
+  pathLineHtml(project: TlcDataProject | null): string;
 }
 
 // ── PLUGIN_API — the single host -> fragment bridge ────────────────────────────
@@ -225,6 +291,9 @@ export interface PluginApi {
 
   /** Reference to the global `TlcData` helper (`null` if `TlcData` is undefined at mount). */
   data: TlcData | null;
+
+  /** Reference to the global `TlcLocation` helper (`null` if undefined at mount). */
+  location: TlcLocationApi | null;
 
   /** Optional vendored third-party libraries (each `null` if the host didn't load it). */
   libs: PluginLibs;
