@@ -69,7 +69,9 @@ def register_alias(
     import tlc
 
     token = alias_token or default_alias_token(project_name)
-    path = image_folder.strip()
+    # Expand ~ before persisting — an alias stored with a literal tilde would
+    # poison every future table that resolves through it.
+    path = os.path.expanduser(image_folder.strip())
 
     try:
         # Track whether a session alias for this token already existed, so the
@@ -128,19 +130,10 @@ def get_table_aliases(table_url: str) -> list[dict[str, str]]:
     for m in _ALIAS_TOKEN_RE.finditer(input_url):
         found_tokens.add(m.group(1))
 
-    # Check a sample row from URL columns. `_url_columns` is a private 3lc attribute that
-    # is not part of the typed public API and may be absent depending on the 3lc version,
-    # so reach it defensively via getattr. It can be [['image']] (nested) or ['image'] (flat).
-    url_col_names: list[str] = []
-    try:
-        raw_cols = list(getattr(table, "_url_columns", []))
-        for entry in raw_cols:
-            if isinstance(entry, list):
-                url_col_names.extend(entry)
-            else:
-                url_col_names.append(str(entry))
-    except Exception:
-        logger.debug("Could not extract URL column names from schema", exc_info=True)
+    # Check a sample row from URL columns.
+    from tlc_plugin_sdk.shared.url_utils import get_url_column_names
+
+    url_col_names = get_url_column_names(table)
 
     if url_col_names and len(table) > 0:
         try:
