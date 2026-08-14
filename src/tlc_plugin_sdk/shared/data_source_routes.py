@@ -11,6 +11,7 @@ Usage in a plugin's ``routes.py``::
 
     from tlc_plugin_sdk.shared.data_source_routes import data_source_route_handlers
 
+
     def get_route_handlers():
         handlers = [my_handler_1, my_handler_2, ...]
         handlers.extend(data_source_route_handlers())
