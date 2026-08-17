@@ -86,18 +86,9 @@ artifacts = [
 [tool.uv]
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'", "sys_platform == 'win32'"]
 
-# 3lc resolves from the public 3LC releases index — no credentials needed, same as the host
-# (3lc-compute) and 3lc-examples. CI relies on this.
-[[tool.uv.index]]
-name = "3lc-releases"
-url = "https://pypi.3lc.ai/public/repositories/releases-public"
-explicit = true
-
-[tool.uv.sources]
-# 3lc from the releases index (the shippable form). LOCAL DEV: if your interpreter lacks a
-# prebuilt 3lc wheel on the index, override locally (uncommitted) with an editable path
-# source pointing at your own 3lc checkout.
-3lc = { index = "3lc-releases" }
+# 3lc resolves from public PyPI — its home since the 3.2 rust release — so no index pin is
+# needed (same as the host, 3lc-compute, and 3lc-examples). LOCAL DEV: for an unreleased 3lc,
+# override UNCOMMITTED via [tool.uv.sources] with an editable path source to your 3lc checkout.
 
 [tool.ruff]
 line-length = 120
