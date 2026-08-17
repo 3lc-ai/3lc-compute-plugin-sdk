@@ -1,28 +1,14 @@
 name: Release
 
-# Publish a tagged release of 3lc-compute-plugin-sdk to PyPI via `uv publish` + Trusted Publishing.
-#
-# === ONE-TIME SETUP (PyPI) ===
-# On pypi.org, add a Trusted Publisher for the project (a "pending publisher" until the first
-# upload creates the project) with EXACTLY these values:
-#   PyPI project name: 3lc-compute-plugin-sdk
-#   Owner:             3lc-ai
-#   Repository:        3lc-compute-plugin-sdk
-#   Workflow name:     release.yml
-#   Environment name:  release
-# No PyPI secrets are needed — publishing authenticates via GitHub OIDC (`id-token: write`).
-# Optionally add required reviewers on the "release" GitHub environment to gate publishes.
-#
+# Tag (`v*`) pushes publish to public PyPI via Trusted Publishing (GitHub OIDC, no secrets).
 # To cut a release: bump `version` in pyproject.toml (regenerate uv.lock), update CHANGELOG.md,
 # commit, then push a tag `vX.Y.Z` that matches the version.
 #
-# === GRACE PERIOD: CloudRepo prereleases ===
-# Manual (workflow_dispatch) runs still publish build-numbered prereleases to the legacy
-# CloudRepo index (pypi.3lc.ai) — see the publish-cloudrepo-prerelease job. Retire that job
-# (and the CLOUDREPO_* secrets/variables on the "release" environment) once nothing consumes
-# the CloudRepo index anymore. Note the split deliberately keeps build-numbered versions OFF
-# public PyPI: `X.Y.Z.N` sorts above `X.Y.Z`, so on PyPI a prerelease build would win over the
-# real release in every `>=X.Y,<X.Y+1`-style pin.
+# Manual (workflow_dispatch) runs publish build-numbered prereleases to the legacy CloudRepo
+# index (pypi.3lc.ai) — kept as a grace-period fallback; retire that job (and the CLOUDREPO_*
+# secrets/vars on the "release" environment) once nothing consumes the CloudRepo index. The
+# split deliberately keeps build-numbered versions OFF PyPI: `X.Y.Z.N` sorts above `X.Y.Z`,
+# so a prerelease build would win over the real release in `>=X.Y,<X.Y+1`-style pins.
 
 on:
   push:
@@ -91,19 +77,15 @@ jobs:
           : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'release' environment}"
           : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'release' environment}"
 
-      # Append the GitHub run number as a 4th release segment so every prerelease publish is
-      # unique — CloudRepo has overwrites disabled, so re-publishing the static pyproject
-      # version 409s. A 4th segment (e.g. 0.1.0.7) sorts ABOVE the base version and stays
-      # inside `<0.2.0`-style pins, so dependents still resolve it — unlike `.devN` (sorts
-      # BELOW 0.1.0, excluded by `>=0.1.0`) or `+localN` (rejected on upload).
+      # A 4th version segment keeps every prerelease publish unique (CloudRepo has overwrites
+      # disabled) while sorting above the base version, so `<X.Y+1`-style pins still resolve it
+      # — unlike `.devN` (sorts below) or `+localN` (rejected on upload).
       - name: Stamp build-numbered version
         run: |
           BASE=$(uv version --output-format json | jq -r '.version')
           uv version "${BASE}.${GITHUB_RUN_NUMBER}"
           echo "prerelease build version: ${BASE}.${GITHUB_RUN_NUMBER}"
 
-      # --no-sources strips [tool.uv.sources] so the released wheel never bakes in a dev
-      # index/path override (the published artifact resolves deps from the configured index).
       - name: Build
         run: uv build --no-sources
 
