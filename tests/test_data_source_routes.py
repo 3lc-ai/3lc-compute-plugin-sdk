@@ -140,3 +140,14 @@ class TestUploadTemp:
         monkeypatch.setenv(MAX_UPLOAD_MB_ENV, "not-a-number")
         response = client.post("/upload-temp", files={"data": ("ok.txt", b"fine")})
         assert response.json()["filename"] == "ok.txt"
+
+
+class TestSelfReferentialSymlink:
+    """The /usr/bin/X11 -> '.' fossil: entering it must collapse, not nest forever."""
+
+    @pytest.mark.skipif(os.name != "posix", reason="symlinks")
+    def test_self_symlink_collapses_instead_of_nesting(self, client: TestClient[Litestar], root: Path) -> None:
+        (root / "loop").symlink_to(".")
+        body = _browse(client, path=str(root / "loop" / "loop" / "loop"))
+        assert body["path"] == str(root.resolve())  # realpath collapsed the whole chain
+        assert body["parent"] is None  # and it IS the root, so no phantom "up"
