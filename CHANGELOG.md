@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.2.2] - 2026-08-17
+
+### Changed
+- **Distribution moved to PyPI**: `3lc-compute-plugin-sdk` is now published to public
+  [PyPI](https://pypi.org/project/3lc-compute-plugin-sdk/) via Trusted Publishing; the private
+  CloudRepo index (pypi.3lc.ai) is no longer needed to install the SDK. Manual prerelease
+  builds keep publishing to CloudRepo for a grace period (#13).
+- The `[shared]` extra's `3lc` dependency resolves from public PyPI (its home since the 3.2
+  rust release), so the SDK no longer pins a custom package index (#12).
+
+## [0.2.1] - 2026-08-13
+
+### Added
+- Tilde expansion and local-path normalization helpers in `tlc_plugin_sdk.shared` (#10).
+
 ## [0.2.0] - 2026-08-05
 
 ### Added
