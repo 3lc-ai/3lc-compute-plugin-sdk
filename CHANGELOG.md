@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- Shared data-source picker (`shared.data_source_ui`) and its browse/upload route handlers
+  (`shared.data_source_routes`): plugins mount one consistent widget for choosing a local
+  path or uploading a file, instead of each fragment rolling its own. Ships as 0.2.2 — the
+  0.2.1 wheel was published before the widget landed, and the index does not allow
+  republishing a version.
+
+## [0.2.1] - 2026-08-12
+
+### Added
+- Tilde expansion and local-path normalization helpers in `shared.url_utils`
+  (`normalize_local_path`, `normalize_url`): user-supplied paths expand `~` and resolve
+  to absolute form at every ingress, so exported files and stored URLs never carry a
+  user-relative path.
 
 ## [0.2.0] - 2026-08-05
 
