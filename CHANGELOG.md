@@ -7,32 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.2] - 2026-08-18
+
 ### Added
 - Shared data-source picker (`shared.data_source_ui`) and its browse/upload route handlers
   (`shared.data_source_routes`): plugins mount one consistent widget for choosing a local
-  path or uploading a file, instead of each fragment rolling its own. Ships as 0.2.2 — the
-  0.2.1 wheel was published before the widget landed, and the index does not allow
-  republishing a version.
+  path or uploading a file, instead of each fragment rolling its own (#11).
+
+### Changed
+- **Distribution moved to PyPI**: `3lc-compute-plugin-sdk` is now published to public
+  [PyPI](https://pypi.org/project/3lc-compute-plugin-sdk/) via Trusted Publishing; the private
+  CloudRepo index (pypi.3lc.ai) is no longer needed to install the SDK. Manual prerelease
+  builds keep publishing to CloudRepo for a grace period (#13).
+- The `[shared]` extra's `3lc` dependency resolves from public PyPI (its home since the 3.2
+  rust release), so the SDK no longer pins a custom package index (#12).
 
 ### Security
 - The data-source `/browse` route is confined to operator-configured roots
   (`TLC_DATA_SOURCE_ROOTS`, `os.pathsep`-separated; default: the service user's home).
   Every requested path is realpath-resolved before the containment check, so `..`
   segments and symlinks pointing outside a root are denied rather than followed, and
-  the widget's breadcrumb stops at the root instead of offering the whole filesystem.
+  the widget's breadcrumb stops at the root instead of offering the whole filesystem (#11).
 - The data-source `/upload-temp` route strips directory components from the
   client-supplied filename (closing a path traversal where a `../…` name chose the
   write location), lands each upload in its own private temp directory so same-named
   uploads never clobber each other, and rejects bodies larger than
-  `TLC_DATA_SOURCE_MAX_UPLOAD_MB` (default 512).
+  `TLC_DATA_SOURCE_MAX_UPLOAD_MB` (default 512) (#11).
 
-## [0.2.1] - 2026-08-12
+## [0.2.1] - 2026-08-13
 
 ### Added
 - Tilde expansion and local-path normalization helpers in `shared.url_utils`
   (`normalize_local_path`, `normalize_url`): user-supplied paths expand `~` and resolve
   to absolute form at every ingress, so exported files and stored URLs never carry a
-  user-relative path.
+  user-relative path (#10).
 
 ## [0.2.0] - 2026-08-05
 
