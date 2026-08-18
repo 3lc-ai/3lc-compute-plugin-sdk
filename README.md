@@ -1,5 +1,6 @@
 # 3lc-compute-plugin-sdk
 
+[![PyPI](https://img.shields.io/pypi/v/3lc-compute-plugin-sdk)](https://pypi.org/project/3lc-compute-plugin-sdk/)
 [![Docs](https://img.shields.io/badge/docs-3lc--ai.github.io-blue)](https://3lc-ai.github.io/3lc-compute-plugin-sdk/)
 [![Try it](https://img.shields.io/badge/try%20it-use%20the%20plugin%20template-brightgreen)](https://github.com/3lc-ai/3lc-compute-plugin-template/generate)
 
@@ -49,7 +50,7 @@ needs `tlc_plugin_sdk`, it is portable across host versions and can run in its o
 
 ## Status
 
-**0.1 is the released contract line.** Within 0.x the contract evolves **additively only**:
+**0.2 is the released contract line.** Within 0.x the contract evolves **additively only**:
 symbols and schemas that exist keep working, and anything breaking waits for a major bump. In
 the browser bridge, `PLUGIN_API.libs.io` is a stable part of the contract; the other bundled
 libs are best-effort (see the guide).
