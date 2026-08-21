@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.3] - 2026-08-21
+
 ### Changed
 - Docs: the plugin guide and API docstrings describe the single runtime — a plugin runs in
   its own venv behind a worker; the manifest's `isolation` key accepts only `"venv"` (the
