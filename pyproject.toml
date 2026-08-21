@@ -8,7 +8,7 @@ name = "3lc-compute-plugin-sdk"
 # (read back via importlib.metadata) — one source of truth. SemVer MAJOR.MINOR.PATCH;
 # the 0.x line is additive-only (see README → Status).
 version = "0.2.2"
-description = "Public Python SDK for building 3LC compute-service plugins (the import-light plugin contract)."
+description = "Public Python SDK for building 3LC compute-service plugins."
 requires-python = ">=3.10"
 readme = "README.md"
 authors = [{ name = "3LC", email = "support@3lc.ai" }]
