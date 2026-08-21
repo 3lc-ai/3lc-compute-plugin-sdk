@@ -83,11 +83,6 @@ tlc_plugin_my_plugin/          # the default shape: a standalone venv-isolated p
 └── ...            # All plugin code lives here
 ```
 
-> **In-tree host exception.** A host may ship plugins inside its own package with
-> `isolation = "host"` and a host-internal entrypoint; those live in the host's source tree
-> and follow its layout. New plugins should use the `venv` + `tlc_plugin_<name>` shape shown
-> above, not the host form.
-
 ### 2. Write the manifest
 
 All metadata lives in a manifest — a standalone `plugin.toml` next to `__init__.py`. The host
@@ -96,10 +91,10 @@ source of truth for listing, routing, GPU/CPU classification, SocketIO wiring, a
 paths. (`read_manifest()` also accepts a `[tool.tlc-compute]` table in a plugin's `pyproject.toml`
 — it checks `plugin.toml` first.)
 
-A `venv` plugin keeps the **same `plugin.toml`** for metadata and adds a separate
-`pyproject.toml` alongside it that declares only its isolated venv's dependencies (no
+A plugin keeps the **same `plugin.toml`** for metadata and adds a separate
+`pyproject.toml` alongside it that declares only its venv's dependencies (no
 `[tool.tlc-compute]` table there) — see the `timm` / `sam3` / `yolo` plugins for the canonical
-layout, and the **Isolation** section below for how the two tiers run.
+layout.
 
 ```toml
 # plugin.toml — the single source of truth for this plugin's metadata.
@@ -127,34 +122,25 @@ quick_action = false                # Show in dashboard quick actions?
 # group_icon_svg = '<svg ...><rect x="2" y="2" width="12" height="12" rx="2"/></svg>'
 
 [runtime]
-isolation = "venv"                  # venv (isolated worker, the default) | host (in-process)
+isolation = "venv"                  # "venv" is the only value (and the default when absent)
 entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
-provision_extra = "my-plugin"       # REQUIRED for venv: host runs `uv sync --extra <this>`
+provision_extra = "my-plugin"       # umbrella extra the host provisions: `uv sync --extra <this>`
 # Optional SocketIO namespace for real-time updates. Defaults to "/<plugin-id>";
 # declare it only to override (the host registers it at startup so a UI can connect;
 # declaring it does NOT mean emitting custom events):
 # socketio_namespace = "/my-plugin"
 ```
 
-`runtime.provision_extra` is **required for every `venv` plugin**: it names the extra the
-host installs with `uv sync --extra <that-value>`. For first-party plugins this is a
-per-plugin extra in the `3lc-compute-plugins` umbrella `pyproject.toml`. (Host plugins don't
-declare it — their deps are a subset of the service.)
+`runtime.provision_extra` is **required for every plugin distributed through an umbrella**:
+it names the extra the host installs with `uv sync --extra <that-value>`. For first-party
+plugins this is a per-plugin extra in the `3lc-compute-plugins` umbrella `pyproject.toml`.
 
-**`isolation` — where the plugin runs (the *only* placement knob).** A plugin
-declares `isolation` and `requires_gpu`; it never picks a queue or names a lane.
-
-| `isolation` | Loaded by | Deps | Best for |
-|---|---|---|---|
-| `host` (default) | folder scan → imported **in-process** | must be a subset of the service | lightweight, hot-reloadable plugins |
-| `venv` | manifest only → spawn a worker over a UDS | its own uv-managed venv | heavy / conflicting deps (torch, ultralytics, SAM) |
-
-The plugin class is identical either way — `run_job(ctx)` talks only to `ctx`, so
-the same code runs in-process or in a worker. `requires_gpu = true` routes the job
-through the shared GPU queue (one GPU job at a time, across every plugin);
-`requires_gpu = false` jobs run on the CPU queue. Both are host-owned; the plugin
-never touches a queue.
+Every plugin runs in its own uv-managed venv, behind a worker the host spawns and talks to
+over a Unix socket — the host registers the plugin from its manifest alone and never imports
+its code. `requires_gpu` is the manifest's **only placement knob**: `true` routes the job
+through the shared GPU queue (one GPU job at a time, across every plugin); `false` jobs run
+on the CPU queue. Both are host-owned; the plugin never picks a queue or names a lane.
 
 ### 3. Implement the plugin object
 
@@ -289,13 +275,12 @@ The UI fragment is a self-contained `<style>` + `<div>` + `<script>` block. It h
 
 There is **nothing to register**. On startup, the host scans the plugin directories
 for manifests (no imports), builds a card from each, and gates compatibility against the
-service version. When a host plugin is actually needed, the host imports the module named in
-the manifest's `runtime.entrypoint` and instantiates the class, stamping the display
-identity (`id`, `name`, `icon`, `version`) from the manifest onto the instance.
+service version. When a plugin is actually needed, its **worker** imports the module named
+in the manifest's `runtime.entrypoint` and instantiates the class inside the plugin's own
+venv — the host never imports plugin code.
 
-Because metadata is read before any import, a plugin whose dependency is missing still
-**lists** (greyed-out with a reason) instead of vanishing — its behavior code is never
-imported until it's used.
+Because metadata is read without any import, a plugin whose environment is broken (or whose
+manifest is invalid) still **lists** (greyed-out with a reason) instead of vanishing.
 
 That's it. Drop the directory in place with a `plugin.toml` and it will be discovered on
 startup.
@@ -340,9 +325,8 @@ Browser (3LC Hub frontend, vanilla JS)              Compute service (:5020)
   └─ PLUGIN_API.authFetch(.../{subpath}) ───────▶  ANY  /api/plugins/{id}/{subpath} → route handler
 ```
 
-A plugin fragment is plain HTML+JS+CSS and is the **same bytes** whether the plugin runs
-in-process (`host` mode) or in an isolated venv worker (reverse-proxied) — the frontend
-can't tell. `PLUGIN_API` is the **single** host→fragment JS contract; a fragment should
+A plugin fragment is plain HTML+JS+CSS, served by the plugin's worker and reverse-proxied
+by the host — the frontend can't tell where it came from. `PLUGIN_API` is the **single** host→fragment JS contract; a fragment should
 reach for nothing else (the `API` shorthand some plugins use is just
 `var API = window.PLUGIN_API`).
 
@@ -440,9 +424,8 @@ socket.on('progress', function(data) { ... });
 For plugins that need more than the generic `compute()` method (e.g., POST bodies, multiple
 endpoints, streaming), return **relative Litestar route handlers** from `get_route_handlers()` —
 bare `@get`/`@post` handlers with **relative** paths, no `Controller` and no `/api/plugins`
-prefix. The host serves them through the plugin's own per-plugin app, behind the generic
-`/api/plugins/{id}/{subpath}` catch-all — in-process for `host` plugins, reverse-proxied to the
-worker for `venv` plugins.
+prefix. The host serves them through the plugin's own app in its worker, behind the generic
+`/api/plugins/{id}/{subpath}` catch-all.
 
 ```python
 from typing import Any
@@ -479,8 +462,8 @@ real example.
 A plugin with a long-running task (training, inference, import) **declares** the job
 in its manifest and **implements** it as `run_job(ctx)`. It does **not** grab a queue,
 push a closure, or poll a shared `cancel_flag` — the host owns the queue, the GPU/CPU
-slot lease, progress fan-out, listing, and cancellation. The same `run_job` code runs
-in-process (`host`) or in a worker (`venv`); it only ever touches `ctx`.
+slot lease, progress fan-out, listing, and cancellation. `run_job` runs in the plugin's
+worker and only ever touches `ctx`.
 
 **Declare the job in the manifest.** `requires_gpu` is the only knob:
 
@@ -582,8 +565,8 @@ independently.
 **Custom events** — `ctx.emit(name, payload)` is reserved for telemetry the generic schema
 **can't** express (e.g. a training plugin's per-epoch loss curve). The host relays it
 verbatim on the plugin's namespace; the generic panel ignores it. The name `job_update` is
-reserved and rejected. A plugin should **not** open its own SocketIO connection — emitting
-through `ctx` keeps `run_job` host/venv portable.
+reserved and rejected. A plugin should **not** open its own SocketIO connection — the host
+owns the transport; a plugin only ever emits through `ctx`.
 
 ```python
 # backend — inside run_job, for a plugin-specific chart the generic panel can't show:
@@ -639,19 +622,19 @@ color: var(--accent);           /* Accent color (#2a4a61) */
 
 ## Existing Plugins Reference
 
-| Plugin ID | display_mode | Section | isolation | Description |
+| Plugin ID | display_mode | Section | GPU | Description |
 |---|---|---|---|---|
-| `importer` | sidebar | Data Ops | **venv** | Import data (YOLO, COCO, Folder, CSV, Unlabeled) |
-| `exporter` | sidebar | Data Ops | **venv** | Export tables to CSV, XLSX, YOLO, COCO |
-| `splitter` | sidebar | Data Ops | **venv** | Split tables into train/val/test sets |
-| `merger` | sidebar | Data Ops | **venv** | Merge 2 tables by column join |
-| `image-metrics` | sidebar | Data Ops | **venv** (GPU) | Image quality metrics (brightness, sharpness, noise, etc.) |
-| `yolo` | sidebar | AI Tools | **venv** (GPU) | Ultralytics YOLO training + metrics collection |
-| `sam3` | sidebar | AI Tools | **venv** (GPU) | Auto-labeling with SAM3/GroundingDINO |
-| `timm` | sidebar | AI Tools | **venv** (GPU) | Image classification with timm models |
-| `table-statistics` | hidden | Analysis | **venv** | Per-column stats & image thumbnails (API-only) |
-| `run-insights` | action | Analysis | host (ships with the service) | Run statistics, health scores, per-class metrics |
-| `table-insights` | action | Analysis | host (ships with the service) | GT-only data quality analysis (bbox sizes, balance, etc.) |
+| `importer` | sidebar | Data Ops | — | Import data (YOLO, COCO, Folder, CSV, Unlabeled) |
+| `exporter` | sidebar | Data Ops | — | Export tables to CSV, XLSX, YOLO, COCO |
+| `splitter` | sidebar | Data Ops | — | Split tables into train/val/test sets |
+| `merger` | sidebar | Data Ops | — | Merge 2 tables by column join |
+| `image-metrics` | sidebar | Data Ops | GPU | Image quality metrics (brightness, sharpness, noise, etc.) |
+| `yolo` | sidebar | AI Tools | GPU | Ultralytics YOLO training + metrics collection |
+| `sam3` | sidebar | AI Tools | GPU | Auto-labeling with SAM3/GroundingDINO |
+| `timm` | sidebar | AI Tools | GPU | Image classification with timm models |
+| `table-statistics` | hidden | Analysis | — | Per-column stats & image thumbnails (API-only) |
+| `run-insights` | action | Analysis | — | Run statistics, health scores, per-class metrics |
+| `table-insights` | action | Analysis | — | GT-only data quality analysis (bbox sizes, balance, etc.) |
 
 ---
 
@@ -742,30 +725,32 @@ Every sidebar plugin UI should follow this structure:
 
 ---
 
-## Hot-Reload (Development)
+## The Dev Loop (Development)
 
-During development, you can hot-reload a plugin without restarting the Compute Service:
+The fast edit-run cycle is a **folder Source + an editable venv + a worker restart** — no
+service restart, no rebuild:
+
+1. Register your checkout as a folder Source (point `--plugin-dir` / the Settings page's
+   plugin-directories UI at the directory holding your plugin folder). The host provisions
+   the plugin's venv with `uv sync`, which installs your project **editable** — so the venv
+   always runs the code on disk.
+2. Edit your plugin files.
+3. Retire the worker; the next request cold-starts on the current code (sub-second):
 
 ```bash
-# 1. Edit your plugin files on the server
-# 2. Call the admin reload endpoint:
-curl -X POST http://localhost:5020/api/admin/plugins/my-plugin/reload
+curl -X POST http://localhost:5020/api/admin/plugins/my-plugin/worker/stop
 ```
 
 Or from the browser console:
 ```javascript
-TlcApi.authFetch(TlcApi.computeServiceUrl + '/api/admin/plugins/my-plugin/reload', {method:'POST'})
+TlcApi.authFetch(TlcApi.computeServiceUrl + '/api/admin/plugins/my-plugin/worker/stop', {method:'POST'})
   .then(r => r.json()).then(console.log)
 ```
 
-This purges the plugin's Python modules from `sys.modules`, re-imports the package
-(picking up file changes), and re-initialises the runtime. Running jobs in other
-plugins are unaffected. The UI cache is automatically cleared.
-
-To unload a plugin entirely:
-```bash
-curl -X POST http://localhost:5020/api/admin/plugins/my-plugin/unload
-```
+For **dependency** changes (a new package, a version bump in your `pyproject.toml`), rebuild
+the venv instead — `POST /api/admin/plugins/my-plugin/reload` runs `uv sync --reinstall` in
+the background and retires the worker when the rebuilt venv swaps in. Running jobs in other
+plugins are unaffected either way.
 
 ---
 

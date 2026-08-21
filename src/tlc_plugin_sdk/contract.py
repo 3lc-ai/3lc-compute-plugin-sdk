@@ -77,7 +77,7 @@ class ComputePlugin(ABC):
         """Run a long-running job against a host-provided context.
 
         The plugin reports progress/metrics and polls cancellation via ``ctx``;
-        the same code runs in-process (host mode) or in a worker (venv mode).
+        the code runs in the plugin's worker and only ever touches ``ctx``.
 
         Raises:
             NotImplementedError: The default — a plugin that streams jobs must
@@ -98,8 +98,7 @@ class ComputePlugin(ABC):
         Each handler's path is **relative** to the plugin's mount point
         ``/api/plugins/{plugin_id}/`` (e.g. a ``@get("/models")`` handler serves
         ``GET /api/plugins/{plugin_id}/models``). The handlers are served by the
-        plugin's own Litestar app — invoked in-process for host plugins,
-        reverse-proxied to the worker for venv plugins (see
+        plugin's own Litestar app in its worker, reverse-proxied by the host (see
         ``tlc_plugin_sdk/asgi_app.py``); Litestar runs ``def`` handlers in a threadpool,
         so a synchronous, blocking custom route does not block the event loop. The
         reserved routes (``/run``, ``/health``, ``/ui``, ``/compute``, ``/jobs/*``)

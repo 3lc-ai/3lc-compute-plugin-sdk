@@ -3,15 +3,11 @@
 """``JobContext`` — the surface a plugin's ``run_job`` programs against.
 
 A plugin implements ``run_job(ctx)`` and only ever touches ``ctx`` — it never
-grabs a host queue or polls a shared ``cancel_flag``. The same object is used in
-both ``host`` and ``venv`` modes; only the **sink** (where emitted events go) and
-the **cancel signal** differ:
-
-- ``venv`` mode: the worker harness gives a sink that enqueues events for the
-  streamed control-channel response, and a ``threading.Event`` set by the worker's
-  ``/cancel`` endpoint.
-- ``host`` mode: the host gives a sink that relays straight to SocketIO and a
-  cancel event tied to the host's job manager.
+grabs a host queue or polls a shared ``cancel_flag``. The **sink** (where emitted
+events go) and the **cancel signal** are injected: the worker harness gives a sink
+that enqueues events for the streamed control-channel response, and a
+``threading.Event`` set by the worker's ``/cancel`` endpoint. Tests inject their
+own sink and event and drive ``run_job`` directly.
 
 Import-light: stdlib only. Must not pull in the server stack.
 """
@@ -93,8 +89,7 @@ class JobContext:
         generic Queue & Progress panel ignores it. Use :meth:`progress` /
         :meth:`metric` / :meth:`log` for the generic panel, and this for
         plugin-specific UI (e.g. a training plugin's per-epoch loss curve) — so a
-        plugin never opens its own SocketIO connection and stays host/venv
-        portable (same ``run_job`` in either mode).
+        plugin never opens its own SocketIO connection; the host owns the transport.
 
         Args:
             name: Event name the plugin's UI listens for.

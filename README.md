@@ -25,8 +25,8 @@ pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
   `log` / `result` for the generic job panel, `emit` for your plugin's own rich UI, and
   cooperative `cancelled`.
 - **The worker** (`python -m tlc_plugin_sdk.worker`) — serves your plugin's Litestar route
-  handlers + the generic reserved routes as an ASGI app, identically whether the host runs it
-  in-process or out-of-process in its own venv.
+  handlers + the generic reserved routes as an ASGI app, out-of-process in the plugin's
+  own venv.
 - **`tlc_plugin_sdk.shared.*`** — batteries the heavy plugins share: URL-alias registration,
   config storage/UI, the generic-job helpers, image/label/modality utilities, script injection.
 

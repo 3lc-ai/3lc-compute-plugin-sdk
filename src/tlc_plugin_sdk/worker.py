@@ -10,10 +10,10 @@ The bind transport is selectable: ``--socket`` (Unix domain socket, the default 
 supervisor uses) or ``--host``/``--port`` (TCP, e.g. ``--host 127.0.0.1 --port 9100``)
 for a worker reachable over the network. Exactly one of the two must be given.
 
-The worker serves the **same** Litestar app the host runs in-process for a host
-plugin (``tlc_plugin_sdk.asgi_app.build_plugin_app``): the plugin's own route handlers
+The worker serves the plugin's Litestar app
+(``tlc_plugin_sdk.asgi_app.build_plugin_app``): the plugin's own route handlers
 plus the generic reserved routes (``/health``, ``/ui``, ``/compute``). On top of that
-it adds the venv job channel the host supervisor drives:
+it adds the job channel the host supervisor drives:
 
 - ``POST /jobs/{job_id}/run``      → runs ``run_job(ctx)`` on a thread; the response
                                      **streams NDJSON events** (progress/metric/log)
@@ -28,8 +28,8 @@ process cannot know that another plugin's worker needs the card. The host decide
 when; the worker is the only side that can act, because a CUDA allocator is
 per-process and the supervisor's only in-process lever is killing the worker.
 
-Because the worker runs a real Litestar app, a plugin's custom routes get the same
-router, validation, multipart, and binary/streaming behavior they get in host mode —
+Because the worker runs a real Litestar app, a plugin's custom routes get a real
+router, validation, multipart, and binary/streaming behavior —
 and Litestar runs synchronous ``def`` handlers in a threadpool, so CPU-bound routes
 don't block the worker's event loop. Litestar + uvicorn are base dependencies of
 this SDK; they are imported here, not by the import-light :mod:`tlc_plugin_sdk`
