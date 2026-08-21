@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- Docs: the plugin guide and API docstrings describe the single runtime — a plugin runs in
+  its own venv behind a worker; the manifest's `isolation` key accepts only `"venv"` (the
+  default when absent). The guide's isolation table, the in-tree host exception callout, and
+  the `unload` endpoint reference are gone; the dev-workflow section now documents the
+  folder-Source + editable-venv + `worker/stop` loop. No code or contract change.
 
 ## [0.2.2] - 2026-08-18
 

@@ -4,23 +4,16 @@
 
 This is the single route-authoring pattern: a plugin exposes its custom routes as
 relative Litestar route handlers via :meth:`ComputePlugin.get_route_handlers`, and
-the **same** handlers are served two ways from the **same** builder:
+the worker (``tlc_plugin_sdk.worker``) serves the app with uvicorn on a Unix socket
+(or TCP, for a remote worker); the host reverse-proxies to it.
 
-- **host (in-process):** the compute service builds the app once per plugin
-  instance and invokes it directly through the ASGI interface (no socket);
-- **venv (out-of-process):** the worker (``tlc_plugin_sdk.worker``) serves the app
-  with uvicorn on a Unix socket and the host reverse-proxies to it.
-
-Because both modes serve the identical app, a plugin's routes get a real router,
-request validation, multipart, and binary/streaming responses in **either** mode,
-with no host/venv divergence. Litestar runs ``def`` handlers in a threadpool, so a
-synchronous, CPU-bound custom route (e.g. preview inference) does not block the
-event loop.
+Because the worker runs a real Litestar app, a plugin's routes get a real router,
+request validation, multipart, and binary/streaming responses. Litestar runs
+``def`` handlers in a threadpool, so a synchronous, CPU-bound custom route (e.g.
+preview inference) does not block the event loop.
 
 The app also mounts the host-reserved generic routes (``/health``, ``/ui``,
-``/compute``) so the worker can answer them over the socket; for the in-process host
-app these are harmless (the host serves ``/ui``/``/compute`` from its own reserved
-param routes and never forwards them here).
+``/compute``) so the worker can answer them over the socket.
 
 Litestar is a base dependency of this SDK, but it is imported **here**, not in
 the import-light :mod:`tlc_plugin_sdk` package surface — so
@@ -80,13 +73,12 @@ def build_plugin_app(
     extra_handlers: list[BaseRouteHandler] | None = None,
     debug: bool = False,
 ) -> Litestar:
-    """Build the Litestar app serving ``plugin``'s HTTP surface (host + venv).
+    """Build the Litestar app serving ``plugin``'s HTTP surface.
 
     Args:
         plugin: The plugin instance whose behavior the routes invoke.
-        extra_handlers: Worker-only handlers (the ``/jobs/{id}/run`` stream,
-            ``/jobs/{id}/cancel``, and ``/reclaim``); omitted for the host in-process
-            app, whose job lifecycle is owned by the host ``JobManager``.
+        extra_handlers: The worker's job-channel handlers (the ``/jobs/{id}/run``
+            stream, ``/jobs/{id}/cancel``, and ``/reclaim``).
         debug: Litestar debug flag.
 
     Returns:

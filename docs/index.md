@@ -17,7 +17,7 @@ pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
   against: `progress` / `metric` / `log` / `result`, `emit` for rich UI, and
   cooperative `cancelled`.
 - **The worker** (`python -m tlc_plugin_sdk.worker`) — serves your plugin's Litestar
-  route handlers as an ASGI app, in-process or out-of-process in its own venv.
+  route handlers as an ASGI app, out-of-process in the plugin's own venv.
 
 ```{toctree}
 :maxdepth: 2
