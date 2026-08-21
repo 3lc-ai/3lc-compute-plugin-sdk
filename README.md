@@ -20,7 +20,7 @@ pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
 
 - **`ComputePlugin`** — the base class you subclass. Implement `compute` / `get_ui_fragment`;
   job and lifecycle hooks ship as no-op defaults. There is no `register()` to call — a plugin's
-  metadata lives in its `[tool.tlc-compute]` manifest, and the host discovers it from there.
+  metadata lives in its `[tool.tlc-compute]` manifest, and the Hub discovers it from there.
 - **`JobContext`** — the surface a long-running job programs against: `progress` / `metric` /
   `log` / `result` for the generic job panel, `emit` for your plugin's own rich UI, and
   cooperative `cancelled`.
@@ -39,14 +39,17 @@ format, custom routes, the job model, UI fragment, checklist).
 
 `tlc_plugin_sdk.SDK_CONTRACT_VERSION` is this package's own version — one source of truth.
 A plugin pins the SDK (`3lc-compute-plugin-sdk>=X,<Y`) and declares the contract it targets via its
-manifest. The host implements a contract range and the SDK version is the lingua franca that
-both sides agree on. Versions are SemVer; see **Status** below for the 0.x stability stance.
+manifest. The compute service implements a contract range, and the SDK version is the shared
+reference both sides agree on. Versions are SemVer; see **Status** below for the 0.x stability
+stance.
 
-## Boundary (the one rule)
+## How it fits
 
-The SDK is the **root** of the plugin dependency graph: it depends only on `3lc` + `uvicorn` +
-`litestar`, and **never** on the host (`3lc-compute`) or on any plugin. If your plugin only
-needs `tlc_plugin_sdk`, it is portable across host versions and can run in its own isolated venv.
+This SDK sits at the root of the plugin dependency graph. Its only required dependencies are
+`uvicorn` and `litestar`; the `3lc` data plane is an optional extra
+(`3lc-compute-plugin-sdk[shared]`), pulled in only by the `shared.*` helpers. It **never** depends
+on the compute service itself or on any plugin. A plugin built against `tlc_plugin_sdk` alone is
+therefore portable across service versions and runs in its own isolated environment.
 
 ## Status
 
