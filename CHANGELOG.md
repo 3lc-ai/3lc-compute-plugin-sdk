@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
-## [0.3.0] - 2026-08-27
+## [0.3.0] - 2026-08-25
 
 A coordinated contract wave: breaking **for plugin authors** but **not on the wire** — the
 worker→host NDJSON events are unchanged, so a host keeps running a plugin venv still on 0.2.x
