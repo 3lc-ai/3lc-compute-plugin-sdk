@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- The shared data-source browse widget shows a small caption ("Showing files matching:
+  `<glob>`") when a field declares an `accept` glob, so users understand why some files in a
+  listed folder don't appear as selectable — folders themselves are never glob-filtered.
 
 ## [0.3.0] - 2026-08-25
 
