@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: read
+      contents: write # create the GitHub Release (step below)
       id-token: write # OIDC token for PyPI Trusted Publishing
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +52,32 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish --trusted-publishing always
+
+      # Publish the tagged version's changelog section as a GitHub Release (curated notes,
+      # not GitHub's commit list). The Release stays editable after publish for touch-up.
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          awk -v v="$VER" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ && f {exit} f' \
+            CHANGELOG.md > notes.md
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          { echo "notes<<EOF"; cat notes.md; echo EOF; } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            ${{ steps.changelog.outputs.notes }}
+
+            ## Installation
+            ```bash
+            pip install 3lc-compute-plugin-sdk==${{ steps.changelog.outputs.ver }}
+            ```
+          draft: false
+          generate_release_notes: false
 
   # Manual (workflow_dispatch) runs → build-numbered prereleases to the legacy CloudRepo index.
   publish-cloudrepo-prerelease:
