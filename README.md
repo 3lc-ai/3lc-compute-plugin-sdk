@@ -18,9 +18,10 @@ pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
 
 ## What it gives you
 
-- **`ComputePlugin`** — the base class you subclass. Implement `compute` / `get_ui_fragment`;
-  job and lifecycle hooks ship as no-op defaults. There is no `register()` to call — a plugin's
-  metadata lives in its `[tool.tlc-compute]` manifest, and the Hub discovers it from there.
+- **`ComputePlugin`** — the base class you subclass. Implement `get_ui_fragment` (and `compute`
+  if you expose a synchronous endpoint); job and lifecycle hooks ship as safe defaults. There is
+  no `register()` to call — a plugin's metadata lives in its `plugin.toml` manifest (or a
+  `[tool.tlc-compute]` table in `pyproject.toml`), and the Hub discovers it from there.
 - **`JobContext`** — the surface a long-running job programs against: `progress` / `metric` /
   `log` / `result` for the generic job panel, `emit` for your plugin's own rich UI, and
   cooperative `cancelled`.
@@ -37,10 +38,10 @@ format, custom routes, the job model, UI fragment, checklist).
 
 ## The contract version
 
-`tlc_plugin_sdk.SDK_CONTRACT_VERSION` is this package's own version — one source of truth.
-A plugin pins the SDK (`3lc-compute-plugin-sdk>=X,<Y`) and declares the contract it targets via its
-manifest. The compute service implements a contract range, and the SDK version is the shared
-reference both sides agree on. Versions are SemVer; see **Status** below for the 0.x stability
+`tlc_plugin_sdk.SDK_CONTRACT_VERSION` is this package's own version — one source of truth, one
+contract axis (both the Python and the browser surface). A plugin pins the SDK
+(`3lc-compute-plugin-sdk>=X,<Y`); the compute service and frontend implement a range and compare
+compatibility on `MAJOR.MINOR`. Versions are SemVer; see **Status** below for the 0.x stability
 stance.
 
 ## How it fits
@@ -53,7 +54,9 @@ therefore portable across service versions and runs in its own isolated environm
 
 ## Status
 
-**0.2 is the released contract line.** Within 0.x the contract evolves **additively only**:
-symbols and schemas that exist keep working, and anything breaking waits for a major bump. In
+**0.3 is the current contract line.** Within 0.x the contract still evolves — mostly additively,
+but a coordinated breaking change may land on a MINOR bump while the fleet re-pins in lockstep (0.3
+did: `JobContext.result` took a positional `url`, and the `PY_CONTRACT`/`JS_CONTRACT` axes
+collapsed into `SDK_CONTRACT_VERSION`). Anything reshaping the core still waits for a major bump. In
 the browser bridge, `PLUGIN_API.libs.io` is a stable part of the contract; the other bundled
 libs are best-effort (see the guide).

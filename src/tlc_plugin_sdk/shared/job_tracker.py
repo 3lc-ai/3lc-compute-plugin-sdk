@@ -19,6 +19,7 @@ a plugin UI gets a ``window.PluginJobs`` object::
     PluginJobs.track(namespace, jobId, {onUpdate, onDone, onError}) // -> unsubscribe()
     PluginJobs.cancel(jobId)                                        // -> Promise<{cancelled}>
     PluginJobs.on(namespace, event, handler)                        // -> unsubscribe(); custom ctx.emit() events
+    PluginJobs.list(pluginId?)                                      // -> Promise<PluginJobUpdate[]>; seed-on-mount
 
 ``run`` pre-subscribes and buffers so a job that finishes between the ``/run``
 response and the client subscribing still delivers its terminal event.
@@ -70,6 +71,21 @@ JOB_TRACKER_JS = r"""
     return API.authFetch(_computeUrl() + '/api/plugins/jobs/' + jobId + '/cancel', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
     }).then(function(r){ return r.json(); });
+  }
+
+  // List the host's generic job records, resolving to the same PluginJobUpdate[]
+  // shape the job_update channel delivers. Optionally filtered (client-side) to one
+  // plugin by its id. Use it to seed a freshly-mounted fragment from the durable job
+  // list — the fragment is torn down on navigation and job_update is live-only, so a
+  // long job already running has no live event to catch until it next progresses.
+  function list(pluginId){
+    return API.authFetch(_computeUrl() + '/api/plugins/jobs', { method: 'GET' })
+      .then(function(r){ return r.json(); })
+      .then(function(jobs){
+        if (!Array.isArray(jobs)) { jobs = (jobs && jobs.jobs) || []; }
+        if (pluginId){ jobs = jobs.filter(function(j){ return j && j.plugin_id === pluginId; }); }
+        return jobs;
+      });
   }
 
   // Subscribe to a plugin's own custom ctx.emit() event on its namespace.
@@ -136,7 +152,7 @@ JOB_TRACKER_JS = r"""
       if (!resp || resp.error || !resp.job_id){
         cleanup();
         var emsg = (resp && resp.error) || 'Failed to start job';
-        if (handlers.onError) { handlers.onError({ status: 'failed', subtitle: emsg }); }
+        if (handlers.onError) { handlers.onError({ status: 'failed', error: emsg, subtitle: emsg }); }
         return resp;
       }
       jobId = resp.job_id;
@@ -154,7 +170,7 @@ JOB_TRACKER_JS = r"""
     });
   }
 
-  window.PluginJobs = { start: start, track: track, run: run, cancel: cancel, on: on };
+  window.PluginJobs = { start: start, track: track, run: run, cancel: cancel, on: on, list: list };
 })();
 """
 # fmt: on

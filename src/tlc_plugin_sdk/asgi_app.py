@@ -26,6 +26,9 @@ from typing import TYPE_CHECKING, Any
 
 from litestar import Litestar, Request, get
 
+from tlc_plugin_sdk.shared.job_tracker import JOB_TRACKER_JS
+from tlc_plugin_sdk.shared.ui_inject import inject_scripts
+
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
 
@@ -37,31 +40,36 @@ def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
 
     @get("/health", sync_to_thread=False)
     def health() -> dict[str, Any]:
-        # The version fields are the worker half of a handshake: a venv worker imports its
+        # ``sdk_version`` is the worker half of a handshake: a venv worker imports its
         # *own* install of this SDK, so the host cannot know which contract is live inside
-        # the venv unless the worker says so. The host compares them against its own and
-        # flags skew on the plugin card. Reported from the same constants a plugin
-        # feature-detects against, so worker and plugin can never disagree.
-        from tlc_plugin_sdk import JS_CONTRACT, PY_CONTRACT, SDK_CONTRACT_VERSION
+        # the venv unless the worker says so. The host compares it against its own on
+        # MAJOR.MINOR and flags skew on the plugin card. One contract axis, one field.
+        from tlc_plugin_sdk import SDK_CONTRACT_VERSION
 
         return {
             "ok": True,
             "plugin": getattr(plugin, "id", "?"),
             "sdk_version": SDK_CONTRACT_VERSION,
-            "py_contract": PY_CONTRACT,
-            "js_contract": JS_CONTRACT,
         }
 
     # def + sync_to_thread: get_ui_fragment()/compute() are synchronous and may do
     # blocking work, so Litestar runs them in a threadpool, off the event loop.
     @get("/ui", media_type="text/html", sync_to_thread=True)
     def ui() -> str:
-        return plugin.get_ui_fragment()
+        # Auto-inject the PluginJobs client so every fragment can drive the generic job
+        # channel without a manual inject_scripts() call. The client is idempotent
+        # (``if (window.PluginJobs) return;``), so a plugin that still injects it by hand
+        # is harmless. A fragment with no inline <script> has nothing to drive PluginJobs
+        # from — inject_scripts() raises there, so serve it unchanged.
+        raw = plugin.get_ui_fragment()
+        try:
+            return inject_scripts(raw, JOB_TRACKER_JS)
+        except ValueError:
+            return raw
 
     @get("/compute", sync_to_thread=True)
     def compute(request: Request[Any, Any, Any]) -> dict[str, Any]:
         params: dict[str, Any] = dict(request.query_params)
-        params.setdefault("url", "")
         return plugin.compute(params)
 
     return [health, ui, compute]

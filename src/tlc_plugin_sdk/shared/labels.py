@@ -17,10 +17,12 @@ value differs by modality and table convention:
 Porting to tlc core
 -------------------
 Like ``shared/images.py``, this belongs in the SDK next to
-``Table.get_value_map``. Intended mapping: ``find_label_path`` →
+``Table.get_value_map``. Intended mapping: ``_find_label_path`` →
 ``Table.find_label_path(column=None)``; ``get_label_map`` /
 ``get_label_names`` → thin conveniences over ``Table.get_simple_value_map``.
-Plugins import only from this module, so the port touches exactly this file.
+Plugins import only the public helpers (``get_label_map`` / ``get_label_names`` /
+``get_class_name_lookup`` / ``get_display_value_map`` / ``find_label_column``) from
+this module, so the port touches exactly this file.
 """
 
 from __future__ import annotations
@@ -52,8 +54,8 @@ _INSTANCE_COLUMN_CANDIDATES = (
 _PLAIN_LABEL_COLUMN = "label"
 
 
-def candidate_label_paths(column: str | None = None) -> list[str]:
-    """Enumerate candidate label value paths, most-specific first.
+def _candidate_label_paths(column: str | None = None) -> list[str]:
+    """Enumerate candidate label value paths, most-specific first (internal).
 
     Args:
         column: An explicit column to search under. When given, only that
@@ -76,8 +78,8 @@ def candidate_label_paths(column: str | None = None) -> list[str]:
     return paths
 
 
-def find_label_path(table: Any, column: str | None = None) -> str | None:
-    """Find the dot-path to a table's label value map.
+def _find_label_path(table: Any, column: str | None = None) -> str | None:
+    """Find the dot-path to a table's label value map (internal).
 
     Args:
         table: A loaded ``tlc.Table``.
@@ -87,7 +89,7 @@ def find_label_path(table: Any, column: str | None = None) -> str | None:
         The first candidate path with a non-empty value map, or ``None``.
 
     """
-    for path in candidate_label_paths(column):
+    for path in _candidate_label_paths(column):
         try:
             if table.get_value_map(path):
                 return path
@@ -110,7 +112,7 @@ def get_label_map(table: Any, column: str | None = None, *, path: str | None = N
         The label map, or ``{}`` if the table has none.
 
     """
-    label_path = path or find_label_path(table, column)
+    label_path = path or _find_label_path(table, column)
     if not label_path:
         return {}
     try:
@@ -152,7 +154,7 @@ def get_class_name_lookup(table: Any, column: str | None = None, *, path: str | 
         ``{class key (str): internal name}``, or ``{}`` if no label map.
 
     """
-    label_path = path or find_label_path(table, column)
+    label_path = path or _find_label_path(table, column)
     if not label_path:
         return {}
     try:
