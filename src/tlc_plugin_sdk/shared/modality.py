@@ -83,10 +83,11 @@ class ModalityInfo:
 # ---------------------------------------------------------------------------
 
 
-def detect_modality_from_schema(schema: Any) -> ModalityInfo:
+def _detect_modality_from_schema(schema: Any) -> ModalityInfo:
     """Walk a schema object and detect modality.
 
-    This is the core detection function. It does not load any table or URL —
+    Internal: the core detection function behind
+    :func:`detect_modality_from_table`. It does not load any table or URL —
     callers pass in ``table.rows_schema`` directly.
 
     Detection priority:
@@ -411,7 +412,7 @@ def detect_modality_from_table(table: Any) -> ModalityInfo:
         ModalityInfo with modality, columns, and class names extracted.
 
     """
-    info = detect_modality_from_schema(table.rows_schema)
+    info = _detect_modality_from_schema(table.rows_schema)
 
     # Extract class names from value map
     if info.gt_col:
@@ -422,32 +423,11 @@ def detect_modality_from_table(table: Any) -> ModalityInfo:
     return info
 
 
-def detect_modality_from_url(url: str) -> ModalityInfo:
-    """Load a table from URL and detect its modality.
-
-    Convenience wrapper that loads the table first, then delegates to
-    ``detect_modality_from_table``.
-
-    Args:
-        url: 3LC table URL (will be normalized).
-
-    Returns:
-        ModalityInfo with full detection results.
-
-    """
-    import tlc
-
-    from tlc_plugin_sdk.shared.url_utils import normalize_url
-
-    table = tlc.Table.from_url(normalize_url(url))
-    return detect_modality_from_table(table)
-
-
-def classify_metrics_columns(columns: set[str]) -> str:
+def _classify_metrics_columns(columns: set[str]) -> str:
     """Classify a metrics table by its column set.
 
-    Used by run statistics to quickly determine the modality of a metrics
-    table before doing full schema inspection.
+    Internal helper: quickly determine the modality of a metrics table by its
+    column names before doing full schema inspection.
 
     Args:
         columns: Set of column names from the table.

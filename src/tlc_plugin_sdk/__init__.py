@@ -25,34 +25,18 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from tlc_plugin_sdk.contract import ComputePlugin
-from tlc_plugin_sdk.job_context import JobContext
+from tlc_plugin_sdk.job_context import JobContext, JobFailed
 
-# Plugin contract (ABI) version = this package's own version — one source of truth
-# (the ``[project] version`` in pyproject), read via importlib.metadata rather than a
-# separately maintained constant. A plugin declares the contract it targets via its
-# manifest's ``sdk_version``.
+# The plugin contract version — one axis, one source of truth: this package's own
+# version (the ``[project] version`` in pyproject), read via importlib.metadata rather
+# than a separately maintained constant. It IS the contract a plugin programs against —
+# both the Python surface (``ComputePlugin`` / ``JobContext`` / ``shared.*``) and the
+# browser surface (``PLUGIN_API`` / ``PluginJobs`` / ``TlcData``, declared in
+# ``contract/plugin-api.d.ts``) — and the thing a plugin pins (``>=X,<Y``). The host and
+# frontend implement a range and compare compatibility on ``MAJOR.MINOR``.
 try:
     SDK_CONTRACT_VERSION = _pkg_version("3lc-compute-plugin-sdk")
 except PackageNotFoundError:  # running from a raw checkout that was never installed
     SDK_CONTRACT_VERSION = "0.0.0"
 
-# Capability markers for feature-detection — decoupled from the wheel/SemVer pin.
-#
-# ``SDK_CONTRACT_VERSION`` above is the package version: the *dependency pin* a plugin
-# resolves against (``3lc-compute-plugin-sdk>=X,<Y``). The two constants below are finer-grained
-# *capability* markers a plugin (or the host) can feature-detect against at runtime:
-#
-#   * ``PY_CONTRACT`` — the Python-side contract: ``ComputePlugin`` / ``JobContext`` and
-#     the ``tlc_plugin_sdk.shared.*`` helpers (what a plugin's Python programs against).
-#   * ``JS_CONTRACT`` — the browser-side contract: the ``PLUGIN_API`` / ``PluginJobs`` /
-#     ``TlcData`` surface a plugin's ``ui.html`` programs against (see
-#     ``contract/plugin-api.d.ts``; the ``PluginJobs`` client ships from THIS package).
-#
-# Each MINOR axis increments **independently** as features are added to one side without
-# the other. Both are always ``<= `` the package version (a capability can only exist in a
-# shipped wheel). Bump the package version when EITHER ``PY_CONTRACT`` or ``JS_CONTRACT``
-# moves — the wheel is the thing a plugin actually pins, so it must cover both axes.
-PY_CONTRACT = "0.1"
-JS_CONTRACT = "0.2"
-
-__all__ = ["JS_CONTRACT", "PY_CONTRACT", "SDK_CONTRACT_VERSION", "ComputePlugin", "JobContext"]
+__all__ = ["SDK_CONTRACT_VERSION", "ComputePlugin", "JobContext", "JobFailed"]

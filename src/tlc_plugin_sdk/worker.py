@@ -54,7 +54,7 @@ import anyio
 from litestar import Request, Response, post
 from litestar.response import Stream
 
-from tlc_plugin_sdk.job_context import JobContext
+from tlc_plugin_sdk.job_context import JobContext, JobFailed
 
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
@@ -160,7 +160,10 @@ class _Job:
             self._plugin.run_job(self.ctx)
             status = "cancelled" if self.ctx.cancelled else "completed"
             terminal: dict[str, Any] = {"event": "done", "status": status, "job_id": self.job_id}
-        except Exception as exc:  # surfaced to the host as a terminal error event
+        except JobFailed as exc:  # a clean, user-facing failure (ctx.fail / raise JobFailed)
+            logger.info("run_job for job %s failed: %s", self.job_id, exc)
+            terminal = {"event": "error", "message": str(exc), "job_id": self.job_id}
+        except Exception as exc:  # any other exception: surfaced with its type prefix
             logger.exception("run_job failed for job %s", self.job_id)
             terminal = {"event": "error", "message": f"{type(exc).__name__}: {exc}", "job_id": self.job_id}
         # Reclaim *before* announcing the terminal state, not after: the host may dispatch

@@ -36,7 +36,7 @@ Browser                         Compute Service (port 5020)
                                │  │  + ComputePlugin subclass││
                                │  │  ComputePlugin (ABC)     ││
                                │  │  ├── get_ui_fragment()   ││ ← abstract
-                               │  │  ├── compute()           ││ ← abstract
+                               │  │  ├── compute()           ││ ← override (default)
                                │  │  ├── id                  ││ ← host-stamped
                                │  │  ├── run_job(ctx)        ││ ← override (default)
                                │  │  └── get_route_handlers()││ ← override (default)
@@ -106,7 +106,7 @@ description = "Analyzes table data quality."
 version = "1.0.0"
 min_service_version = "0.1.0"       # Minimum compute service version required
 icon = "🔍"                         # Fallback emoji
-# 16x16 SVG, inline in the manifest (no _ICON_SVG import anymore):
+# 16x16 SVG, inline in the manifest:
 icon_svg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5"/><path d="M12 12l3 3"/></svg>'
 
 [ui]
@@ -126,11 +126,20 @@ isolation = "venv"                  # "venv" is the only value (and the default 
 entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
 provision_extra = "my-plugin"       # umbrella extra the host provisions: `uv sync --extra <this>`
-# Optional SocketIO namespace for real-time updates. Defaults to "/<plugin-id>";
-# declare it only to override (the host registers it at startup so a UI can connect;
-# declaring it does NOT mean emitting custom events):
-# socketio_namespace = "/my-plugin"
+# The plugin's SocketIO namespace is host-derived as "/<plugin-id>" and registered at
+# startup — it is NOT declarable in the manifest (a plugin emits via ctx; the host owns
+# the transport).
 ```
+
+**Other keys the host reads** (all optional, read without importing the plugin):
+
+- `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
+  plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
+  (pin the interpreter the plugin's venv is built with).
+- `[ui]`: `min_input_count` (minimum selected resources an `action` plugin needs — defaults to
+  `len(input_types)`; set `0` explicitly to require none), `action_param_names` (query params
+  passed through from the action launch), `quick_action_label` / `quick_action_description`
+  (dashboard quick-action copy).
 
 `runtime.provision_extra` is **required for every plugin distributed through an umbrella**:
 it names the extra the host installs with `uv sync --extra <that-value>`. For first-party
@@ -145,11 +154,12 @@ on the CPU queue. Both are host-owned; the plugin never picks a queue or names a
 ### 3. Implement the plugin object
 
 A plugin is a **subclass of `ComputePlugin`** (imported from `tlc_plugin_sdk`) —
-there is no `register()` call. You must implement the two abstract methods,
-`get_ui_fragment()` and `compute()`; `id` is hydrated onto the instance from the manifest
-by the host. Optional behavior (custom routes, jobs, lifecycle hooks) ships as no-op
-defaults on the base, so you override only what you need and the host calls every hook
-directly.
+there is no `register()` call. You must implement the one abstract method,
+`get_ui_fragment()`; `id` is hydrated onto the instance from the manifest by the host.
+Everything else — `compute()`, custom routes, jobs, lifecycle hooks — ships as a safe
+default on the base, so you override only what you need and the host calls every hook
+directly. (`compute()`'s default returns an error dict; implement it only if you expose a
+synchronous `GET /compute` endpoint.)
 
 ```python
 """My Plugin — does something useful with tables."""
@@ -299,10 +309,10 @@ startup.
 > var API = window.PLUGIN_API;   // now typed
 > ```
 >
-> That file is the source of truth for **`JS_CONTRACT` (0.1)** — the browser-side contract.
-> The 3LC Hub frontend **implements** `PLUGIN_API` when it mounts a fragment;
-> `window.PluginJobs` **ships from this package** (it is layered on top of the bridge, not
-> part of it). See "Two version axes" below.
+> That file declares the browser-side contract — versioned by the single
+> `SDK_CONTRACT_VERSION` (see "Version & Compatibility" below). The 3LC Hub frontend
+> **implements** `PLUGIN_API` when it mounts a fragment; `window.PluginJobs` **ships from this
+> package** (auto-injected by the host, layered on top of the bridge, not part of it).
 
 ### How a fragment reaches the browser
 
@@ -351,7 +361,7 @@ PLUGIN_API = {
   objects: TlcApi.objectService,      // Object service methods
   authFetch: TlcApi.authFetch,        // fetch() with auth headers
   data: TlcData,                      // Cached data (projects, tables, runs)
-  location: TlcLocation,              // Location renderers (chips/labels for project roots) — JS_CONTRACT 0.2
+  location: TlcLocation,              // Location renderers (chips/labels for project roots) — SDK 0.2+
 
   computeFetch: TlcApi.computeFetch,  // authFetch joined to the compute-service base URL
 
@@ -388,7 +398,7 @@ PLUGIN_API = {
 - **`compute` / `objects` / `data` / `computeFetch` / `navigate` / `getIcon` / `container`** are
   part of the declared surface but rarely used directly by `ui.html` (plugins reach data through
   `authFetch`); they are documented in the `.d.ts` for completeness.
-- **`location`** (JS_CONTRACT 0.2) exposes the host's shared location renderers (`TlcLocationApi`):
+- **`location`** (SDK 0.2+) exposes the host's shared location renderers (`TlcLocationApi`):
   chips and labels for the project roots / scan URLs that tables, runs, and projects from
   `PLUGIN_API.data` resolve to (their `location` / `locations` fields, also 0.2). Every renderer
   returns `''` on single-root installs, so output can be concatenated unconditionally. Feature-detect
@@ -473,7 +483,7 @@ isolation = "venv"
 entrypoint = "tlc_plugin_my_gpu_plugin:MyGpuPlugin"
 requires_gpu = true                 # → routed through the shared GPU queue (1 at a time)
 provision_extra = "my-gpu-plugin"   # venv deps installed via `uv sync --extra <this>`
-# socketio_namespace defaults to "/my-gpu-plugin"; declare only to override
+# SocketIO namespace is host-derived as "/my-gpu-plugin" — not declarable here
 ```
 
 GPU jobs are serialized — only one runs at a time across every GPU plugin (YOLO, SAM3,
@@ -498,8 +508,9 @@ class MyGpuPlugin(ComputePlugin):
             ctx.progress(percent=100 * i / n, label=f"batch {i}/{n}")
             ctx.metric("loss", 0.042)             # key/value card on the generic panel
 
-        ctx.result(run_url=created_table_url)     # the one "open result" link
-        # Raise to fail the job — the host records the error and ends the stream.
+        ctx.result(created_table_url)             # the one "open result" link (run or table URL)
+        # Raise to fail the job (or ctx.fail("message") for a clean, user-facing message) —
+        # the host records the error and ends the stream.
 ```
 
 `JobContext` surface:
@@ -513,7 +524,8 @@ class MyGpuPlugin(ComputePlugin):
 | `ctx.progress(*, percent, label="", timing=None)` | Generic progress bar. `percent=-1` = indeterminate. `timing` = `{elapsed_s, eta_s, avg_step_s, step_label}`. |
 | `ctx.metric(label, value)` | Scalar metric card on the generic panel. |
 | `ctx.log(message)` | A log line for the job. |
-| `ctx.result(*, run_url)` | The canonical result link (last write wins). |
+| `ctx.result(url)` | The canonical result link the Open button opens — a run *or* a table URL (last write wins). |
+| `ctx.fail(message)` | Fail the job with a clean, user-facing message (raises `JobFailed`; reported verbatim, no type prefix). |
 | `ctx.emit(name, payload)` | A **custom** event for the plugin's OWN rich UI (see below). |
 
 **The host owns listing and cancellation — there is nothing to implement.** Because the
@@ -539,21 +551,21 @@ can be a second consumer of that same channel for a richer, tailored view — it
 bespoke events** for the generic lifecycle (queued → running → done, %, result link,
 metrics).
 
-**The `window.PluginJobs` client** is a global the plugin injects into its fragment in
-`get_ui_fragment()`, exactly like `alias_ui_script()` — pass `job_tracker_script()` (from
-`tlc_plugin_sdk.shared.job_tracker`) to `inject_scripts(raw, job_tracker_script())`
-(see `importer/__init__.py`). It starts a job and tracks it over the generic channel:
+**The `window.PluginJobs` client** is a global the **host auto-injects** into every fragment
+(its `/ui` handler prepends `job_tracker_script()`), so you can call it directly — no manual
+injection needed. It is idempotent (`if (window.PluginJobs) return;`), so an older plugin that
+still injects it by hand via `inject_scripts(raw, job_tracker_script())` keeps working. It
+starts a job and tracks it over the generic channel:
 
 ```javascript
-// The host registers the namespace automatically (default "/<plugin-id>");
-// declare socketio_namespace in plugin.toml only to override it.
+// The host registers the namespace automatically as "/<plugin-id>".
 PluginJobs.run('my-plugin', { table_url: url }, {
   onUpdate: function (job) {
     // generic schema: job.status, job.progress.percent/label, job.metrics[]
     setProgress(job.progress.percent, job.progress.label);
   },
   onDone: function (job) { showResult(job.run_url); },
-  onError: function (job) { showError(job.subtitle); },  // failure message rides subtitle
+  onError: function (job) { showError(job.error); },  // failure message on job.error
 });
 ```
 
@@ -561,6 +573,12 @@ PluginJobs.run('my-plugin', { table_url: url }, {
 the client subscribing still delivers its terminal event. (`PluginJobs.start/track/cancel`
 are the lower-level pieces.) The separate frontend's generic panel polls the same schema
 independently.
+
+One timing rule to know: `track()` and `on()` open the namespace socket **lazily**, on first
+use, and SocketIO does not replay server→client events to a client that was not yet
+connected. `run()` connects before it posts, so the common path is safe — but a fragment that
+listens for custom events from the first second, or re-attaches to a job it did not start
+(seed-on-mount), should warm the socket on mount: `PluginJobs.connect('/my-plugin')`.
 
 **Custom events** — `ctx.emit(name, payload)` is reserved for telemetry the generic schema
 **can't** express (e.g. a training plugin's per-epoch loss curve). The host relays it
@@ -582,6 +600,38 @@ socket.on('epoch_metrics', function (d) { lossChart.push(d.epoch, d.loss); });
 > Don't leak plugin internals into the generic surface. Training fields (`epoch`,
 > `loss`, `model_name`, `mode`, …) belong in a `ctx.emit` payload for your own UI — never
 > in `ctx.progress`/`ctx.metric`, which feed the plugin-agnostic frontend panel.
+
+---
+
+## The job page is a launcher — the Queue is the durable view
+
+A plugin fragment is **torn down on navigation**: the host remounts it via `innerHTML`, so
+its JS state and any live SocketIO subscription are gone the moment the user leaves and comes
+back. The generic **Queue & Progress** panel is the opposite — it is host-owned, polls
+`GET /api/plugins/jobs`, and survives navigation. So treat your fragment as the place a job is
+*launched and configured*, and the generic Queue card as the place a job is *watched*.
+
+Two obligations follow:
+
+**1. Seed on mount from the durable job list.** `job_update` is live-only — a long job already
+running when the fragment remounts has no event to catch until it next progresses, so the
+fragment would show an empty form over a job that is very much alive. On mount, ask the host
+what's running and render a compact running-state instead:
+
+```js
+PluginJobs.list('<id>').then(function (jobs) {
+  var live = jobs.filter(function (j) { return j.status === 'queued' || j.status === 'running'; });
+  if (live.length) renderRunningState(live[0]);   // compact "job running — watch it in the Queue"
+});
+```
+
+**2. Keep the generic card meaningful.** If you emit custom progress for your own rich UI
+(`ctx.emit`), keep `ctx.progress(percent, label, timing)` current *too* — the generic card is
+the durable view, and a job that only drives a custom channel looks stalled there. Report the
+one result the Open button opens with **`ctx.result(url)`** (a run or a table URL), and report
+failures by **raising** (or `ctx.fail("message")` for a clean, user-facing message — it lands
+on the card's `error`, without a `TypeError:`-style prefix). That is all the generic Queue
+needs to render a good, navigation-proof view.
 
 ---
 
@@ -758,24 +808,21 @@ plugins are unaffected either way.
 
 All versions use **SemVer** (`MAJOR.MINOR.PATCH`).
 
-### Two version axes — never conflate them
+### Two kinds of version — never conflate them
 
 There are **two independent** kinds of "version" in play. Keep them separate:
 
-**(a) CONTRACT capability — what a plugin *programs against*.** Pinned at build/install time
-via the `3lc-compute-plugin-sdk` dependency. The SDK exposes three constants in `tlc_plugin_sdk`:
+**(a) CONTRACT — what a plugin *programs against*.** Pinned at build/install time via the
+`3lc-compute-plugin-sdk` dependency. There is **one contract axis**, `tlc_plugin_sdk.SDK_CONTRACT_VERSION`:
 
 | Constant | Covers | Value |
 |----------|--------|-------|
-| `SDK_CONTRACT_VERSION` | the wheel/SemVer — the actual dependency *pin* (`3lc-compute-plugin-sdk>=X,<Y`) | = package version (`0.1.0`) |
-| `PY_CONTRACT` | the Python surface: `ComputePlugin` / `JobContext` / `shared.*` | `0.1` |
-| `JS_CONTRACT` | the browser surface: `PLUGIN_API` / `PluginJobs` / `TlcData` (see `plugin-api.d.ts`) | `0.1` |
+| `SDK_CONTRACT_VERSION` | the whole contract — the Python surface (`ComputePlugin` / `JobContext` / `shared.*`) *and* the browser surface (`PLUGIN_API` / `PluginJobs` / `TlcData`, see `plugin-api.d.ts`); also the dependency *pin* (`3lc-compute-plugin-sdk>=X,<Y`) | = package version (e.g. `0.3.0`) |
 
-`PY_CONTRACT` and `JS_CONTRACT` are **feature-detection markers** that increment *independently*
-as features are added to one side without the other. Both are always `<=` the package version (a
-capability can only exist in a shipped wheel). **Bump the package version when *either* moves.**
-A plugin that needs a newer capability raises its `3lc-compute-plugin-sdk` floor; it can also
-feature-detect at runtime by reading `tlc_plugin_sdk.PY_CONTRACT` / `JS_CONTRACT`.
+It is this package's own version — one source of truth. A plugin that needs a newer capability
+raises its `3lc-compute-plugin-sdk` floor; the host and frontend implement a range and compare
+compatibility on `MAJOR.MINOR`. (Earlier 0.x lines split this into separate `PY_CONTRACT` /
+`JS_CONTRACT` markers; those were removed in 0.3 — there is one axis now.)
 
 **(b) SERVICE compatibility — what a plugin *runs against*.** Negotiated at *runtime*, not pinned.
 The compute-service and frontend version independently (separate repos); a plugin declares floors

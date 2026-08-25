@@ -5,16 +5,16 @@
 A plugin is a subclass of :class:`ComputePlugin`. The base declares the
 *behavioral* surface the host (or an out-of-process worker) invokes; all
 *metadata* (id, name, ui placement, gpu flag, socketio namespace, …) lives in
-the plugin manifest (``[tool.tlc-compute]`` in ``plugin.toml`` /
-``pyproject.toml``), the single source of truth. There is **no
-metadata on the class** and **no** ``register()`` call at import — the host
-discovers a plugin via its manifest ``entrypoint`` and hydrates the instance's
-display identity (``id``/``name``/``icon``/``version``) from the card after
-construction.
+the plugin manifest — a standalone ``plugin.toml`` (bare, un-namespaced keys) or,
+equivalently, a ``[tool.tlc-compute]`` table in the plugin's ``pyproject.toml`` —
+the single source of truth. There is **no metadata on the class** and **no**
+``register()`` call at import — the host discovers a plugin via its manifest
+``entrypoint`` and hydrates the instance's display identity
+(``id``/``name``/``icon``/``version``) from the card after construction.
 
-Only ``compute`` and ``get_ui_fragment`` are required (abstract); everything
-else is optional behavior with a safe default, so a plugin implements just what
-it needs and the host calls every hook directly against the inherited defaults.
+Only ``get_ui_fragment`` is required (abstract); everything else is optional
+behavior with a safe default, so a plugin implements just what it needs and the
+host calls every hook directly against the inherited defaults.
 """
 
 from __future__ import annotations
@@ -26,18 +26,12 @@ if TYPE_CHECKING:
     from tlc_plugin_sdk.job_context import JobContext
 
 
-# SVG icon prefix — 16x16, currentColor, standard stroke settings.
-# Handy when composing an icon literal for a manifest's ``icon_svg`` field:
-#   icon_svg = _ICON_SVG + '><path d="..."/></svg>'
-_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'  # noqa: E501
-
-
 class ComputePlugin(ABC):
     """Behavior-only base class for a compute-service plugin (host or venv).
 
-    Subclass and implement at least :meth:`compute` and :meth:`get_ui_fragment`.
-    The optional hooks below ship as no-op defaults, so the host can call any of
-    them directly without probing for the method first.
+    Subclass and implement at least :meth:`get_ui_fragment`. The optional hooks
+    below (``compute``, ``run_job``, lifecycle, routes) ship as safe defaults, so
+    the host can call any of them directly without probing for the method first.
 
     Attributes:
         id: Unique slug (e.g. ``run-insights``). Identity only, hydrated onto the
@@ -53,12 +47,22 @@ class ComputePlugin(ABC):
         """Return a self-contained HTML+JS+CSS fragment for the plugin UI."""
         ...
 
-    @abstractmethod
-    def compute(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Execute the plugin's computation and return a JSON-serializable dict."""
-        ...
+    # ── Optional behavior (safe defaults) ─────────────────────────────────────
 
-    # ── Optional behavior (no-op defaults) ────────────────────────────────────
+    def compute(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Execute the plugin's synchronous ``GET /compute`` computation.
+
+        Override to expose a synchronous compute endpoint; the default returns an
+        error dict so a plugin that only serves a UI and/or jobs need not implement
+        it. Long-running work belongs in :meth:`run_job`, not here.
+
+        Returns:
+            A JSON-serializable dict. The default is
+            ``{"error": f"{id} does not implement compute()"}``.
+
+        """
+        plugin_id = getattr(self, "id", "?")
+        return {"error": f"{plugin_id} does not implement compute()"}
 
     def initialise_runtime(self) -> None:
         """Initialise the plugin's runtime resources (runners, stores, models).
@@ -101,7 +105,8 @@ class ComputePlugin(ABC):
         plugin's own Litestar app in its worker, reverse-proxied by the host (see
         ``tlc_plugin_sdk/asgi_app.py``); Litestar runs ``def`` handlers in a threadpool,
         so a synchronous, blocking custom route does not block the event loop. The
-        reserved routes (``/run``, ``/health``, ``/ui``, ``/compute``, ``/jobs/*``)
+        reserved routes (``/run``, ``/health``, ``/ui``, ``/compute``, ``/jobs/*``,
+        and the host admin routes ``/provision`` ``/reload`` ``/venv`` ``/worker/stop``)
         are host-owned — a plugin must not define them. Empty by default.
         """
         return []

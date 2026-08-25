@@ -16,10 +16,21 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+class JobFailed(Exception):
+    """Fail the current job with a clean, user-facing message.
+
+    Raised by :meth:`JobContext.fail`. The worker turns a ``JobFailed`` into the
+    terminal ``error`` event carrying the message **verbatim** (no ``TypeName:``
+    prefix); any *other* exception is reported as ``f"{type}: {exc}"``. So a plugin
+    reaches for this (or ``ctx.fail``) when it has a message worth showing the user,
+    and lets ordinary exceptions propagate for genuine faults.
+    """
 
 
 class JobContext:
@@ -57,7 +68,16 @@ class JobContext:
         return self._cancel.is_set()
 
     def progress(self, *, percent: float, label: str = "", timing: dict[str, Any] | None = None) -> None:
-        """Report progress (0-100) with an optional label and timing dict."""
+        """Report progress with an optional label and timing dict.
+
+        Args:
+            percent: Completion 0-100. Pass ``-1`` for **indeterminate** — the
+                generic panel then shows an activity indicator rather than a filled
+                bar (use it when total work is unknown).
+            label: Short status line for the generic progress view.
+            timing: Optional ``{elapsed_s, eta_s, avg_step_s, step_label}`` dict.
+
+        """
         self._emit({"event": "progress", "percent": percent, "label": label, "timing": timing})
 
     def metric(self, label: str, value: str | float) -> None:
@@ -68,19 +88,37 @@ class JobContext:
         """Emit a log line for the job."""
         self._emit({"event": "log", "message": message})
 
-    def result(self, *, run_url: str) -> None:
-        """Record the job's result link (e.g. the created table/run URL).
+    def result(self, url: str) -> None:
+        """Record the job's result link — the thing the Open button opens.
 
-        The host stores it on the generic job record so the Queue & Progress
-        panel can render it as an "open result" link; safe to call multiple times
-        (last write wins). Use this for the one canonical artifact the job
-        produced — richer per-plugin output still goes through :meth:`emit`.
+        The host stores it on the generic job record so the Queue & Progress panel
+        can render it as an "open result" link; safe to call multiple times (last
+        write wins). Pass the one canonical artifact the job produced — a run *or* a
+        table URL. Richer per-plugin output still goes through :meth:`emit`.
 
         Args:
-            run_url: URL of the artifact the job produced.
+            url: The URL the Open button opens (a run or a table URL).
 
         """
-        self._emit({"event": "result", "run_url": run_url})
+        self._emit({"event": "result", "run_url": url})
+
+    def fail(self, message: str) -> NoReturn:
+        """Fail the job with a clean, user-facing message.
+
+        Raises :class:`JobFailed`, which the worker reports as the terminal
+        ``error`` event carrying ``message`` **verbatim** — no exception-type
+        prefix, unlike an ordinary exception (reported as ``f"{type}: {exc}"``).
+        Use it for validation / precondition failures where the message is meant
+        for the user; let ordinary exceptions propagate for genuine faults.
+
+        Args:
+            message: The failure message shown on the job's generic error card.
+
+        Raises:
+            JobFailed: Always.
+
+        """
+        raise JobFailed(message)
 
     def emit(self, name: str, payload: dict[str, Any] | None = None) -> None:
         """Emit a custom, plugin-defined event for the plugin's OWN rich UI.

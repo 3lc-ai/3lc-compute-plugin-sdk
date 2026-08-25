@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.3.0] - 2026-08-27
+
+A coordinated contract wave: breaking **for plugin authors** but **not on the wire** — the
+worker→host NDJSON events are unchanged, so a host keeps running a plugin venv still on 0.2.x
+(skew badge only). The whole first-party fleet re-pins `>=0.3.0,<0.4.0` in the same release.
+
+### Added
+- `JobContext.fail(message)` raises `JobFailed` (exported from `tlc_plugin_sdk`); the worker
+  reports it as the terminal `error` event with the **bare** message, while any other exception
+  keeps its `TypeName: …` prefix.
+- `PluginJobs.list(pluginId?)` — `GET {compute}/api/plugins/jobs`, filtered client-side by
+  `plugin_id`. Use it to **seed a fragment on mount** from the durable host job list (the
+  fragment is torn down on navigation and `job_update` is live-only). Declared in the `.d.ts`.
+- `PluginJobs.connect(namespace)` — warm the namespace socket on mount. `track()`/`on()`
+  connect lazily and SocketIO does not replay events to a not-yet-connected client, so a
+  fragment listening for custom events from the first second (or re-attaching to a job it did
+  not start) calls this first; `run()` already connects for you.
+- The host's `/ui` handler now **auto-injects** the `PluginJobs` client into every fragment; the
+  client is idempotent, so a plugin that still injects it by hand keeps working.
+- `ComputePlugin.compute()` ships a default (returns an error dict), so only `get_ui_fragment()`
+  stays abstract.
+- `.d.ts` truth pass: `PluginJobUpdate.error`, `PluginFetchOptions.allowErrorStatus`,
+  `PluginJobsApi.list`, `TlcLocationApi.rowsSpanLocations`/`shortLabel`, and a new
+  **Legacy globals** ambient block (`openTablePicker`/`closeTablePicker`/`CancelJob`/`cssVar`
+  and the injected `_tlc*` helpers).
+
+### Changed
+- **One contract axis.** `PY_CONTRACT` and `JS_CONTRACT` are removed; `SDK_CONTRACT_VERSION`
+  (the package version) is the whole contract, compared on `MAJOR.MINOR`. `/health` reports
+  `sdk_version` only (no `py_contract`/`js_contract`).
+- `JobContext.result` takes a **positional** `url` (`ctx.result(url)`); it opens the Open
+  button — a run *or* a table URL. The `run_url=` keyword is gone; the emitted `result` event
+  still carries `run_url` (wire unchanged).
+- `JobContext.progress` documents `percent=-1` as indeterminate.
+
+### Removed
+- `shared.modality.detect_modality_from_url` (zero users). `detect_modality_from_schema`,
+  `classify_metrics_columns`, `labels.candidate_label_paths`, and `labels.find_label_path`
+  are now internal (underscore-prefixed). Public alternatives: `detect_modality_from_table`
+  for modality; `get_label_map` / `get_label_names` / `find_label_column` for labels.
+  `classify_metrics_columns` was a plugin-specific column-name heuristic with no public
+  replacement — inline it (its one known user did).
+- The orphan `_ICON_SVG` constant; the dead `params.setdefault("url", "")` in the `/compute`
+  handler.
+
+### Migration
+- `ctx.result(run_url=x)` → `ctx.result(x)`.
+- Validation failures: raise, or `ctx.fail("message")` for a clean user-facing card.
+- Reading `tlc_plugin_sdk.PY_CONTRACT` / `JS_CONTRACT`, or a worker's `/health`
+  `py_contract`/`js_contract`: use `SDK_CONTRACT_VERSION` / `sdk_version` and compare on
+  `MAJOR.MINOR`.
+- `shared.modality.detect_modality_from_url(url)` → load the table yourself and call
+  `detect_modality_from_table(table)`. `classify_metrics_columns(columns)` → copy the
+  heuristic into your plugin.
+- A fragment that kept its own always-connected socket for custom events: switch to
+  `PluginJobs.on(namespace, event, handler)` and call `PluginJobs.connect(namespace)` on mount
+  so nothing emitted before the first `track()` is missed.
+- Fragments may delete their manual `inject_scripts(raw, job_tracker_script())` — the host
+  injects `PluginJobs` now (harmless to keep).
+- The manifest never declared the SocketIO namespace or `sdk_version`; both were dead and are
+  documented as such. The namespace is host-derived as `/<plugin-id>`.
+
 ## [0.2.3] - 2026-08-21
 
 ### Changed

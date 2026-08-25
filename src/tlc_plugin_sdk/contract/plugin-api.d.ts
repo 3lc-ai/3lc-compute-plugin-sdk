@@ -1,7 +1,7 @@
 // Copyright 2026 3LC Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// JS_CONTRACT 0.2 — the browser-side plugin contract.
+// The browser-side plugin contract — ships in 3lc-compute-plugin-sdk 0.3.0.
 //
 // This file DECLARES the JavaScript surface a plugin's `ui.html` programs against.
 // It does not implement it:
@@ -11,20 +11,19 @@
 //
 //   * `window.PluginJobs` SHIPS FROM THIS PACKAGE: it is the
 //     injectable client in `tlc_plugin_sdk.shared.job_tracker`
-//     (`JOB_TRACKER_JS`), which a plugin injects into its fragment via
-//     `inject_scripts(raw, job_tracker_script())`. It is NOT part of the host
-//     bridge — it is layered on top of `PLUGIN_API`.
+//     (`JOB_TRACKER_JS`), auto-injected by the host's `/ui` handler (and idempotent
+//     if a plugin also injects it by hand). It is NOT part of the host bridge — it
+//     is layered on top of `PLUGIN_API`.
 //
-// This declaration is the source of truth for `JS_CONTRACT` (matches
-// `tlc_plugin_sdk.JS_CONTRACT`). It increments independently of the Python
-// contract; bump the package version when it moves.
+// One contract axis: this browser surface and the Python surface share the single
+// `SDK_CONTRACT_VERSION` (the package version); the host compares compatibility on
+// MAJOR.MINOR. Bump the package version when this surface changes.
 //
 // USAGE from a plain-JS `ui.html` (no build step):
 //
-//   /// <reference types="tlc_plugin_sdk/contract/plugin-api" />
-//   // (the IMPORT name `tlc_plugin_sdk`, not the distribution name
-//   //  `3lc-plugin-sdk` — the on-disk dir is `tlc_plugin_sdk`, and a
-//   //  `/// <reference types>` resolves via typeRoots, not jsconfig `paths`.)
+//   /// <reference types="3lc-compute-plugin-sdk/contract/plugin-api" />
+//   // (the on-disk dir is the IMPORT name `tlc_plugin_sdk`; a `/// <reference
+//   //  types>` resolves via typeRoots, not jsconfig `paths`.)
 //   // or by relative path to this file:
 //   /// <reference path="../contract/plugin-api.d.ts" />
 //
@@ -66,6 +65,12 @@ export interface PluginFetchOptions extends RequestInit {
    * when the caller supplies its own `signal`.
    */
   timeout?: number;
+  /**
+   * When true, resolve with the `Response` on a non-ok HTTP status instead of
+   * rejecting — the caller inspects `response.ok` / `response.status` itself.
+   * Custom, non-standard option — deleted before the underlying `fetch()` call.
+   */
+  allowErrorStatus?: boolean;
 }
 
 // ── TlcData (cached project/table/run indexing tables) ─────────────────────────
@@ -73,7 +78,7 @@ export interface PluginFetchOptions extends RequestInit {
 /**
  * The root a project lives under (the Object Service's project root or one of
  * its scan URLs). Resolved by the frontend from `api://Configuration` plus the
- * object URLs themselves; hosts predating JS_CONTRACT 0.2 never set it, so
+ * object URLs themselves; hosts predating SDK 0.2 never set it, so
  * treat every location member as optional.
  */
 export interface TlcDataLocation {
@@ -104,7 +109,7 @@ export interface TlcDataProject {
   run_count: number;
   dataset_count: number;
   last_modified: number;
-  /** Locations this project's contents resolve to. Absent on hosts predating JS_CONTRACT 0.2. */
+  /** Locations this project's contents resolve to. Absent on hosts predating SDK 0.2. */
   locations?: TlcDataProjectLocation[];
 }
 
@@ -119,7 +124,7 @@ export interface TlcDataTable {
   type: string;
   is_url_writable: boolean;
   input_table_urls: string[];
-  /** Root this table lives under; null if unresolvable. Absent on hosts predating JS_CONTRACT 0.2. */
+  /** Root this table lives under; null if unresolvable. Absent on hosts predating SDK 0.2. */
   location?: TlcDataLocation | null;
 }
 
@@ -135,7 +140,7 @@ export interface TlcDataRun {
   constants: object;
   metrics: any[];
   is_url_writable: boolean;
-  /** Root this run lives under; null if unresolvable. Absent on hosts predating JS_CONTRACT 0.2. */
+  /** Root this run lives under; null if unresolvable. Absent on hosts predating SDK 0.2. */
   location?: TlcDataLocation | null;
 }
 
@@ -176,12 +181,12 @@ export interface TlcData {
   /**
    * Resolve which root an object URL lives under (longest-prefix match against
    * configured roots, falling back to inference from the URL structure).
-   * Absent on hosts predating JS_CONTRACT 0.2 — feature-detect before calling.
+   * Absent on hosts predating SDK 0.2 — feature-detect before calling.
    */
   resolveLocation?(url: string, projectName?: string): TlcDataLocation | null;
   /**
    * All locations relevant to this install: configured roots plus roots inferred
-   * from the loaded data. Absent on hosts predating JS_CONTRACT 0.2.
+   * from the loaded data. Absent on hosts predating SDK 0.2.
    */
   getLocations?(): TlcDataLocation[];
 }
@@ -205,6 +210,8 @@ export interface PluginLibs {
   Chart: any | null;
   html2canvas: any | null;
   PptxGenJS: any | null;
+  /** Best-effort — and always `null` on the plugin page: the host does not load
+   *  cytoscape into a plugin fragment, so a plugin that needs it must vendor its own. */
   cytoscape: any | null;
 }
 
@@ -219,8 +226,16 @@ export interface PluginLibs {
 export interface TlcLocationApi {
   /** True when the install has more than one known root. */
   isMultiRoot(): boolean;
+  /**
+   * True when the given rows (each optionally carrying `.location`) span more than
+   * one root — the per-row chip rule (spread *within the shown list*, so a chip is
+   * hidden when every visible row lives under the same root).
+   */
+  rowsSpanLocations(rows: Array<{ location?: TlcDataLocation | null }>): boolean;
   /** Inline SVG string: folder glyph for 'file', cylinder for bucket schemes. */
   iconSvg(scheme: string): string;
+  /** Display form of a location label: left-ellipsized past 20 chars so the distinctive tail survives. */
+  shortLabel(label: string): string;
   /** Small chip (icon + label, root in tooltip) for one location; '' when hidden. */
   chipHtml(loc: TlcDataLocation | null): string;
   /** Chip for a project rollup: its location, or "N locations"; '' when hidden. */
@@ -251,10 +266,10 @@ export interface PluginApi {
   context: PluginContext;
 
   /**
-   * The JS_CONTRACT version this host implements (e.g. "0.1"), so a fragment can
-   * feature-detect the bridge. Derived by the frontend from the installed
-   * `3lc-plugin-sdk` (`tlc_plugin_sdk.JS_CONTRACT`) — never a hardcoded literal —
-   * and surfaced via `<body data-contract-version>`. '' if the host predates it.
+   * The SDK contract version this host implements, as "MAJOR.MINOR" (e.g. "0.3"),
+   * so a fragment can feature-detect the bridge. The frontend declares which
+   * contract it implements (its `IMPLEMENTED_SDK_CONTRACT`) and surfaces it via
+   * `<body data-contract-version>`. '' if the host predates it.
    */
   contractVersion: string;
 
@@ -324,8 +339,10 @@ export interface PluginJobUpdate {
   /** Job id. */
   id?: string;
   title?: string;
-  /** Failure message rides here on error. */
+  /** Secondary status line (the current progress label); NOT the failure message. */
   subtitle?: string;
+  /** Failure message on a failed job (host >= 0.6); empty/absent otherwise. */
+  error?: string;
   progress?: { percent?: number; label?: string; timing?: any };
   metrics?: Array<{ label?: string; value?: any }>;
   run_url?: string;
@@ -350,10 +367,11 @@ export interface PluginRunResponse {
 }
 
 /**
- * The job-tracker client. SHIPS FROM `3lc-plugin-sdk`
- * (`tlc_plugin_sdk.shared.job_tracker`, `JOB_TRACKER_JS`) — injected into a
- * plugin's fragment via `inject_scripts(raw, job_tracker_script())`. NOT part of
- * the host `PLUGIN_API` bridge; it is layered on top of it.
+ * The job-tracker client. SHIPS FROM `3lc-compute-plugin-sdk`
+ * (`tlc_plugin_sdk.shared.job_tracker`, `JOB_TRACKER_JS`) — auto-injected into
+ * every fragment by the SDK's `/ui` handler (`build_plugin_app`); a manual
+ * `inject_scripts(raw, job_tracker_script())` is harmless but no longer needed.
+ * NOT part of the host `PLUGIN_API` bridge; it is layered on top of it.
  */
 export interface PluginJobsApi {
   /**
@@ -380,8 +398,26 @@ export interface PluginJobsApi {
    */
   track(namespace: string, jobId: string, handlers?: PluginJobHandlers): () => void;
 
+  /**
+   * Open (or reuse) the namespace socket now. `track()`/`on()` connect lazily on first
+   * use and SocketIO does not replay server→client events to a client that was not yet
+   * connected — call this on mount when the fragment wants custom events from the first
+   * second, or starts jobs by other means than `run()` (which connects for you).
+   * Returns false when `PLUGIN_API.libs.io` is unavailable.
+   */
+  connect(namespace: string): boolean;
+
   /** `POST {compute}/api/plugins/jobs/{jobId}/cancel` with body '{}'. */
   cancel(jobId: string): Promise<{ cancelled?: boolean }>;
+
+  /**
+   * `GET {compute}/api/plugins/jobs` → the host's generic job records, resolved to
+   * `PluginJobUpdate[]` and optionally filtered (client-side) to one plugin by id.
+   * Use it to seed a freshly-mounted fragment from the durable job list — the
+   * fragment is torn down on navigation and `job_update` is live-only. See the
+   * guide's "Job page is a launcher" section.
+   */
+  list(pluginId?: string): Promise<PluginJobUpdate[]>;
 
   /**
    * Subscribe to a CUSTOM `ctx.emit()` event (not the generic `job_update`) on the
@@ -413,11 +449,53 @@ declare global {
   /** Injected by the frontend when a plugin fragment is mounted. */
   const PLUGIN_API: PluginApi;
 
-  /** Injected by `3lc-plugin-sdk` (`shared.job_tracker`) into the plugin fragment. */
+  /** Injected by `3lc-compute-plugin-sdk` (`shared.job_tracker`) into the plugin fragment. */
   const PluginJobs: PluginJobsApi;
 
   /** Ambient frontend API client. */
   const TlcApi: TlcApi;
+
+  // ── Legacy globals (stable through 0.x, namespaced rename planned) ────────────
+  //
+  // Globals a plugin's `ui.html` may already call bare. They are part of the shipped
+  // surface and stay working through the 0.x line, but a namespaced rename is planned
+  // (e.g. under `PLUGIN_API`), so treat them as legacy: prefer the documented bridge
+  // where one exists. The `_tlc*` helpers are injected by the shared UI scripts
+  // (`shared.alias_ui` / `shared.alias_override_ui` / `shared.data_source_ui` /
+  // `shared.config_ui`); the picker/cancel/cssVar globals come from the frontend.
+  // NOTE: there is no bare `showToast` — use `PLUGIN_API.showToast`.
+
+  /** Open the shared table-picker overlay, writing the choice back into `targetInputId`. */
+  function openTablePicker(targetInputId: string): void;
+  /** Close the shared table-picker overlay. */
+  function closeTablePicker(): void;
+  /** Read a CSS custom property (`--name`) resolved on the document root. */
+  function cssVar(name: string): string;
+
+  /** Shared cancel-confirmation dialog for a running job. */
+  const CancelJob: {
+    show(jobId: string, opts?: { onCancelled?: (result: any) => void; [key: string]: any }): void;
+  };
+
+  // Injected by the shared alias / data-source / config UI scripts (idPrefix scopes
+  // each widget instance to its own DOM). Legacy — see the note above.
+  function _tlcAliasOverrideHtml(idPrefix: string): string;
+  function _tlcAliasSettingsHtml(idPrefix: string, projectValue: string, folderValue: string): string;
+  function _tlcBindAliasAutoUpdate(idPrefix: string, projectInputId: string, folderInputId: string): void;
+  function _tlcBindAliasOverrideToggle(idPrefix: string): void;
+  function _tlcBindAliasToggle(idPrefix: string): void;
+  function _tlcBindDataSource(idPrefix: string, computeUrl: string, pluginId: string, config?: any): void;
+  function _tlcDataSourceHtml(idPrefix: string, config?: any): string;
+  function _tlcDefaultAliasToken(projectName: string): string;
+  function _tlcFetchAndPopulateOverrides(idPrefix: string, tableUrl: string, savedOverrides?: any): void;
+  function _tlcGetAliasOverrides(idPrefix: string): any;
+  function _tlcGetAliasValues(idPrefix: string): any;
+  function _tlcGetDataSourceValue(idPrefix: string): string;
+  function _tlcPluginConfig(opts?: any): any;
+  function _tlcRestoreAliasOverrides(idPrefix: string, saved?: any): void;
+  function _tlcSetAliasRoot(idPrefix: string, rootPath: string): void;
+  function _tlcSetDataSourceValue(idPrefix: string, value: string): void;
+  function _tlcSyncAliasFromForm(idPrefix: string, projectId: string, folderId: string): void;
 
   interface Window {
     PLUGIN_API: PluginApi;
