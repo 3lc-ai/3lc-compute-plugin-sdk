@@ -48,6 +48,10 @@ JOB_TRACKER_JS = r"""
     return s;
   }
 
+  // Warm a namespace socket on mount. track()/on() connect lazily, and SocketIO never
+  // replays server->client events to a client that was not yet connected.
+  function connect(namespace){ return !!_socket(namespace); }
+
   function start(pluginId, params){
     params = params || {};
     // Attribute the job to the launch project so it shows in that project's generic
@@ -170,7 +174,7 @@ JOB_TRACKER_JS = r"""
     });
   }
 
-  window.PluginJobs = { start: start, track: track, run: run, cancel: cancel, on: on, list: list };
+  window.PluginJobs = { start: start, track: track, run: run, cancel: cancel, on: on, list: list, connect: connect };
 })();
 """
 # fmt: on

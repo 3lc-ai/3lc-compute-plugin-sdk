@@ -368,9 +368,10 @@ export interface PluginRunResponse {
 
 /**
  * The job-tracker client. SHIPS FROM `3lc-compute-plugin-sdk`
- * (`tlc_plugin_sdk.shared.job_tracker`, `JOB_TRACKER_JS`) — injected into a
- * plugin's fragment via `inject_scripts(raw, job_tracker_script())`. NOT part of
- * the host `PLUGIN_API` bridge; it is layered on top of it.
+ * (`tlc_plugin_sdk.shared.job_tracker`, `JOB_TRACKER_JS`) — auto-injected into
+ * every fragment by the SDK's `/ui` handler (`build_plugin_app`); a manual
+ * `inject_scripts(raw, job_tracker_script())` is harmless but no longer needed.
+ * NOT part of the host `PLUGIN_API` bridge; it is layered on top of it.
  */
 export interface PluginJobsApi {
   /**
@@ -396,6 +397,15 @@ export interface PluginJobsApi {
    * and `onError` on failed, then auto-unsubscribes.
    */
   track(namespace: string, jobId: string, handlers?: PluginJobHandlers): () => void;
+
+  /**
+   * Open (or reuse) the namespace socket now. `track()`/`on()` connect lazily on first
+   * use and SocketIO does not replay server→client events to a client that was not yet
+   * connected — call this on mount when the fragment wants custom events from the first
+   * second, or starts jobs by other means than `run()` (which connects for you).
+   * Returns false when `PLUGIN_API.libs.io` is unavailable.
+   */
+  connect(namespace: string): boolean;
 
   /** `POST {compute}/api/plugins/jobs/{jobId}/cancel` with body '{}'. */
   cancel(jobId: string): Promise<{ cancelled?: boolean }>;

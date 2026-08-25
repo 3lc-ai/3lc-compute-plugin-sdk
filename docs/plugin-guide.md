@@ -574,6 +574,12 @@ the client subscribing still delivers its terminal event. (`PluginJobs.start/tra
 are the lower-level pieces.) The separate frontend's generic panel polls the same schema
 independently.
 
+One timing rule to know: `track()` and `on()` open the namespace socket **lazily**, on first
+use, and SocketIO does not replay server→client events to a client that was not yet
+connected. `run()` connects before it posts, so the common path is safe — but a fragment that
+listens for custom events from the first second, or re-attaches to a job it did not start
+(seed-on-mount), should warm the socket on mount: `PluginJobs.connect('/my-plugin')`.
+
 **Custom events** — `ctx.emit(name, payload)` is reserved for telemetry the generic schema
 **can't** express (e.g. a training plugin's per-epoch loss curve). The host relays it
 verbatim on the plugin's namespace; the generic panel ignores it. The name `job_update` is

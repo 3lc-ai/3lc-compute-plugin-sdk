@@ -22,6 +22,10 @@ worker→host NDJSON events are unchanged, so a host keeps running a plugin venv
 - `PluginJobs.list(pluginId?)` — `GET {compute}/api/plugins/jobs`, filtered client-side by
   `plugin_id`. Use it to **seed a fragment on mount** from the durable host job list (the
   fragment is torn down on navigation and `job_update` is live-only). Declared in the `.d.ts`.
+- `PluginJobs.connect(namespace)` — warm the namespace socket on mount. `track()`/`on()`
+  connect lazily and SocketIO does not replay events to a not-yet-connected client, so a
+  fragment listening for custom events from the first second (or re-attaching to a job it did
+  not start) calls this first; `run()` already connects for you.
 - The host's `/ui` handler now **auto-injects** the `PluginJobs` client into every fragment; the
   client is idempotent, so a plugin that still injects it by hand keeps working.
 - `ComputePlugin.compute()` ships a default (returns an error dict), so only `get_ui_fragment()`
@@ -43,8 +47,10 @@ worker→host NDJSON events are unchanged, so a host keeps running a plugin venv
 ### Removed
 - `shared.modality.detect_modality_from_url` (zero users). `detect_modality_from_schema`,
   `classify_metrics_columns`, `labels.candidate_label_paths`, and `labels.find_label_path`
-  are now internal (underscore-prefixed) — use `detect_modality_from_table` /
-  `get_label_map` / `get_label_names`.
+  are now internal (underscore-prefixed). Public alternatives: `detect_modality_from_table`
+  for modality; `get_label_map` / `get_label_names` / `find_label_column` for labels.
+  `classify_metrics_columns` was a plugin-specific column-name heuristic with no public
+  replacement — inline it (its one known user did).
 - The orphan `_ICON_SVG` constant; the dead `params.setdefault("url", "")` in the `/compute`
   handler.
 
@@ -55,7 +61,11 @@ worker→host NDJSON events are unchanged, so a host keeps running a plugin venv
   `py_contract`/`js_contract`: use `SDK_CONTRACT_VERSION` / `sdk_version` and compare on
   `MAJOR.MINOR`.
 - `shared.modality.detect_modality_from_url(url)` → load the table yourself and call
-  `detect_modality_from_table(table)`.
+  `detect_modality_from_table(table)`. `classify_metrics_columns(columns)` → copy the
+  heuristic into your plugin.
+- A fragment that kept its own always-connected socket for custom events: switch to
+  `PluginJobs.on(namespace, event, handler)` and call `PluginJobs.connect(namespace)` on mount
+  so nothing emitted before the first `track()` is missed.
 - Fragments may delete their manual `inject_scripts(raw, job_tracker_script())` — the host
   injects `PluginJobs` now (harmless to keep).
 - The manifest never declared the SocketIO namespace or `sdk_version`; both were dead and are

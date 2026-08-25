@@ -83,10 +83,11 @@ section is the condensed working order.
    - **Config + GPU job + SocketIO**: sam3, yolo, or timm
    - **Inline data display (no standalone page)**: `tlc_plugin_table_statistics`
    - **Action on selected resources**: `tlc_plugin_merger`
-3. Read `src/tlc_plugin_sdk/contract.py` — `ComputePlugin` is an `abc.ABC` with two abstract
-   methods (`get_ui_fragment()`, `compute()`) and an `id` attribute the host stamps from the
-   manifest. The optional hooks (`run_job`, `initialise_runtime`, `shutdown_runtime`,
-   `get_route_handlers`) ship as no-op defaults, so you override only what you need. There is
+3. Read `src/tlc_plugin_sdk/contract.py` — `ComputePlugin` is an `abc.ABC` with one abstract
+   method (`get_ui_fragment()`) and an `id` attribute the host stamps from the manifest.
+   `compute()` and the other hooks (`run_job`, `initialise_runtime`, `shutdown_runtime`,
+   `get_route_handlers`) ship as defaults (`compute()` reports that the plugin doesn't
+   implement it), so you override only what you need. There is
    no `register()` and **no** `get_active_jobs`/`cancel_job` — the host owns job listing and
    cancellation.
 4. Read `tlc_plugin_exporter`'s `plugin.toml` + `__init__.py` — the canonical manifest +
@@ -154,9 +155,11 @@ section is the condensed working order.
   form fills call `_tlcSyncAliasFromForm(prefix, projectId, folderId)`.
 
 **SocketIO** (if real-time updates are needed):
-- `socketio_namespace` is optional — it defaults to `/<plugin-id>`, which the host
-  auto-registers at startup; declare it in `[runtime]` only to override.
-- Prefer the `window.PluginJobs` client over a hand-rolled socket.
+- The namespace is host-derived as `/<plugin-id>` and auto-registered at startup; the manifest
+  does not (and never did) declare it.
+- Prefer the `window.PluginJobs` client over a hand-rolled socket. It connects a namespace
+  lazily; call `PluginJobs.connect('/<plugin-id>')` on mount if the fragment needs custom
+  events from the first second (`run()` connects for you).
 - Use `ctx.emit(name, payload)` only for telemetry the generic schema can't express
   (e.g. a loss curve); never re-emit the generic lifecycle by hand.
 
