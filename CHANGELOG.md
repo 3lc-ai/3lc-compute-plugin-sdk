@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- **Docs:** clarified `runtime.provision_extra` in the plugin guide — it names the
+  optional-dependency group the host installs into your plugin's venv (keeping the base light for
+  discovery and letting one distribution carry several plugins), not an "umbrella-only, required"
+  key. Restated that isolation is venv-only: every plugin runs from a host-built managed venv,
+  with no in-process/host mode and no `.venv` beside the source. No contract or code change.
 
 ## [0.3.0] - 2026-08-25
 

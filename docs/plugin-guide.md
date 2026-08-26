@@ -125,7 +125,7 @@ quick_action = false                # Show in dashboard quick actions?
 isolation = "venv"                  # "venv" is the only value (and the default when absent)
 entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
-provision_extra = "my-plugin"       # umbrella extra the host provisions: `uv sync --extra <this>`
+provision_extra = "my-plugin"       # your plugin's dependency group: host runs `uv sync --extra <this>`
 # The plugin's SocketIO namespace is host-derived as "/<plugin-id>" and registered at
 # startup — it is NOT declarable in the manifest (a plugin emits via ctx; the host owns
 # the transport).
@@ -141,13 +141,20 @@ provision_extra = "my-plugin"       # umbrella extra the host provisions: `uv sy
   passed through from the action launch), `quick_action_label` / `quick_action_description`
   (dashboard quick-action copy).
 
-`runtime.provision_extra` is **required for every plugin distributed through an umbrella**:
-it names the extra the host installs with `uv sync --extra <that-value>`. For first-party
-plugins this is a per-plugin extra in the `3lc-compute-plugins` umbrella `pyproject.toml`.
+`runtime.provision_extra` names the **optional-dependency group** the host installs into your
+plugin's venv (`uv sync --extra <that-value>`, or folded into the pip spec for a distribution
+install). Keeping a plugin's dependencies behind an extra rather than in the base does two things:
+a bare install of the distribution stays light — enough to *discover* the plugin without pulling
+its whole stack — and one distribution can carry several plugins, each selecting its own extra.
+For first-party plugins each value is a per-plugin extra in the `3lc-compute-plugins` umbrella
+`pyproject.toml`. It is optional in the sense that a plugin needing nothing beyond the SDK and
+`tlc` may omit it and still gets its own managed venv with just the base dependencies — but any
+plugin sharing an umbrella declares one, since that is how its own dependencies are selected.
 
 Every plugin runs in its own uv-managed venv, behind a worker the host spawns and talks to
 over a Unix socket — the host registers the plugin from its manifest alone and never imports
-its code. `requires_gpu` is the manifest's **only placement knob**: `true` routes the job
+its code. Isolation is venv-only: there is no in-process/host mode, and the venv is always one
+the host builds and owns (never a `.venv` beside your source). `requires_gpu` is the manifest's **only placement knob**: `true` routes the job
 through the shared GPU queue (one GPU job at a time, across every plugin); `false` jobs run
 on the CPU queue. Both are host-owned; the plugin never picks a queue or names a lane.
 
