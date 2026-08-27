@@ -21,7 +21,8 @@ The routes are:
 
 ``GET /browse?path=<dir>&glob=<pattern>&show_hidden=false``
     List files and directories visible on the compute node, **confined to the
-    allowed roots**. An empty or ``~`` path opens the first root.
+    allowed roots**. An empty or ``~`` path opens the first root. Directory entries
+    carry an ``accessible`` flag so the UI can disable folders it cannot open.
 
 ``POST /upload-temp``  (multipart ``data`` field)
     Upload a file from the browser to a fresh private temp directory on the
@@ -112,6 +113,29 @@ def _max_upload_mb() -> int:
     return value if value > 0 else DEFAULT_MAX_UPLOAD_MB
 
 
+def _dir_accessible(path: str) -> bool:
+    """Whether the directory at ``path`` can actually be opened for listing.
+
+    Probes with ``os.scandir`` rather than ``os.access``: on macOS a TCC-protected
+    package (e.g. ``Photos Library.photoslibrary``) passes an ``os.access`` read/exec
+    check but still raises ``PermissionError`` at ``opendir`` time. ``os.scandir``
+    opens the directory eagerly, so it surfaces that denial here — before the user
+    clicks into a dead end.
+
+    Args:
+        path: Absolute path to a directory.
+
+    Returns:
+        ``True`` if the directory can be opened for listing, ``False`` otherwise.
+    """
+    try:
+        with os.scandir(path):
+            pass
+        return True
+    except OSError:
+        return False
+
+
 def _safe_upload_name(raw: str | None) -> str:
     """Reduce a client-supplied filename to a bare, safe basename.
 
@@ -136,6 +160,11 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
             path: Directory to list. Empty or ``~`` opens the first allowed root.
             glob: Optional glob pattern to filter files (e.g. ``*.yaml``).
             show_hidden: Whether to include dotfiles (default ``false``).
+
+        Each directory entry carries an ``accessible`` bool: ``False`` marks a folder
+        that cannot be opened for listing (e.g. a macOS TCC-protected package), so the
+        UI can render it disabled rather than as a navigable dead end. File entries
+        do not carry this flag.
         """
         import fnmatch
 
@@ -171,11 +200,18 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
                     continue
                 try:
                     stat = entry.stat()
-                    entries.append({
+                    is_dir = entry.is_dir()
+                    item: dict[str, Any] = {
                         "name": entry.name,
-                        "type": "dir" if entry.is_dir() else "file",
+                        "type": "dir" if is_dir else "file",
                         "size": stat.st_size if entry.is_file() else None,
-                    })
+                    }
+                    if is_dir:
+                        # Probe openability now so the UI can disable folders it cannot
+                        # descend into (e.g. macOS TCC-protected packages), instead of
+                        # letting the user click into a "Permission denied" dead end.
+                        item["accessible"] = _dir_accessible(entry.path)
+                    entries.append(item)
                 except OSError:
                     continue
         except PermissionError:

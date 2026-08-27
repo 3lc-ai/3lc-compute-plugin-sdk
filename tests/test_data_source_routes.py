@@ -101,6 +101,35 @@ class TestBrowseConfinement:
         assert [e["name"] for e in body["entries"]] == ["table.yaml"]
 
 
+class TestBrowseAccessibility:
+    """Each dir entry is tagged with whether it can actually be opened for listing."""
+
+    def test_readable_dir_is_accessible(self, client: TestClient[Litestar], root: Path) -> None:
+        entries = {e["name"]: e for e in _browse(client, path=str(root))["entries"]}
+        assert entries["sub"]["accessible"] is True
+
+    def test_files_do_not_carry_accessible(self, client: TestClient[Litestar], root: Path) -> None:
+        entries = {e["name"]: e for e in _browse(client, path=str(root))["entries"]}
+        assert "accessible" not in entries["data.csv"]
+
+    @pytest.mark.skipif(os.name != "posix", reason="chmod 000 semantics")
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root bypasses chmod 000, so the probe would report accessible",
+    )
+    def test_unreadable_dir_is_inaccessible(self, client: TestClient[Litestar], root: Path) -> None:
+        locked = root / "locked"
+        locked.mkdir()
+        os.chmod(locked, 0o000)
+        try:
+            entries = {e["name"]: e for e in _browse(client, path=str(root))["entries"]}
+            assert entries["locked"]["accessible"] is False
+            # The readable sibling is unaffected.
+            assert entries["sub"]["accessible"] is True
+        finally:
+            os.chmod(locked, 0o700)
+
+
 class TestUploadTemp:
     def test_traversal_filename_cannot_choose_location(self, client: TestClient[Litestar]) -> None:
         response = client.post("/upload-temp", files={"data": ("../../evil.txt", b"payload")})

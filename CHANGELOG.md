@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key. Restated that isolation is venv-only: every plugin runs from a host-built managed venv,
   with no in-process/host mode and no `.venv` beside the source. No contract or code change.
 
+### Fixed
+- **Data-source browse widget:** folders the compute process cannot actually open (e.g. macOS
+  TCC-protected packages like `Photos Library.photoslibrary`) are now marked inaccessible and
+  rendered disabled — dimmed, with a lock glyph and a tooltip — instead of listed as navigable
+  and then failing with a red "Permission denied" panel when clicked. The `/browse` route probes
+  each directory's openability with `os.scandir` (not `os.access`, which TCC packages spuriously
+  pass) and tags directory entries with an `accessible` flag; an older host that omits the flag
+  keeps working (entries are treated as accessible).
+
 ## [0.3.0] - 2026-08-25
 
 A coordinated contract wave: breaking **for plugin authors** but **not on the wire** — the
