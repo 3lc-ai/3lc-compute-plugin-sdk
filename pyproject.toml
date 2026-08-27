@@ -29,21 +29,21 @@ classifiers = [
     "Typing :: Typed",
 ]
 
-# The SDK is the ROOT of the plugin dependency graph: the base depends only on the ASGI
-# server the worker runs on (uvicorn, imported lazily) and the route framework a plugin
-# authors against (litestar). It must NEVER depend back on the host (3lc-compute) or on any
-# plugin. A plugin venv installs THIS, not the full service.
+# The SDK is the ROOT of the plugin dependency graph: it depends on the ASGI server the worker
+# runs on (uvicorn), the route framework a plugin authors against (litestar), and the 3LC data
+# plane (3lc) that `tlc_plugin_sdk.shared.*` and every real plugin build on. It must NEVER depend
+# back on the host (3lc-compute) or on any plugin. A plugin venv installs THIS, not the full service.
 #
-# The data plane (3lc) is an OPTIONAL extra: only `tlc_plugin_sdk.shared.*` (image / modality
-# / alias / url / model-storage helpers) imports `tlc`, and it does so lazily. Consumers that
-# use those helpers install `3lc-compute-plugin-sdk[shared]`; the contract core (ComputePlugin,
-# JobContext, the worker, the version constants, the .d.ts) needs no `tlc`. This keeps the base
-# featherweight for light consumers (e.g. the Hub frontend, which wants only JS_CONTRACT).
-# NOTE (direction): much of `shared.*` is expected to graduate into the core over time; when it
-# does, `3lc` likely returns to the base deps and `[shared]` is kept as a no-op alias.
+# All three are imported LAZILY — `import tlc_plugin_sdk` stays cheap (tests/test_import_light.py):
+# the server stack loads only when a worker actually serves, `tlc` only when a `shared.*` helper
+# runs. `3lc` is a base dep, not an extra, on purpose: a plugin that installs the SDK gets the data
+# plane and the shared helpers unconditionally, so there is no way to end up with a venv that
+# imports fine and then fails on first use. Light consumers that only want the contract core
+# (the .d.ts, SDK_CONTRACT_VERSION) pay the install weight; none of them ship it.
 dependencies = [
     "uvicorn>=0.34.0",
     "litestar>=2.22.0,<3.0.0",
+    "3lc[pandas]>=3.0.0,<4.0.0",
 ]
 
 [project.urls]
@@ -51,11 +51,10 @@ Homepage = "https://github.com/3lc-ai/3lc-compute-plugin-sdk"
 Repository = "https://github.com/3lc-ai/3lc-compute-plugin-sdk"
 
 [project.optional-dependencies]
-# The data plane behind `tlc_plugin_sdk.shared.*` (the extra is named for the module it unlocks).
-# Required by any consumer that uses the shared image/modality/alias/url/model-storage helpers
-# (the host and the heavy venv plugins). Those modules import `tlc` lazily, so a consumer that
-# never touches `shared.*` (e.g. the Hub frontend) installs the bare SDK and gets no `tlc`.
-shared = ["3lc[pandas]>=3.0.0,<4.0.0"]
+# DEPRECATED no-op. `3lc` used to be behind this extra (`3lc-compute-plugin-sdk[shared]`, 0.1–0.3.0);
+# it is a base dependency now. The empty alias keeps existing `[shared]` pins resolving without a
+# warning until the fleet drops the suffix. Removed at 1.0.
+shared = []
 
 [dependency-groups]
 dev = [
@@ -112,18 +111,14 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 
-# Untyped / not-installed boundary. CI type-checks the base+dev env, NOT the [shared] extra,
-# so the shared.* data-plane helpers' deps aren't present: tlc + Pillow (PIL) reach the env
-# only via [shared] (the image helper uses PIL), and torch is not an SDK dep at all (an ML
-# extra a plugin venv brings) — the shared model-storage helper references it lazily. mypy
-# treats all of these as Any here.
+# Untyped boundary. `tlc` (and its `tlcurl`) is installed in the CI env but ships no `py.typed`,
+# so mypy treats it as Any; torch is not an SDK dep at all (an ML extra a plugin venv brings) —
+# the shared model-storage helper references it lazily.
 [[tool.mypy.overrides]]
 module = [
     "tlc",
     "tlc.*",
     "tlcurl.*",
     "torch",
-    "PIL",
-    "PIL.*",
 ]
 ignore_missing_imports = true

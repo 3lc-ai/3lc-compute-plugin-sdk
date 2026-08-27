@@ -18,16 +18,16 @@ in a separate repository and is **not** a dependency of this SDK.
    host-side). The SDK is the root of the dependency graph; the host depends on the SDK, never the
    reverse. The whole point — a plugin built against just this wheel runs in its own isolated venv.
 2. **Import-light.** Importing `tlc_plugin_sdk` must not eagerly pull the server stack *or the data
-   plane*. `litestar` and `uvicorn` are base deps but are imported **lazily** (only when a worker
-   actually serves); `tlc` is an optional extra imported lazily only by `shared.*`; and the
-   host-only SocketIO server must not be importable from here at all. `tests/test_import_light.py`
-   enforces this (guards `litestar`/`socketio`/`uvicorn`/`tlc`) — keep it green.
-3. **Dependencies stay minimal.** Base = `uvicorn` + `litestar` only. `3lc` is an optional extra
-   (`3lc-compute-plugin-sdk[shared]`, named for the `shared.*` module it unlocks) used solely by those
-   helpers — the contract core needs no data plane, so light consumers (e.g. the Hub frontend)
-   install the bare SDK. Adding a base dep widens what every plugin venv must install — justify it.
-   (Direction: as `shared.*` graduates into the core, `3lc` likely returns to base with `[shared]`
-   kept as a no-op alias.)
+   plane*. `litestar`, `uvicorn`, and `tlc` are all base deps but are imported **lazily** — the
+   server stack only when a worker actually serves, `tlc` only inside the `shared.*` helpers that
+   use it; and the host-only SocketIO server must not be importable from here at all.
+   `tests/test_import_light.py` enforces this (guards `litestar`/`socketio`/`uvicorn`/`tlc`) —
+   keep it green. Import-light is about worker startup time, not about what is installed.
+3. **Dependencies stay minimal.** Base = `uvicorn` + `litestar` + `3lc[pandas]`, nothing else.
+   `3lc` is deliberately a base dep, not an extra: every real plugin uses the data plane, and making
+   it optional only created a way to build a venv that imports fine and fails on first use. (The
+   `[shared]` extra it used to live behind is an empty, deprecated alias — gone at 1.0.) Adding a
+   base dep widens what every plugin venv must install — justify it.
 4. **The contract is published — every public symbol is forever-ish.** The 0.x line is
    additive-only (see README → Status): additions are the safe move; reshaping
    `JobContext`/`ComputePlugin` waits for a major bump. The version is the contract version
@@ -50,9 +50,8 @@ and how to port an existing plugin.
 
 ## Dev setup
 
-`3lc` resolves from the public 3LC releases index (`[tool.uv.index]` in `pyproject.toml`). If
-your platform lacks a prebuilt wheel there, override locally (uncommitted) with an editable
-path source.
+`3lc` resolves from public PyPI. To develop against an unreleased `3lc`, override locally
+(uncommitted) with an editable path source in `[tool.uv.sources]`.
 
 ```bash
 uv sync                 # installs the SDK + dev tools (ruff, mypy, pytest)
