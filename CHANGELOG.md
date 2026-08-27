@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-27
+
+A patch on the 0.3 line, additive and pin-compatible (`>=0.3.0,<0.4.0` resolves it). The SDK now
+brings the `3lc` data plane as a base dependency, and the shared data-source browse widget gains an
+input/output picker split.
+
 ### Added
 - The shared data-source browse widget shows a small caption ("Showing files matching:
   `<glob>`") when a field declares an `accept` glob, so users understand why some files in a
