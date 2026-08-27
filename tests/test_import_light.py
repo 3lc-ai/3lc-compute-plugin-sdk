@@ -13,8 +13,8 @@ from __future__ import annotations
 import subprocess
 import sys
 
-# ``tlc`` (the data plane) is an optional extra used only lazily by ``shared.*`` — importing
-# the contract surface must not pull it either, so the base can stay featherweight.
+# ``tlc`` (the data plane) is a base dep, used only lazily by ``shared.*`` — importing the
+# contract surface must not pull it either: it is by far the heaviest import a worker does.
 _HEAVY = ("litestar", "socketio", "uvicorn", "tlc")
 
 

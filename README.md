@@ -46,11 +46,12 @@ stance.
 
 ## How it fits
 
-This SDK sits at the root of the plugin dependency graph. Its only required dependencies are
-`uvicorn` and `litestar`; the `3lc` data plane is an optional extra
-(`3lc-compute-plugin-sdk[shared]`), pulled in only by the `shared.*` helpers. It **never** depends
-on the compute service itself or on any plugin. A plugin built against `tlc_plugin_sdk` alone is
-therefore portable across service versions and runs in its own isolated environment.
+This SDK sits at the root of the plugin dependency graph. Its dependencies are `uvicorn`,
+`litestar`, and the `3lc` data plane (`3lc[pandas]`) — so installing the SDK is all a plugin needs
+to use `tlc` and the `shared.*` helpers built on it. All three are imported lazily; `import
+tlc_plugin_sdk` stays cheap. It **never** depends on the compute service itself or on any plugin.
+A plugin built against `tlc_plugin_sdk` alone is therefore portable across service versions and
+runs in its own isolated environment.
 
 ## Status
 

@@ -147,8 +147,8 @@ install). Keeping a plugin's dependencies behind an extra rather than in the bas
 a bare install of the distribution stays light — enough to *discover* the plugin without pulling
 its whole stack — and one distribution can carry several plugins, each selecting its own extra.
 For first-party plugins each value is a per-plugin extra in the `3lc-compute-plugins` umbrella
-`pyproject.toml`. It is optional in the sense that a plugin needing nothing beyond the SDK and
-`tlc` may omit it and still gets its own managed venv with just the base dependencies — but any
+`pyproject.toml`. It is optional in the sense that a plugin needing nothing beyond the SDK (which
+brings `tlc`) may omit it and still gets its own managed venv with just the base dependencies — but any
 plugin sharing an umbrella declares one, since that is how its own dependencies are selected.
 
 Every plugin runs in its own uv-managed venv, behind a worker the host spawns and talks to

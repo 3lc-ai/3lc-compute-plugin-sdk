@@ -87,13 +87,9 @@ name = "3lc-compute-plugin-sdk"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
+    { name = "3lc", extra = ["pandas"] },
     { name = "litestar" },
     { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-shared = [
-    { name = "3lc", extra = ["pandas"] },
 ]
 
 [package.dev-dependencies]
@@ -105,7 +101,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "3lc", extras = ["pandas"], marker = "extra == 'shared'", specifier = ">=3.0.0,<4.0.0" },
+    { name = "3lc", extras = ["pandas"], specifier = ">=3.0.0,<4.0.0" },
     { name = "litestar", specifier = ">=2.22.0,<3.0.0" },
     { name = "uvicorn", specifier = ">=0.34.0" },
 ]

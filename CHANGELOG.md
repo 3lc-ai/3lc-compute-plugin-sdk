@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listed folder don't appear as selectable — folders themselves are never glob-filtered.
 
 ### Changed
+- **`3lc[pandas]` is now a base dependency.** Installing `3lc-compute-plugin-sdk` brings the 3LC
+  data plane, so a plugin pins the SDK alone and gets `tlc` and every `shared.*` helper with it.
+  The former `[shared]` extra is kept as an empty, deprecated alias — existing
+  `3lc-compute-plugin-sdk[shared]` pins keep resolving — and will be removed at 1.0. Drop the
+  suffix when you raise your floor to a release carrying this change. Nothing changes at import
+  time: `tlc` is still loaded lazily, only by the helpers that use it.
 - **Docs:** clarified `runtime.provision_extra` in the plugin guide — it names the
   optional-dependency group the host installs into your plugin's venv (keeping the base light for
   discovery and letting one distribution carry several plugins), not an "umbrella-only, required"
