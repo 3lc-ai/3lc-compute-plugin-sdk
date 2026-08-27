@@ -130,6 +130,50 @@ class TestBrowseAccessibility:
             os.chmod(locked, 0o700)
 
 
+class TestBrowseWritable:
+    """The ``writable`` flag is reported only in output mode (``purpose=output``)."""
+
+    def test_input_mode_omits_writable(self, client: TestClient[Litestar], root: Path) -> None:
+        body = _browse(client, path=str(root))
+        assert "writable" not in body  # top-level
+        entries = {e["name"]: e for e in body["entries"]}
+        assert "writable" not in entries["sub"]  # dir entry
+
+    def test_default_mode_omits_writable(self, client: TestClient[Litestar], root: Path) -> None:
+        # No purpose param at all behaves like input mode.
+        body = _browse(client, path=str(root))
+        assert "writable" not in body
+        assert all("writable" not in e for e in body["entries"])
+
+    def test_output_mode_reports_writable(self, client: TestClient[Litestar], root: Path) -> None:
+        body = _browse(client, path=str(root), purpose="output")
+        assert body["writable"] is True  # the listed dir itself
+        entries = {e["name"]: e for e in body["entries"]}
+        assert entries["sub"]["writable"] is True  # a normal, writable dir
+        # Files still never carry the flag.
+        assert "writable" not in entries["data.csv"]
+
+    @pytest.mark.skipif(os.name != "posix", reason="chmod semantics")
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root bypasses chmod, so a 0500 dir would still report writable",
+    )
+    def test_output_mode_flags_unwritable_dir(self, client: TestClient[Litestar], root: Path) -> None:
+        locked = root / "readonly"
+        locked.mkdir()
+        os.chmod(locked, 0o500)  # readable + executable, but not writable
+        try:
+            entries = {e["name"]: e for e in _browse(client, path=str(root), purpose="output")["entries"]}
+            assert entries["readonly"]["writable"] is False
+            # A normal sibling is unaffected.
+            assert entries["sub"]["writable"] is True
+            # Listing inside the read-only dir reports the dir itself as unwritable.
+            inside = _browse(client, path=str(locked), purpose="output")
+            assert inside["writable"] is False
+        finally:
+            os.chmod(locked, 0o700)
+
+
 class TestUploadTemp:
     def test_traversal_filename_cannot_choose_location(self, client: TestClient[Litestar]) -> None:
         response = client.post("/upload-temp", files={"data": ("../../evil.txt", b"payload")})
