@@ -7,12 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The shared data-source browse widget shows a small caption ("Showing files matching:
+  `<glob>`") when a field declares an `accept` glob, so users understand why some files in a
+  listed folder don't appear as selectable — folders themselves are never glob-filtered.
+
 ### Changed
 - **Docs:** clarified `runtime.provision_extra` in the plugin guide — it names the
   optional-dependency group the host installs into your plugin's venv (keeping the base light for
   discovery and letting one distribution carry several plugins), not an "umbrella-only, required"
   key. Restated that isolation is venv-only: every plugin runs from a host-built managed venv,
   with no in-process/host mode and no `.venv` beside the source. No contract or code change.
+- **Data-source browse widget:** the widget now takes a `purpose` config axis (`'input'`, the
+  default, or `'output'`), mirrored by a `purpose` query param on `/browse`. Input pickers now
+  **hide** folders the compute process cannot open (rather than showing them disabled), so the
+  listing only offers places you can actually descend into. Output pickers show **all** folders
+  and instead flag the ones that are not writable — dimmed with a lock glyph and a tooltip, but
+  still navigable so you can descend to a writable subdirectory — and disable "Select This
+  Folder" when the current directory is not writable. In output mode `/browse` returns a
+  `writable` flag on each directory entry and for the listed directory itself (computed only in
+  output mode; an older host that omits the flag is treated as writable).
+
+### Fixed
+- **Data-source browse widget:** folders the compute process cannot actually open (e.g. macOS
+  TCC-protected packages like `Photos Library.photoslibrary`) are now marked inaccessible and
+  rendered disabled — dimmed, with a lock glyph and a tooltip — instead of listed as navigable
+  and then failing with a red "Permission denied" panel when clicked. The `/browse` route probes
+  each directory's openability with `os.scandir` (not `os.access`, which TCC packages spuriously
+  pass) and tags directory entries with an `accessible` flag; an older host that omits the flag
+  keeps working (entries are treated as accessible).
 
 ## [0.3.0] - 2026-08-25
 

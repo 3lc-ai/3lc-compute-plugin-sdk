@@ -19,9 +19,14 @@ Usage in a plugin's ``routes.py``::
 
 The routes are:
 
-``GET /browse?path=<dir>&glob=<pattern>&show_hidden=false``
+``GET /browse?path=<dir>&glob=<pattern>&show_hidden=false&purpose=input``
     List files and directories visible on the compute node, **confined to the
-    allowed roots**. An empty or ``~`` path opens the first root.
+    allowed roots**. An empty or ``~`` path opens the first root. Directory entries
+    carry an ``accessible`` flag so the UI can disable folders it cannot open. When
+    ``purpose=output`` the response also carries a ``writable`` flag on each directory
+    entry and for the listed directory itself, so an output picker can flag folders it
+    cannot save into; ``purpose=input`` (the default) omits ``writable`` and skips the
+    extra writability syscall.
 
 ``POST /upload-temp``  (multipart ``data`` field)
     Upload a file from the browser to a fresh private temp directory on the
@@ -112,6 +117,43 @@ def _max_upload_mb() -> int:
     return value if value > 0 else DEFAULT_MAX_UPLOAD_MB
 
 
+def _dir_accessible(path: str) -> bool:
+    """Whether the directory at ``path`` can actually be opened for listing.
+
+    Probes with ``os.scandir`` rather than ``os.access``: on macOS a TCC-protected
+    package (e.g. ``Photos Library.photoslibrary``) passes an ``os.access`` read/exec
+    check but still raises ``PermissionError`` at ``opendir`` time. ``os.scandir``
+    opens the directory eagerly, so it surfaces that denial here — before the user
+    clicks into a dead end.
+
+    Args:
+        path: Absolute path to a directory.
+
+    Returns:
+        ``True`` if the directory can be opened for listing, ``False`` otherwise.
+    """
+    try:
+        with os.scandir(path):
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _dir_writable(path: str) -> bool:
+    """Best-effort check that a directory can be written to.
+
+    Uses ``os.access(path, os.W_OK)``. This is advisory only: on macOS a
+    TCC-protected or cloud-provider-backed directory can report writable yet
+    still reject a write, and a ``True`` here never guarantees a later write
+    succeeds — it is a hint for the output picker, not a contract.
+    """
+    try:
+        return os.access(path, os.W_OK)
+    except OSError:
+        return False
+
+
 def _safe_upload_name(raw: str | None) -> str:
     """Reduce a client-supplied filename to a bare, safe basename.
 
@@ -136,6 +178,19 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
             path: Directory to list. Empty or ``~`` opens the first allowed root.
             glob: Optional glob pattern to filter files (e.g. ``*.yaml``).
             show_hidden: Whether to include dotfiles (default ``false``).
+            purpose: ``input`` (default) or ``output``. In ``output`` mode the response
+                additionally reports writability (see below); ``input`` mode skips that
+                extra syscall.
+
+        Each directory entry carries an ``accessible`` bool: ``False`` marks a folder
+        that cannot be opened for listing (e.g. a macOS TCC-protected package), so the
+        UI can render it disabled rather than as a navigable dead end. File entries
+        do not carry this flag.
+
+        When ``purpose=output``, each directory entry also carries a ``writable`` bool
+        and the top-level payload carries a ``writable`` bool for the listed directory
+        itself, so an output picker can flag folders it cannot save into. This flag is
+        omitted entirely in ``input`` mode.
         """
         import fnmatch
 
@@ -143,6 +198,8 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
         raw_path = request.query_params.get("path", "").strip()
         glob_pattern = request.query_params.get("glob", "")
         show_hidden = request.query_params.get("show_hidden", "false").lower() == "true"
+        purpose = request.query_params.get("purpose", "input")
+        want_writable = purpose == "output"
 
         if not raw_path or raw_path == "~":
             expanded = roots[0]
@@ -171,17 +228,28 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
                     continue
                 try:
                     stat = entry.stat()
-                    entries.append({
+                    is_dir = entry.is_dir()
+                    item: dict[str, Any] = {
                         "name": entry.name,
-                        "type": "dir" if entry.is_dir() else "file",
+                        "type": "dir" if is_dir else "file",
                         "size": stat.st_size if entry.is_file() else None,
-                    })
+                    }
+                    if is_dir:
+                        # Probe openability now so the UI can disable folders it cannot
+                        # descend into (e.g. macOS TCC-protected packages), instead of
+                        # letting the user click into a "Permission denied" dead end.
+                        item["accessible"] = _dir_accessible(entry.path)
+                        # Output pickers also need to know where a save can land; input
+                        # pickers skip the extra syscall entirely.
+                        if want_writable:
+                            item["writable"] = _dir_writable(entry.path)
+                    entries.append(item)
                 except OSError:
                     continue
         except PermissionError:
             return {"error": f"Permission denied: {expanded}"}
 
-        return {
+        result: dict[str, Any] = {
             "path": expanded,
             # Clamped at the containing root: "up" from a root is not a place this
             # widget can go, so the UI gets no parent to offer.
@@ -190,6 +258,11 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
             "roots": roots,
             "entries": entries,
         }
+        if want_writable:
+            # Whether the listed directory itself can be saved into — lets the output
+            # picker disable its "Select This Folder" button.
+            result["writable"] = _dir_writable(expanded)
+        return result
 
     @post("/upload-temp", status_code=200)
     async def upload_temp(
