@@ -1,10 +1,11 @@
 name: docs
 
 # Build the Sphinx docs and publish to GitHub Pages.
-# Manual-only by choice: run from the Actions tab (or `gh workflow run docs`)
-# when the docs should go out — pushes to main do NOT redeploy.
-# One-time setup: repo Settings -> Pages -> Source = "GitHub Actions".
+# Deploys automatically on every release tag, or manually from the Actions tab
+# (`gh workflow run docs`). One-time setup: repo Settings -> Pages -> Source = "GitHub Actions".
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 
 # Least-privilege token for the Pages deploy.
