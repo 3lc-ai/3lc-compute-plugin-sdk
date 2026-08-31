@@ -642,38 +642,176 @@ needs to render a good, navigation-proof view.
 
 ---
 
-## CSS Conventions
+## Styling & UI Conventions
 
-Plugin UI fragments inherit all CSS from `main.css` (via `base.html`) and `plugin-common.css` (via `plugin_host.html`). Use these shared patterns:
+A plugin's `ui.html` gets the host's entire design system for free — and the host counts on it using that system rather than reinventing it. This section is the class catalog and the rules that keep every plugin looking like one product, in every theme.
+
+### Why the shared classes are available (no import, no build step)
+
+The frontend mounts a plugin by injecting its fragment straight into the host page — `containerEl.innerHTML = fragment` (see [How a fragment reaches the browser](#how-a-fragment-reaches-the-browser)). There is **no iframe and no shadow DOM**, so the fragment lands inside the host document and inherits its two stylesheets:
+
+- `main.css` — the base design system (forms, buttons, cards, spinners, theme tokens)
+- `plugin-common.css` — the plugin page scaffolding (hero, workflow, metric cards, viewer)
+
+Write `class="btn btn-primary"` or `class="form-control"` and you get the fully themed, dark-mode-correct component with zero CSS of your own. The flip side: your fragment shares the global namespace. Prefix any bespoke class with your plugin id (`.myplugin-…`) and never restyle a shared class globally — you'd repaint every other plugin.
+
+> **Only `main.css` and `plugin-common.css` are inherited.** Styles defined inside a host *template* — for example the `.pbadge` badges in `settings/plugins.html` — live in that page's own `<style>` block and are **not** available to a mounted fragment. Don't reach for them.
+
+### Theme tokens — never hardcode a color
+
+Every color, in both light and dark mode, comes from a CSS variable. Hardcoding a hex value produces a control that looks wrong the moment the user switches theme.
+
+```css
+color: var(--text);            /* primary text                    */
+color: var(--text-secondary);  /* secondary text                  */
+color: var(--text-muted);      /* de-emphasized / helper text     */
+color: var(--accent);          /* accent (light mode #2a4a61)     */
+background: var(--bg);         /* recessed page ground            */
+background: var(--bg-card);    /* ELEVATED surface (raised cards) */
+border-color: var(--border);
+border-color: var(--border-light);
+```
+
+`--bg` and `--bg-card` are the pair that matters most: `--bg-card` is an *elevated* surface, `--bg` the *recessed* page ground. In dark mode they are visibly different depths, and swapping them inverts every affordance on the page (see **Cards**, below). Also available: `--accent-light` (tinted wash), `--error` / `--danger`, and the `--badge-<color>-bg` / `--badge-<color>-text` pairs. Never use the legacy teal `#5a9aad` — `var(--accent)` is the accent.
+
+### Forms
+
+Wrap each field in `.form-group`; label it with `.form-label`; use `.form-control` for text inputs and `<textarea>`, `.form-select` for `<select>`; add `.form-help` for a line of helper text. For multi-field layouts, `.plugin-form-grid` (2-col) and `.plugin-form-grid-3` (3-col) are responsive grids.
+
+```html
+<div class="form-group">
+  <label class="form-label required">Dataset name</label>
+  <input type="text" class="form-control" required placeholder="my-dataset">
+  <div class="form-help">Lowercase, no spaces.</div>
+</div>
+```
+
+- `.form-label.required` appends a red `*`.
+- Placeholders render dimmed + italic automatically.
+- **Required-field cue — worth adopting:** put both `required` **and** a `placeholder` on a required text field. While the field is empty (its placeholder still showing) the host paints it with a muted red wash (`:required:placeholder-shown`), which clears the instant the user types. A free "you still need to fill this in" signal — no JS.
+
+### Buttons
+
+Use `.btn` plus one variant. Never define your own button styles.
+
+| Class | Use |
+|---|---|
+| `.btn` | base — required on every button |
+| `.btn-primary` | the one main action (Run, Import) |
+| `.btn-secondary` | secondary action |
+| `.btn-ghost` | low-emphasis / borderless |
+| `.btn-danger` | destructive |
+| `.btn-plugin` | accent-styled plugin action |
+| `.btn-sm` / `.btn-lg` | size modifiers, combine with the above |
+
+### Page scaffolding (`plugin-common.css`)
 
 | Class | Purpose |
 |---|---|
-| `.plugin-page` | Max-width 1200px container |
-| `.plugin-page-narrow` | Max-width 700px container |
-| `.card` | Standard card with shadow |
-| `.btn`, `.btn-sm`, `.btn-primary` | Buttons |
-| `.plugin-hero` | Hero section with accent background |
-| `.plugin-form-grid` | 2-column responsive form layout |
-| `.plugin-form-grid-3` | 3-column responsive form layout |
-| `.plugin-param-group` | Titled section within a card |
-| `.plugin-action-bar` | Submit/cancel row with spinner |
-| `.plugin-metric-card` | Metric display card |
-| `.plugin-progress-wrap` + `.plugin-progress-bar` | Progress bar |
-| `.plugin-log-area` | Monospace log output |
-| `.plugin-two-col` | Sidebar + main layout |
-| `.plugin-three-col` | Sidebar + main + preview layout |
-| `.plugin-config-item` | Selectable list item |
+| `.plugin-page` | max-width page container — wrap the whole fragment in it |
+| `.plugin-hero` | intro banner (accent-tinted); put `<h2>` + `<p>` inside |
+| `.plugin-hero-badge` | informational "what this does" tile — flat, recessed, **non-interactive** |
+| `.plugin-workflow` / `.plugin-workflow-step` | numbered step strip (`.num` child is the circle) |
+| `.plugin-param-group` / `.plugin-param-group-label` | titled section inside a card |
+| `.plugin-form-grid` / `.plugin-form-grid-3` | 2- and 3-column responsive form layouts |
+| `.plugin-action-bar` | submit/cancel row |
+| `.plugin-config-item` | selectable list item |
+| `.plugin-metric-card` (+ `-label` / `-value`) | scalar metric tile |
+| `.plugin-progress-wrap` + `.plugin-progress-bar` | progress bar |
+| `.plugin-log-area` | monospace log output |
+| `.plugin-two-col` / `.plugin-three-col` | sidebar + main (+ preview) layouts |
+| `.plugin-viewer-card` (+ `-header` / `-toolbar` / `-viewport` / `-footer`) | image viewer shell |
+| `.spinner` / `.spinner-lg` | loading spinner |
 
-Use CSS variables for colors — never hardcode:
+### Cards: interactive vs. informational — the one distinction to get right
 
-```css
-color: var(--text);             /* Primary text */
-color: var(--text-muted);       /* Secondary text */
-background: var(--bg);          /* Background */
-background: var(--bg-card);     /* Card background */
-border-color: var(--border);    /* Border */
-color: var(--accent);           /* Accent color (#2a4a61) */
+Two kinds of tile look superficially similar but must read differently:
+
+- **Interactive / selectable** — something the user clicks or picks (a config item, a selectable tile). These sit on the **raised** surface: `--bg-card` + a drop shadow, with a `.selected` / `.active` state. The generic `.card` / `.card-header` / `.card-title` / `.card-body` panel is the standard raised container for config forms.
+- **Informational** — pure display, not clickable (the hero "what this does" badges). These stay **flat and recessed**: use `.plugin-hero-badge`, which the host styles on `--bg` with **no shadow**. That flatness is exactly what marks it as "not a button".
+
+Get these backwards and a static badge invites a click it won't answer. The mistake is nearly invisible in light mode and obvious in dark mode, where `--bg-card` is a distinctly elevated surface — so **verify your plugin in dark mode.**
+
+> **Don't inline surface styles.** `.plugin-hero-badge` carries its whole look, so write `class="plugin-hero-badge"` and nothing else. Several plugins once inlined `style="background:var(--bg-card);box-shadow:…"` on it, and because inline styles outrank the host stylesheet, those badges kept the raised, clickable look the class was written to remove — the exact dark-mode bug above. Keep background, elevation, and color out of your `style=` attributes and let the class do the work. (`.plugin-hero-badge-card` is a deprecated alias kept only for backward compatibility — prefer `.plugin-hero-badge` alone.)
+
+### Page structure
+
+A sidebar plugin UI follows this shape:
+
+```html
+<style>
+  /* Plugin-specific rules only — layout for your own elements. Everything
+     visual (surface, color, elevation) comes from the shared classes. */
+  .myplugin-badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+</style>
+
+<div class="plugin-page">
+  <div class="plugin-hero">
+    <h2>🎯 Plugin Name</h2>
+    <p>Short description of what this plugin does.</p>
+
+    <!-- Informational badges — flat, non-interactive -->
+    <div class="myplugin-badges">
+      <div class="plugin-hero-badge">Fast</div>
+      <div class="plugin-hero-badge">No config</div>
+      <div class="plugin-hero-badge">Exports CSV</div>
+    </div>
+
+    <!-- Numbered workflow (optional) -->
+    <div class="plugin-workflow">
+      <div class="plugin-workflow-step"><span class="num">1</span> Configure</div>
+      <div class="plugin-workflow-step"><span class="num">2</span> Run</div>
+      <div class="plugin-workflow-step"><span class="num">3</span> Results</div>
+    </div>
+  </div>
+
+  <!-- Main form -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Configuration</span></div>
+    <div class="card-body">
+      <div class="plugin-param-group">
+        <div class="plugin-param-group-label">Source</div>
+        <div class="form-group">
+          <label class="form-label required">Table name</label>
+          <input id="myplugin-name" type="text" class="form-control" required placeholder="my-table">
+          <div class="form-help">The table to analyze.</div>
+        </div>
+      </div>
+      <div class="plugin-action-bar">
+        <button id="myplugin-run" class="btn btn-primary">Run</button>
+        <span class="spinner" style="display:none"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results area (appears after execution) -->
+  <div id="myplugin-results" class="card" style="display:none"></div>
+</div>
 ```
+
+### Visual rules
+
+1. **Container** — wrap the fragment in `.plugin-page`.
+2. **Hero** — `.plugin-hero` with icon + title + description, optionally three `.plugin-hero-badge` tiles.
+3. **Accent** — `var(--accent)`; never the legacy teal `#5a9aad`.
+4. **Cards** — group content in `.card`; raised for interactive, flat `.plugin-hero-badge` for informational.
+5. **Forms** — `.form-group` + `.form-control` / `.form-select`, laid out with `.plugin-form-grid` where useful.
+6. **Buttons** — `.btn` + one variant; the primary action gets `.btn-primary`.
+7. **Spinners** — `<span class="spinner"></span>` (defined in `main.css`).
+8. **Toasts** — `PLUGIN_API.showToast(msg, 'success'|'error'|'info')` for feedback.
+9. **Dark mode** — must work; only `var(--*)` colors, and confirm the raised/flat card distinction actually reads.
+
+### What NOT to do
+
+- Don't hardcode colors — always a `var(--…)` token.
+- Don't inline surface/elevation styles (`background`, `box-shadow`) on shared classes — let the class do it.
+- Don't define custom button, input, or card styles — the shared classes exist.
+- Don't restyle a shared class globally, and prefix your own classes with the plugin id.
+- Don't reach for host-template-only classes like `.pbadge` — they aren't inherited.
+- Don't create custom modal/dialog implementations — use `.card` with show/hide.
+- Don't use `position: fixed` — it breaks the plugin container.
+- Don't add font sizes below 10px or custom scrollbars.
+- Don't skip a dark-mode check.
 
 ---
 
@@ -692,93 +830,6 @@ color: var(--accent);           /* Accent color (#2a4a61) */
 | `table-statistics` | hidden | Analysis | — | Per-column stats & image thumbnails (API-only) |
 | `run-insights` | action | Analysis | — | Run statistics, health scores, per-class metrics |
 | `table-insights` | action | Analysis | — | GT-only data quality analysis (bbox sizes, balance, etc.) |
-
----
-
-## UI Consistency Guide
-
-All plugin UIs should look like they belong to the same product. Follow these patterns
-from the existing plugins (SAM3, YOLO, timm are the reference implementations).
-
-### Page Structure
-
-Every sidebar plugin UI should follow this structure:
-
-```html
-<style>/* Plugin-specific styles only — use shared classes for everything else */</style>
-
-<div class="plugin-page-narrow">       <!-- Centered 700px container -->
-  <div class="plugin-hero">            <!-- Accent-tinted header -->
-    <h2>🎯 Plugin Name</h2>
-    <p>Short description of what this plugin does.</p>
-
-    <!-- Feature badges — 3 items in a grid -->
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px">
-      <div class="plugin-hero-badge">Feature 1</div>
-      <div class="plugin-hero-badge">Feature 2</div>
-      <div class="plugin-hero-badge">Feature 3</div>
-    </div>
-
-    <!-- Workflow steps (optional) -->
-    <div class="plugin-workflow">
-      <span class="plugin-workflow-step active">1. Configure</span>
-      <span class="plugin-workflow-arrow">→</span>
-      <span class="plugin-workflow-step">2. Run</span>
-      <span class="plugin-workflow-arrow">→</span>
-      <span class="plugin-workflow-step">3. Results</span>
-    </div>
-  </div>
-
-  <!-- Config bar (for plugins with saved configs) -->
-  <div class="card" style="margin-bottom:12px;padding:10px 14px">
-    <div style="display:flex;align-items:center;gap:8px">
-      <select id="config-select">...</select>
-      <button class="btn btn-sm">Load</button>
-      <button class="btn btn-sm btn-primary">Save</button>
-    </div>
-  </div>
-
-  <!-- Main form -->
-  <div class="card" style="padding:16px">
-    <div class="plugin-param-group">
-      <div class="plugin-param-group-title">Section Title</div>
-      <div class="plugin-form-grid">
-        <!-- Form fields -->
-      </div>
-    </div>
-
-    <div class="plugin-action-bar">
-      <button class="btn btn-primary">Run</button>
-      <span class="spinner" style="display:none"></span>
-    </div>
-  </div>
-
-  <!-- Results area (appears after execution) -->
-  <div id="results" class="card" style="display:none;padding:16px;margin-top:12px">
-  </div>
-</div>
-```
-
-### Visual Consistency Rules
-
-1. **Container**: Use `.plugin-page-narrow` (700px) for form-based plugins, `.plugin-page` (1200px) for data-heavy plugins like run-insights.
-2. **Hero section**: Always include `.plugin-hero` with icon + title + description + 3 feature badges.
-3. **Color**: Use `var(--accent)` (#2a4a61) as the accent. Never use teal (#5a9aad).
-4. **Cards**: Wrap all content sections in `.card`. Use `margin-bottom:12px` between cards.
-5. **Forms**: Use `.plugin-form-grid` (2-col) or `.plugin-form-grid-3` (3-col) for form layouts.
-6. **Buttons**: Primary actions get `.btn-primary`. Secondary actions get plain `.btn`.
-7. **Spinners**: Use `<span class="spinner"></span>` (defined in main.css).
-8. **Toasts**: Use `PLUGIN_API.showToast(msg, 'success'|'error'|'info')` for feedback.
-9. **Config bar**: Plugins with saved configurations (YOLO, SAM3, timm) should have a config select/save/delete bar below the hero.
-10. **Dark mode**: All CSS must work in dark mode. Use `var(--text)`, `var(--bg)`, `var(--border)`, etc. Never hardcode colors.
-
-### What NOT to Do
-
-- Don't define custom button styles — use `.btn`, `.btn-sm`, `.btn-primary`.
-- Don't use inline colors — always use CSS variables.
-- Don't create custom modal/dialog implementations — use `.card` with show/hide.
-- Don't add custom scrollbar styles or font sizes below 10px.
-- Don't use `position: fixed` — it breaks the plugin container layout.
 
 ---
 
@@ -964,7 +1015,7 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 - [ ] Job progress follows the generic schema (no plugin-specific fields in frontend)
 - [ ] If GPU-bound: `requires_gpu = true` in `[runtime]`; long work is `run_job(ctx)` — never grab a queue
 - [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`)
-- [ ] UI follows the page structure from "UI Consistency Guide" above
+- [ ] UI follows the page structure and card conventions from "Styling & UI Conventions" above
 - [ ] Hero section with icon, title, description, and 3 feature badges
 - [ ] Config bar if plugin has saved configurations
 - [ ] Dark mode works correctly (no hardcoded colors)
