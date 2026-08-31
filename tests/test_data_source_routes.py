@@ -100,6 +100,14 @@ class TestBrowseConfinement:
         body = _browse(client, path=str(root / "sub"), glob="*.yaml")
         assert [e["name"] for e in body["entries"]] == ["table.yaml"]
 
+    def test_glob_accepts_comma_separated_patterns(self, client: TestClient[Litestar], root: Path) -> None:
+        # Matches the widget's "accept" config verbatim (e.g. "*.yaml,*.yml") — a file
+        # is kept if it matches ANY pattern in the list, not the joined string literally.
+        body = _browse(client, path=str(root / "sub"), glob="*.yaml,*.yml")
+        assert [e["name"] for e in body["entries"]] == ["table.yaml"]
+        body = _browse(client, path=str(root), glob="*.csv,*.json")
+        assert [e["name"] for e in body["entries"]] == ["sub", "data.csv"]
+
 
 class TestBrowseAccessibility:
     """Each dir entry is tagged with whether it can actually be opened for listing."""
