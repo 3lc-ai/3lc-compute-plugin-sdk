@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.3.2] - 2026-08-31
+
 ### Fixed
 - Data-source browse fields with a comma-separated `accept` (e.g. `*.yaml,*.yml`, `*.pt,*.pth`)
   now list matching files; previously they showed none. `/browse` was matching the whole
