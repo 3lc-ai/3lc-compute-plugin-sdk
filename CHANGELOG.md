@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Data-source browse fields with a comma-separated `accept` (e.g. `*.yaml,*.yml`, `*.pt,*.pth`)
+  now list matching files; previously they showed none. `/browse` was matching the whole
+  `accept` string as one literal glob pattern instead of any pattern in the list.
+  ([#28](https://github.com/3lc-ai/3lc-compute-plugin-sdk/pull/28))
+
 ## [0.3.1] - 2026-08-27
 
 A patch on the 0.3 line, additive and pin-compatible (`>=0.3.0,<0.4.0` resolves it). The SDK now

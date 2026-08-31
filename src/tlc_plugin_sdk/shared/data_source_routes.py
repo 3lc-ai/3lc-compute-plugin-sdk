@@ -176,7 +176,9 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
 
         Query params:
             path: Directory to list. Empty or ``~`` opens the first allowed root.
-            glob: Optional glob pattern to filter files (e.g. ``*.yaml``).
+            glob: Optional glob pattern(s) to filter files, comma-separated for more than
+                one (e.g. ``*.yaml`` or ``*.yaml,*.yml`` — matches the widget's ``accept``
+                config verbatim). A file is kept if it matches *any* pattern in the list.
             show_hidden: Whether to include dotfiles (default ``false``).
             purpose: ``input`` (default) or ``output``. In ``output`` mode the response
                 additionally reports writability (see below); ``input`` mode skips that
@@ -196,7 +198,9 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
 
         roots = allowed_browse_roots()
         raw_path = request.query_params.get("path", "").strip()
-        glob_pattern = request.query_params.get("glob", "")
+        # Comma-separated, matching the widget's "accept" config (e.g. "*.yaml,*.yml") —
+        # a bare fnmatch against the joined string would only match a literal comma.
+        glob_patterns = [g.strip() for g in request.query_params.get("glob", "").split(",") if g.strip()]
         show_hidden = request.query_params.get("show_hidden", "false").lower() == "true"
         purpose = request.query_params.get("purpose", "input")
         want_writable = purpose == "output"
@@ -224,7 +228,11 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
             for entry in sorted(os.scandir(expanded), key=lambda e: (not e.is_dir(), e.name.lower())):
                 if not show_hidden and entry.name.startswith("."):
                     continue
-                if glob_pattern and not entry.is_dir() and not fnmatch.fnmatch(entry.name, glob_pattern):
+                if (
+                    glob_patterns
+                    and not entry.is_dir()
+                    and not any(fnmatch.fnmatch(entry.name, pattern) for pattern in glob_patterns)
+                ):
                     continue
                 try:
                     stat = entry.stat()
