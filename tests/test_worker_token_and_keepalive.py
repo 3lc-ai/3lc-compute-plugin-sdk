@@ -119,14 +119,19 @@ def test_no_keepalive_means_no_pings(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_busy_reports_in_flight_jobs(tmp_path: Path) -> None:
-    """/busy is the node-agent's self-destruct guard: >0 while a job thread runs."""
-    with TestClient(app=_app(tmp_path, token=None)) as client:
+    """/busy is the node-agent's self-destruct guard: >0 while a job is in flight.
+
+    Driven through the worker object directly — the ASGI test transport buffers a
+    streamed response to completion before returning, so an over-HTTP job is already
+    finished by the time the stream context yields.
+    """
+    plugin = _TinyPlugin()
+    plugin.id = "tiny"
+    worker = _Worker(plugin, "tiny", tmp_path / "state")
+    app = build_plugin_app(plugin, extra_handlers=_control_handlers(worker), token=None)
+    with TestClient(app=app) as client:
         assert client.get("/busy").json() == {"active_jobs": 0}
-        with client.stream("POST", "/jobs/j1/run", json={"sleep": 0.3}):
-            assert client.get("/busy").json()["active_jobs"] == 1
-        # Drain: the stream context closed after the terminal event.
-        for _ in range(50):
-            if client.get("/busy").json()["active_jobs"] == 0:
-                break
-            time.sleep(0.02)
+        worker.start_job("j1", {"sleep": 0.2})
+        assert client.get("/busy").json()["active_jobs"] == 1
+        worker.finish_job("j1")  # what the run stream's finally does
         assert client.get("/busy").json() == {"active_jobs": 0}
