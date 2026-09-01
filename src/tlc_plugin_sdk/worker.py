@@ -252,7 +252,7 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         released = await anyio.to_thread.run_sync(release_gpu_memory)
         return Response(content={"released": released, "plugin_id": worker.plugin_id}, status_code=200)
 
-    return [run_job, cancel_job, reclaim]
+    return [run_job, cancel_job, busy, reclaim]
 
 
 def _load_plugin(entry: str) -> ComputePlugin:
