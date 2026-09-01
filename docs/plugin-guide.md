@@ -139,7 +139,9 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   additionally serves the conventional node-CRUD routes the host's infra manager calls
   through the worker proxy — `GET /infra/capabilities`, `POST /infra/nodes`,
   `GET /infra/nodes/{provider_id}`, `DELETE /infra/nodes/{provider_id}`. At most one
-  infrastructure plugin is active on a host at a time.
+  infrastructure plugin is active on a host at a time. `capabilities` should include
+  `storage: {"project_root_url": "s3://…"}` when configured — the host's data-prepare
+  pipeline (sync + node staging) and the Dashboard union view both key off it.
 - `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
   plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
   (pin the interpreter the plugin's venv is built with).
