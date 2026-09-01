@@ -138,6 +138,13 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 
 **Other keys the host reads** (all optional, read without importing the plugin):
 
+- top-level: `kind = "compute"` (default) or `"infrastructure"`. An **infrastructure
+  plugin** provisions GPU nodes instead of computing: it is an ordinary venv plugin
+  (sidebar fragment for its configuration, config store for provider credentials) that
+  additionally serves the conventional node-CRUD routes the host's infra manager calls
+  through the worker proxy — `GET /infra/capabilities`, `POST /infra/nodes`,
+  `GET /infra/nodes/{provider_id}`, `DELETE /infra/nodes/{provider_id}`. At most one
+  infrastructure plugin is active on a host at a time.
 - `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
   plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
   (pin the interpreter the plugin's venv is built with).

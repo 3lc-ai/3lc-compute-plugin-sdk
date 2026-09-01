@@ -174,6 +174,26 @@ class _Job:
         self.events.put(terminal)
 
 
+def _stream_keepalive_seconds() -> float | None:
+    """Keepalive cadence for the job stream, from ``TLC_WORKER_STREAM_KEEPALIVE_S``.
+
+    ``None`` (unset/invalid/non-positive) disables keepalives — the default, and the
+    unchanged local behavior. A remote worker behind a provider's HTTP proxy sets it
+    (the node-agent injects ~30) because such proxies kill streams that stay silent
+    longer than their idle window (~100 s on Cloudflare-fronted proxies), and a
+    training epoch is routinely longer than that.
+    """
+    raw = os.environ.get("TLC_WORKER_STREAM_KEEPALIVE_S", "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid TLC_WORKER_STREAM_KEEPALIVE_S=%r", raw)
+        return None
+    return value if value > 0 else None
+
+
 def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
     """The venv control channel the host supervisor drives (job lifecycle + reclaim)."""
 
@@ -182,11 +202,24 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         raw = await request.body()
         params: dict[str, Any] = json.loads(raw) if raw else {}
         job = worker.start_job(job_id, params)
+        keepalive = _stream_keepalive_seconds()
+
+        def _next_event() -> dict[str, Any] | None:
+            """Block for the next job event; ``None`` = keepalive interval elapsed."""
+            try:
+                return job.events.get(timeout=keepalive)  # timeout=None blocks forever
+            except queue.Empty:
+                return None
 
         async def stream() -> AsyncIterator[bytes]:
             try:
                 while True:
-                    event = await anyio.to_thread.run_sync(job.events.get)
+                    event = await anyio.to_thread.run_sync(_next_event)
+                    if event is None:
+                        # Not a job event — hosts (>= the ping-aware supervisor) drop it;
+                        # its only purpose is bytes on the wire inside proxy idle windows.
+                        yield (json.dumps({"event": "ping", "job_id": job_id}) + "\n").encode()
+                        continue
                     yield (json.dumps(event) + "\n").encode()
                     if event.get("event") in _TERMINAL:
                         break
@@ -228,6 +261,7 @@ def serve(
     host: str | None = None,
     port: int | None = None,
     state_root: str | None = None,
+    token: str | None = None,
 ) -> None:
     """Load the plugin and serve its Litestar app (blocking).
 
@@ -235,6 +269,17 @@ def serve(
     supervisor's default) or ``host`` + ``port`` (TCP). The plugin's identity comes
     from ``plugin_id`` (passed by the supervisor from the manifest), not from a class
     attribute — venv plugins carry no metadata on the instance.
+
+    Args:
+        entry: Plugin entry point as ``module:ClassName``.
+        plugin_id: The plugin's identity from the manifest.
+        socket_path: Unix-socket path to bind (the local default).
+        host: TCP host to bind (mutually exclusive with ``socket_path``).
+        port: TCP port (required with ``host``).
+        state_root: Writable per-plugin state root.
+        token: When set, every request must carry ``Authorization: Bearer <token>``.
+            Meant for TCP workers reachable over a network (a GPU node); pointless —
+            and left unset — on a Unix socket, which file permissions already guard.
 
     Raises:
         ValueError: If not exactly one of ``socket_path`` or ``host``/``port`` is given.
@@ -267,7 +312,7 @@ def serve(
     if socket_path is not None and os.path.exists(socket_path):
         os.unlink(socket_path)
 
-    app = build_plugin_app(plugin, extra_handlers=_control_handlers(worker))
+    app = build_plugin_app(plugin, extra_handlers=_control_handlers(worker), token=token)
 
     bind: dict[str, Any] = {"uds": socket_path} if socket_path is not None else {"host": host, "port": port}
     target = f"uds={socket_path}" if socket_path is not None else f"{host}:{port}"
@@ -283,6 +328,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=None, help="TCP port to bind (with --host)")
     parser.add_argument("--id", required=True, help="Plugin id (identity; from the manifest)")
     parser.add_argument("--state-root", default=None, help="Writable per-plugin state root")
+    parser.add_argument(
+        "--token",
+        default=None,
+        help="Require 'Authorization: Bearer <token>' on every request (defaults to $TLC_WORKER_TOKEN)",
+    )
     args = parser.parse_args(argv)
     serve(
         args.entry,
@@ -291,6 +341,7 @@ def main(argv: list[str] | None = None) -> None:
         host=args.host,
         port=args.port,
         state_root=args.state_root,
+        token=args.token or os.environ.get("TLC_WORKER_TOKEN") or None,
     )
 
 
