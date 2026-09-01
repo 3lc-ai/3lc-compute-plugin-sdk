@@ -116,3 +116,17 @@ def test_no_keepalive_means_no_pings(tmp_path: Path, monkeypatch: pytest.MonkeyP
         events = _run_stream_lines(client, {"sleep": 0.2})
     assert all(e.get("event") != "ping" for e in events)
     assert events[-1]["event"] == "done"
+
+
+def test_busy_reports_in_flight_jobs(tmp_path: Path) -> None:
+    """/busy is the node-agent's self-destruct guard: >0 while a job thread runs."""
+    with TestClient(app=_app(tmp_path, token=None)) as client:
+        assert client.get("/busy").json() == {"active_jobs": 0}
+        with client.stream("POST", "/jobs/j1/run", json={"sleep": 0.3}):
+            assert client.get("/busy").json()["active_jobs"] == 1
+        # Drain: the stream context closed after the terminal event.
+        for _ in range(50):
+            if client.get("/busy").json()["active_jobs"] == 0:
+                break
+            time.sleep(0.02)
+        assert client.get("/busy").json() == {"active_jobs": 0}

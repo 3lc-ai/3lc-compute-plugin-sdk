@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anyio
-from litestar import Request, Response, post
+from litestar import Request, Response, get, post
 from litestar.response import Stream
 
 from tlc_plugin_sdk.job_context import JobContext, JobFailed
@@ -127,6 +127,11 @@ class _Worker:
             self._jobs[job_id] = job
         job.start()
         return job
+
+    def active_jobs(self) -> int:
+        """How many jobs are currently in flight (running threads)."""
+        with self._lock:
+            return len(self._jobs)
 
     def finish_job(self, job_id: str) -> None:
         with self._lock:
@@ -232,6 +237,13 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
     async def cancel_job(job_id: str) -> Response[dict[str, Any]]:
         ok = worker.cancel_job(job_id)
         return Response(content={"cancelling": ok, "job_id": job_id}, status_code=200 if ok else 404)
+
+    @get("/busy", sync_to_thread=False)
+    def busy() -> dict[str, Any]:
+        # Read by a node-agent deciding whether self-destruct is safe: a worker with
+        # in-flight jobs must not have its node terminated under it just because the
+        # controller went quiet (a sleeping laptop mid-training).
+        return {"active_jobs": worker.active_jobs()}
 
     @post("/reclaim")
     async def reclaim() -> Response[dict[str, Any]]:
