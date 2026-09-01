@@ -75,11 +75,55 @@ def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
     return [health, ui, compute]
 
 
+def _bearer_guard(token: str) -> Any:
+    """An ASGI middleware factory rejecting requests without ``Authorization: Bearer <token>``.
+
+    Installed only when a token is configured — a worker on a Unix socket runs with no
+    token and never pays for this. Guards *every* route, ``/health`` included: a TCP
+    worker on a node is reachable through the provider's proxy, and an unauthenticated
+    liveness probe is still a reconnaissance surface. Callers that own the token (the
+    controller's supervisor, the node-agent) send it on probes too.
+    """
+    import hmac
+
+    expected = f"Bearer {token}".encode()
+
+    def factory(app: Any) -> Any:
+        async def guard(scope: Any, receive: Any, send: Any) -> None:
+            if scope["type"] != "http":
+                await app(scope, receive, send)
+                return
+            auth = b""
+            for name, value in scope.get("headers", []):
+                if name == b"authorization":
+                    auth = value
+                    break
+            # Constant-time compare: a timing oracle on the token would defeat it.
+            if hmac.compare_digest(auth, expected):
+                await app(scope, receive, send)
+                return
+            body = b'{"detail":"unauthorized"}'
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+
+        return guard
+
+    return factory
+
+
 def build_plugin_app(
     plugin: ComputePlugin,
     *,
     extra_handlers: list[BaseRouteHandler] | None = None,
     debug: bool = False,
+    token: str | None = None,
 ) -> Litestar:
     """Build the Litestar app serving ``plugin``'s HTTP surface.
 
@@ -88,6 +132,9 @@ def build_plugin_app(
         extra_handlers: The worker's job-channel handlers (the ``/jobs/{id}/run``
             stream, ``/jobs/{id}/cancel``, and ``/reclaim``).
         debug: Litestar debug flag.
+        token: When set, every request must carry ``Authorization: Bearer <token>``
+            (401 otherwise). Set for TCP workers on remote nodes; ``None`` (the
+            default) leaves local/UDS behavior untouched — no middleware installed.
 
     Returns:
         A Litestar app mounting, in trie-priority order: the plugin's own relative
@@ -100,4 +147,5 @@ def build_plugin_app(
         *_generic_handlers(plugin),
         *(extra_handlers or []),
     ]
-    return Litestar(route_handlers=handlers, debug=debug)
+    middleware: list[Any] = [_bearer_guard(token)] if token else []
+    return Litestar(route_handlers=handlers, debug=debug, middleware=middleware)

@@ -133,6 +133,13 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 
 **Other keys the host reads** (all optional, read without importing the plugin):
 
+- top-level: `kind = "compute"` (default) or `"infrastructure"`. An **infrastructure
+  plugin** provisions GPU nodes instead of computing: it is an ordinary venv plugin
+  (sidebar fragment for its configuration, config store for provider credentials) that
+  additionally serves the conventional node-CRUD routes the host's infra manager calls
+  through the worker proxy — `GET /infra/capabilities`, `POST /infra/nodes`,
+  `GET /infra/nodes/{provider_id}`, `DELETE /infra/nodes/{provider_id}`. At most one
+  infrastructure plugin is active on a host at a time.
 - `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
   plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
   (pin the interpreter the plugin's venv is built with).
@@ -546,6 +553,33 @@ field ever reaches the frontend.
 **Start a job from the UI** with the generic run route — `POST /api/plugins/{id}/run`
 with the params as the JSON body; it returns `{job_id, status, namespace}`. The easiest
 way to consume it is `window.PluginJobs` (next section).
+
+### Run-body conventions for remote workers
+
+A `requires_gpu` job may execute on a **remote GPU node**: the host derives a spec
+pointing at a TCP worker there and dispatches over the same stream contract. Three
+conventions make a plugin remote-ready — all optional locally, all host/plugin-additive:
+
+- **Self-contained params (`project_config`).** A remote worker has none of the
+  controller's local state — in particular, nothing saved by a worker-local config or
+  project store exists on the node. If your `run_job` resolves an id against such a
+  store, also accept the frozen configuration inline (recommended key:
+  `project_config`) and prefer it when present; have your fragment always include it in
+  the run body (harmless locally, required remotely).
+- **`_alias_overrides`.** `{"enabled": true, "overrides": [{"token": "<MY_DATA>",
+  "path": "s3://…"}]}` — per-job URL-alias overrides your `run_job` applies before
+  touching data and restores after (see `tlc_plugin_sdk.shared.aliases.
+  apply_alias_overrides`). The host's data pre-flight injects these so the same table
+  resolves to node-readable storage on the node.
+- **`run_target` is host-owned.** The run body may carry `run_target` (which node to run
+  on); the host consumes it before params reach the worker — never read or set it in a
+  plugin.
+
+Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every request must
+carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the
+job stream (`TLC_WORKER_STREAM_KEEPALIVE_S`) so provider proxies don't kill quiet
+streams; the host filters pings before events reach any consumer. Neither affects a
+local Unix-socket worker.
 
 ---
 
