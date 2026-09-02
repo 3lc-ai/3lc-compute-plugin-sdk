@@ -580,7 +580,9 @@ conventions make a plugin remote-ready — all optional locally, all host/plugin
   resolves to node-readable storage on the node.
 - **`run_target` is host-owned.** The run body may carry `run_target` (which node to run
   on); the host consumes it before params reach the worker — never read or set it in a
-  plugin.
+  plugin. The same goes for `prepare_job_ids` (the data-copy jobs a node run waits for):
+  the host pops it, orders the run behind the copies, and delivers their result to you as
+  `_alias_overrides` — the only thing your `run_job` ever sees.
 - **Custom routes stay on the controller unless declared.** While a node is armed, the
   host forwards a custom route to the node's worker only if your manifest lists it under
   `[runtime] node_routes` (e.g. sam3's `/preview`). Config/project stores, model catalogs
