@@ -298,6 +298,31 @@ export interface PluginApi {
    */
   computeFetch(path: string, options?: PluginFetchOptions, requiresGpu?: boolean): Promise<Response>;
 
+  /**
+   * Where jobs from this page currently execute: the host-owned "Run on:" choice.
+   * `{target: 'local', ready: true}` on hosts without remote GPU nodes, when
+   * "This machine" is selected, or on older frontends (feature-detect the member).
+   * `ready` is false while a chosen node's worker is still being prepared.
+   */
+  getRunTarget?(): { target: 'local' | 'node'; node_id?: string; ready: boolean };
+
+  /**
+   * Register a callback fired whenever the "Run on:" choice or its readiness
+   * changes — re-validate any selected data via `checkDataForRunTarget`.
+   * Listeners are cleared when the fragment unmounts.
+   */
+  onRunTargetChange?(callback: () => void): void;
+
+  /**
+   * Selection-time data verdict for the current run target: can this table work
+   * there, and what will happen to its data? `ok: false` means a node run WILL
+   * fail (e.g. rows carry local paths with no alias); `notes` are user-facing
+   * strings (upcoming copies, copy-vs-stream choices) to render next to the
+   * picker. Always `{ok: true, notes: []}` for the local target and on older
+   * hosts. Call it from the data picker's change handler — before Train.
+   */
+  checkDataForRunTarget?(tableUrl: string): Promise<{ ok: boolean; notes: string[] }>;
+
   /** Reference to `TlcApi.computeService` (currently only `getHealth()`). */
   compute: TlcComputeService;
 
