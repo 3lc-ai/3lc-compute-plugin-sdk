@@ -137,7 +137,9 @@ def get_table_aliases(table_url: str) -> list[dict[str, str]]:
 
     if url_col_names and len(table) > 0:
         try:
-            row = table[0]
+            # STORED values, not the sample view: table[i] resolves aliases through
+            # this machine's registry, so tokens would already be expanded away here.
+            row = table.table_rows[0]
             for col in url_col_names:
                 val = str(row.get(col, ""))
                 for m in _ALIAS_TOKEN_RE.finditer(val):
