@@ -323,6 +323,15 @@ export interface PluginApi {
    */
   checkDataForRunTarget?(tableUrl: string): Promise<{ ok: boolean; notes: string[] }>;
 
+  /**
+   * `true` when the host itself annotates every table input in the fragment with
+   * the `checkDataForRunTarget` verdict (fields whose value has a `/tables/` segment
+   * or whose id/name says "table"; `data-run-target-check="table"|"off"` opts a field
+   * in or out). A fragment that wires `checkDataForRunTarget` to its own inputs can
+   * skip that when this is set, so the note is not shown twice. Absent on older hosts.
+   */
+  hostChecksTableInputs?: boolean;
+
   /** Reference to `TlcApi.computeService` (currently only `getHealth()`). */
   compute: TlcComputeService;
 

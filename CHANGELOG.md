@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Manifest `[runtime] node_routes`: the custom routes a GPU plugin needs executed on an armed
+  GPU node (inference, model warm-up/status). Undeclared routes — config stores, catalogs,
+  table reads — now stay on the controller's worker while a node is armed, so a plugin's saved
+  configs have one history across nodes. `PLUGIN_API.hostChecksTableInputs` (contract,
+  optional): the host annotates every table input in a GPU fragment with the data verdict
+  itself; fragments that wired `checkDataForRunTarget` by hand can skip it when set.
 - Remote-worker hardening (all opt-in; local Unix-socket workers unchanged):
   - `python -m tlc_plugin_sdk.worker --token …` (default `$TLC_WORKER_TOKEN`) requires
     `Authorization: Bearer <token>` on every route — the guard for TCP workers on GPU
