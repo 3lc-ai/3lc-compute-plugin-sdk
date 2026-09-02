@@ -573,11 +573,15 @@ conventions make a plugin remote-ready — all optional locally, all host/plugin
   store, also accept the frozen configuration inline (recommended key:
   `project_config`) and prefer it when present; have your fragment always include it in
   the run body (harmless locally, required remotely).
-- **`_alias_overrides`.** `{"enabled": true, "overrides": [{"token": "<MY_DATA>",
-  "path": "s3://…"}]}` — per-job URL-alias overrides your `run_job` applies before
-  touching data and restores after (see `tlc_plugin_sdk.shared.aliases.
-  apply_alias_overrides`). The host's data pre-flight injects these so the same table
-  resolves to node-readable storage on the node.
+- **`_alias_overrides`.** `{"enabled": true, "overrides": [{"token": "MY_DATA",
+  "path": "/workspace/synced/…"}]}` — per-job URL-alias overrides your `run_job` applies
+  before touching data and restores after (see `tlc_plugin_sdk.shared.aliases.
+  apply_alias_overrides`; tokens are bare, no angle brackets). The host's data pipeline
+  injects it so the same table resolves to the node's staged copy — at the **top level of
+  the run body** and, when the body carries an inline `project_config`, **also inside its
+  `params`**, so a plugin that keeps its training params in the config (yolo, rf-detr) and
+  one that reads the body directly (sam3) both find it. Read it from wherever your params
+  live; do not require the other location.
 - **`run_target` is host-owned.** The run body may carry `run_target` (which node to run
   on); the host consumes it before params reach the worker — never read or set it in a
   plugin. The same goes for `prepare_job_ids` (the data-copy jobs a node run waits for):
