@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- Manifest `[runtime] node_routes`: the custom routes a GPU plugin needs executed on an armed
+  GPU node (inference, model warm-up/status). Undeclared routes — config stores, catalogs,
+  table reads — now stay on the controller's worker while a node is armed, so a plugin's saved
+  configs have one history across nodes. `PLUGIN_API.hostChecksTableInputs` (contract,
+  optional): the host annotates every table input in a GPU fragment with the data verdict
+  itself; fragments that wired `checkDataForRunTarget` by hand can skip it when set.
+- Remote-worker hardening (all opt-in; local Unix-socket workers unchanged):
+  - `python -m tlc_plugin_sdk.worker --token …` (default `$TLC_WORKER_TOKEN`) requires
+    `Authorization: Bearer <token>` on every route — the guard for TCP workers on GPU
+    nodes. `build_plugin_app(token=…)` carries the same knob.
+  - `TLC_WORKER_STREAM_KEEPALIVE_S=<seconds>` makes the `/jobs/{id}/run` NDJSON stream
+    emit `{"event": "ping"}` between job events so provider HTTP proxies don't kill
+    quiet streams during long epochs; ping-aware hosts filter them out.
+- Manifest key `kind = "compute" | "infrastructure"` documented: infrastructure plugins
+  provision GPU nodes and serve the conventional `/infra/*` node-CRUD routes.
+- Run-body conventions for remote-ready plugins documented: inline `project_config`
+  (self-contained params — remote workers have no controller-local stores) and the
+  existing `_alias_overrides` shape; `run_target` is host-owned.
 
 ## [0.3.3] - 2026-09-07
 

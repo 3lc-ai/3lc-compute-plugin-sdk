@@ -126,6 +126,11 @@ isolation = "venv"                  # "venv" is the only value (and the default 
 entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
 provision_extra = "my-plugin"       # your plugin's dependency group: host runs `uv sync --extra <this>`
+# GPU plugins only: custom routes that must execute on the armed GPU node (inference,
+# model warm-up/status). Path prefixes relative to your route root. Everything NOT listed
+# runs on the controller's worker even while a node is armed — config stores, model
+# catalogs, table reads — so saved configs have one history no matter which node was armed.
+# node_routes = ["/preview", "/model-status"]
 # The plugin's SocketIO namespace is host-derived as "/<plugin-id>" and registered at
 # startup — it is NOT declarable in the manifest (a plugin emits via ctx; the host owns
 # the transport).
@@ -546,6 +551,45 @@ field ever reaches the frontend.
 **Start a job from the UI** with the generic run route — `POST /api/plugins/{id}/run`
 with the params as the JSON body; it returns `{job_id, status, namespace}`. The easiest
 way to consume it is `window.PluginJobs` (next section).
+
+### Run-body conventions for remote workers
+
+A `requires_gpu` job may execute on a **remote GPU node**: the host derives a spec
+pointing at a TCP worker there and dispatches over the same stream contract. Three
+conventions make a plugin remote-ready — all optional locally, all host/plugin-additive:
+
+- **Self-contained params (`project_config`).** A remote worker has none of the
+  controller's local state — in particular, nothing saved by a worker-local config or
+  project store exists on the node. If your `run_job` resolves an id against such a
+  store, also accept the frozen configuration inline (recommended key:
+  `project_config`) and prefer it when present; have your fragment always include it in
+  the run body (harmless locally, required remotely).
+- **`_alias_overrides`.** `{"enabled": true, "overrides": [{"token": "<MY_DATA>",
+  "path": "s3://…"}]}` — per-job URL-alias overrides your `run_job` applies before
+  touching data and restores after (see `tlc_plugin_sdk.shared.aliases.
+  apply_alias_overrides`). The host's data pre-flight injects these so the same table
+  resolves to node-readable storage on the node.
+- **`run_target` is host-owned.** The run body may carry `run_target` (which node to run
+  on); the host consumes it before params reach the worker — never read or set it in a
+  plugin.
+- **Custom routes stay on the controller unless declared.** While a node is armed, the
+  host forwards a custom route to the node's worker only if your manifest lists it under
+  `[runtime] node_routes` (e.g. sam3's `/preview`). Config/project stores, model catalogs
+  and table reads must NOT be listed: they are controller state, and the node's copy of
+  your worker starts with an empty store. Nothing to code — the host stamps and the
+  compute service enforces; you just keep the list honest.
+- **Selection-time data notes are host-owned.** The host annotates every table input in
+  a GPU fragment (a field whose value has a `/tables/` segment, or whose id/name says
+  "table") with the `checkDataForRunTarget` verdict — copies that will happen, the
+  copy-vs-stream question, or "will NOT run on the node". Opt a field in or out with
+  `data-run-target-check="table"|"off"`. Call `checkDataForRunTarget` yourself only for
+  bespoke placement, and skip it when `PLUGIN_API.hostChecksTableInputs` is true.
+
+Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every request must
+carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the
+job stream (`TLC_WORKER_STREAM_KEEPALIVE_S`) so provider proxies don't kill quiet
+streams; the host filters pings before events reach any consumer. Neither affects a
+local Unix-socket worker.
 
 ---
 
