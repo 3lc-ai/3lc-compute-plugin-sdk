@@ -46,7 +46,7 @@ import os
 import queue
 import sys
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -122,7 +122,7 @@ class _Worker:
     def start_job(self, job_id: str, params: dict[str, Any]) -> _Job:
         state_dir = self.state_root / job_id
         state_dir.mkdir(parents=True, exist_ok=True)
-        job = _Job(job_id, params, state_dir, self.plugin)
+        job = _Job(job_id, params, state_dir, self.plugin, on_end=self.finish_job)
         with self._lock:
             self._jobs[job_id] = job
         job.start()
@@ -131,11 +131,16 @@ class _Worker:
     def active_jobs(self) -> int:
         """How many jobs are currently in flight (running threads)."""
         with self._lock:
-            return len(self._jobs)
+            return sum(1 for j in self._jobs.values() if j.is_alive())
 
     def finish_job(self, job_id: str) -> None:
+        """Drop a job whose thread has ended. A job whose host stream went away but whose thread still
+        runs STAYS registered — otherwise a later cancel answers 404 while the GPU keeps working
+        (found live 2026-09-04: a training kept going for 40 minutes after every cancel said "unknown")."""
         with self._lock:
-            self._jobs.pop(job_id, None)
+            job = self._jobs.get(job_id)
+            if job is not None and not job.is_alive():
+                self._jobs.pop(job_id, None)
 
     def cancel_job(self, job_id: str) -> bool:
         with self._lock:
@@ -143,14 +148,70 @@ class _Worker:
         if job is None:
             return False
         job.ctx.request_cancel()
+        _escalate_cancel(job)
         return True
+
+    def cancel_all(self) -> list[str]:
+        """Cancel every job still running here (the host asks after a restart it cannot re-attach to)."""
+        with self._lock:
+            jobs = [j for j in self._jobs.values() if j.is_alive()]
+        for job in jobs:
+            job.ctx.request_cancel()
+            _escalate_cancel(job)
+        return [j.job_id for j in jobs]
+
+
+def _cancel_grace_seconds() -> float:
+    """How long a cooperative cancel may take before the worker ends itself: ``TLC_WORKER_CANCEL_GRACE_S``.
+
+    A training loop that never looks at ``ctx.cancelled`` would otherwise run to the end on a GPU nobody
+    is watching. After the grace the worker exits hard (status 3); the supervisor or node-agent spawns
+    a fresh one on the next job. Non-positive disables the escalation.
+    """
+    raw = os.environ.get("TLC_WORKER_CANCEL_GRACE_S", "").strip()
+    try:
+        value = float(raw) if raw else 60.0
+    except ValueError:
+        logger.warning("Ignoring invalid TLC_WORKER_CANCEL_GRACE_S=%r", raw)
+        value = 60.0
+    return value
+
+
+def _escalate_cancel(job: _Job) -> None:
+    """Give the job's own code a grace period to honour the cancel; then end the process."""
+    grace = _cancel_grace_seconds()
+    if grace <= 0:
+        return
+
+    def watch() -> None:
+        if job.wait(grace):
+            return
+        logger.error(
+            "Job %s ignored its cancel for %.0fs; the worker exits so the GPU is released (a new worker is "
+            "spawned for the next job)",
+            job.job_id,
+            grace,
+        )
+        logging.shutdown()
+        os._exit(3)
+
+    threading.Thread(target=watch, name=f"cancel-watch-{job.job_id}", daemon=True).start()
 
 
 class _Job:
     """A single ``run_job`` invocation on a background thread, with an event queue."""
 
-    def __init__(self, job_id: str, params: dict[str, Any], state_dir: Path, plugin: ComputePlugin) -> None:
+    def __init__(
+        self,
+        job_id: str,
+        params: dict[str, Any],
+        state_dir: Path,
+        plugin: ComputePlugin,
+        on_end: Callable[[str], None] | None = None,
+    ) -> None:
         self.job_id = job_id
+        self._on_end = on_end
+        self._ended = threading.Event()
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self._cancel = threading.Event()
         self.ctx = JobContext(job_id, params, state_dir, sink=self.events.put, cancel_event=self._cancel)
@@ -159,6 +220,15 @@ class _Job:
 
     def start(self) -> None:
         self._thread.start()
+
+    def is_alive(self) -> bool:
+        # An Event rather than Thread.is_alive(): the registry callback runs on the job's own
+        # thread, right after the terminal event, when the thread is still technically alive.
+        return not self._ended.is_set()
+
+    def wait(self, timeout: float) -> bool:
+        """True when the job ended within ``timeout`` seconds."""
+        return self._ended.wait(timeout)
 
     def _run(self) -> None:
         try:
@@ -177,6 +247,9 @@ class _Job:
         # release_gpu_memory() on why a failed job is the case that matters most.
         release_gpu_memory()
         self.events.put(terminal)
+        self._ended.set()
+        if self._on_end is not None:
+            self._on_end(self.job_id)
 
 
 def _stream_keepalive_seconds() -> float | None:
@@ -229,7 +302,7 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
                     if event.get("event") in _TERMINAL:
                         break
             finally:
-                worker.finish_job(job_id)
+                worker.finish_job(job_id)  # a no-op while the thread still runs (see finish_job)
 
         return Stream(stream(), media_type="application/x-ndjson")
 
@@ -237,6 +310,12 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
     async def cancel_job(job_id: str) -> Response[dict[str, Any]]:
         ok = worker.cancel_job(job_id)
         return Response(content={"cancelling": ok, "job_id": job_id}, status_code=200 if ok else 404)
+
+    @post("/jobs/cancel-all")
+    async def cancel_all() -> dict[str, Any]:
+        # The host asks this after a restart it could not re-attach to: whatever still runs here is
+        # work nobody can see, so it is stopped (with the same escalation as a single cancel).
+        return {"cancelling": worker.cancel_all()}
 
     @get("/busy", sync_to_thread=False)
     def busy() -> dict[str, Any]:
