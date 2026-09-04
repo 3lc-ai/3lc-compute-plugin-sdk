@@ -131,7 +131,9 @@ def test_busy_reports_in_flight_jobs(tmp_path: Path) -> None:
     app = build_plugin_app(plugin, extra_handlers=_control_handlers(worker), token=None)
     with TestClient(app=app) as client:
         assert client.get("/busy").json() == {"active_jobs": 0}
-        worker.start_job("j1", {"sleep": 0.2})
+        job = worker.start_job("j1", {"sleep": 0.2})
         assert client.get("/busy").json()["active_jobs"] == 1
-        worker.finish_job("j1")  # what the run stream's finally does
+        worker.finish_job("j1")  # what the run stream's finally does — the thread still runs
+        assert client.get("/busy").json()["active_jobs"] == 1, "busy follows the thread, not the stream"
+        assert job.wait(5)
         assert client.get("/busy").json() == {"active_jobs": 0}

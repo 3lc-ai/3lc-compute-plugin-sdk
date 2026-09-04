@@ -557,6 +557,18 @@ The `progress` / `metric` / `result` calls above are what populate that generic 
 translated to the frontend's plugin-agnostic schema by the host, so no plugin-specific
 field ever reaches the frontend.
 
+**A cancel always ends the job — poll `ctx.cancelled` so it ends cleanly.** Cancel is
+cooperative first: the worker sets `ctx.cancelled` and your loop returns at its next
+checkpoint (the host marks the job "cancelled"). A loop that never checks is not allowed
+to keep a GPU busy: after `TLC_WORKER_CANCEL_GRACE_S` seconds (default 60; `0` disables)
+the worker process exits with status 3 and the host spawns a fresh one for the next job —
+so an unhonoured cancel costs you the process, and any partial state you did not flush.
+The worker keeps a job registered for as long as its **thread** runs, not its event
+stream: a host that restarts mid-run can still cancel the job afterwards, and on its first
+heartbeat after a restart it asks each node's workers (`GET /busy`, `POST /jobs/cancel-all`)
+to stop any job it no longer knows about, so a lost stream never leaves a training
+running for nobody.
+
 **Start a job from the UI** with the generic run route — `POST /api/plugins/{id}/run`
 with the params as the JSON body; it returns `{job_id, status, namespace}`. The easiest
 way to consume it is `window.PluginJobs` (next section).
@@ -604,7 +616,9 @@ Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every requ
 carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the
 job stream (`TLC_WORKER_STREAM_KEEPALIVE_S`) so provider proxies don't kill quiet
 streams; the host filters pings before events reach any consumer. Neither affects a
-local Unix-socket worker.
+local Unix-socket worker. Every worker also answers `GET /busy` (`{"active_jobs": n}`,
+the node-agent's self-destruct guard) and `POST /jobs/cancel-all` (what the host calls
+after a restart it could not re-attach to); plugins implement neither.
 
 ---
 
@@ -1086,3 +1100,21 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 Agent-facing guidance for building a plugin end-to-end (reading order, step-by-step,
 code patterns, common mistakes, testing) lives in this repo's
 [`CLAUDE.md`](https://github.com/3lc-ai/3lc-compute-plugin-sdk/blob/main/CLAUDE.md).
+
+## Which 3LC project a job belongs to
+
+The Hub's project page shows a job in its **Queue & Progress** panel only when the host knows the job's
+3LC project. The host resolves it once, when the run starts, in this order — nothing comes from the browser
+address:
+
+1. `project_name` in the run body. The SDK's job starter sets it from the launch context; a plugin that knows
+   the project can set it explicitly, and an explicit value always wins.
+2. Any table or run URL in the body. The Object Service lays projects out as `…/projects/<project>/…`, so an
+   inline config with `train_table_url` names its project by itself.
+3. The plugin's saved project config. A body that carries only `project_id` refers to a record the plugin
+   serves at `GET /projects/{project_id}`; the host reads its `project_name` (the **3LC Project** field every
+   training form has). Keep that route and field if your plugin saves its configs.
+
+While the job runs, any event whose payload carries `project_name` (or a `run_url` under a project) also sets
+the project if it was still unknown. Emit `ctx.result(run_url)` as soon as the run exists and the panel
+catches up even when the start carried nothing.
