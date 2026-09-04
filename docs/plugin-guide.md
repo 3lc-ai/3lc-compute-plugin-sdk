@@ -143,7 +143,11 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   (sidebar fragment for its configuration, config store for provider credentials) that
   additionally serves the conventional node-CRUD routes the host's infra manager calls
   through the worker proxy — `GET /infra/capabilities`, `POST /infra/nodes`,
-  `GET /infra/nodes/{provider_id}`, `DELETE /infra/nodes/{provider_id}`. At most one
+  `GET /infra/nodes/{provider_id}`, `DELETE /infra/nodes/{provider_id}`, and the optional
+  `GET /infra/preflight?gpu_type=&datacenter=` → `{ok, checks: [{name, ok, level, detail}],
+  summary}` — everything the provider can know *before* a node is requested (funds, stock,
+  quotas, permissions), so a payment problem is a dialog and not a run of dead nodes. Give
+  the provider's own words in full in `detail`; the Hub shows them whole. At most one
   infrastructure plugin is active on a host at a time. `capabilities` should include
   `storage: {"project_root_url": "s3://…"}` when configured — the host's data-prepare
   pipeline (sync + node staging) and the Dashboard union view both key off it.
