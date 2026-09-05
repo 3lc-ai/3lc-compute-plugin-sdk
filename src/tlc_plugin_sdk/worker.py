@@ -18,9 +18,16 @@ it adds the job channel the host supervisor drives:
 - ``POST /jobs/{job_id}/run``      → runs ``run_job(ctx)`` on a thread; the response
                                      **streams NDJSON events** (progress/metric/log)
                                      ending in a terminal ``done``/``error`` event.
-- ``POST /jobs/{job_id}/cancel``   → cooperative cancel (sets ``ctx.cancelled``).
+- ``POST /jobs/{job_id}/cancel``   → cooperative cancel (sets ``ctx.cancelled``), escalated
+                                     after a grace period (see :func:`_escalate_cancel`).
+- ``POST /jobs/cancel-all``        → cancel every job still running here (the host asks
+                                     after a restart it could not re-attach to).
+- ``GET /busy``                    → ``{"active_jobs": n}`` for a node-agent's self-destruct guard.
 - ``POST /reclaim``                → release cached GPU memory now (see
                                      :func:`release_gpu_memory`).
+
+Job ids come from the host and are used as a directory name under the state root, so
+they must match ``[A-Za-z0-9_-]{1,64}``; a run for an id that is still live answers 409.
 
 GPU memory is reclaimed automatically after every job, before the terminal event is
 emitted. ``/reclaim`` exists because only the host can see *across* workers: this
@@ -44,6 +51,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sys
 import threading
 from collections.abc import AsyncIterator, Callable
@@ -52,6 +60,7 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 from litestar import Request, Response, get, post
+from litestar.exceptions import HTTPException
 from litestar.response import Stream
 
 from tlc_plugin_sdk.job_context import JobContext, JobFailed
@@ -109,6 +118,13 @@ def release_gpu_memory() -> bool:
     return True
 
 
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class JobAlreadyRunning(RuntimeError):
+    """A ``/jobs/{id}/run`` arrived for an id whose job is still live here."""
+
+
 class _Worker:
     """Holds the single plugin instance and its in-flight jobs."""
 
@@ -120,13 +136,29 @@ class _Worker:
         self._lock = threading.Lock()
 
     def start_job(self, job_id: str, params: dict[str, Any]) -> _Job:
+        if not _JOB_ID_RE.match(job_id):
+            # The id names a directory under the state root; anything else (``..``, a slash, a
+            # 4 KB string) must not reach the filesystem.
+            msg = f"job id must match {_JOB_ID_RE.pattern}, got {job_id!r}"
+            raise ValueError(msg)
         state_dir = self.state_root / job_id
-        state_dir.mkdir(parents=True, exist_ok=True)
         job = _Job(job_id, params, state_dir, self.plugin, on_end=self.finish_job)
         with self._lock:
+            live = self._jobs.get(job_id)
+            if live is not None and live.is_alive():
+                # Overwriting would leave the earlier thread running but uncancellable and
+                # uncounted by /busy (the node could be terminated under it).
+                msg = f"job {job_id!r} is still running on this worker"
+                raise JobAlreadyRunning(msg)
             self._jobs[job_id] = job
+        state_dir.mkdir(parents=True, exist_ok=True)
         job.start()
         return job
+
+    def live_jobs(self) -> list[_Job]:
+        """The jobs whose threads are still running."""
+        with self._lock:
+            return [j for j in self._jobs.values() if j.is_alive()]
 
     def active_jobs(self) -> int:
         """How many jobs are currently in flight (running threads)."""
@@ -148,16 +180,15 @@ class _Worker:
         if job is None:
             return False
         job.ctx.request_cancel()
-        _escalate_cancel(job)
+        _escalate_cancel(job, self)
         return True
 
     def cancel_all(self) -> list[str]:
         """Cancel every job still running here (the host asks after a restart it cannot re-attach to)."""
-        with self._lock:
-            jobs = [j for j in self._jobs.values() if j.is_alive()]
+        jobs = self.live_jobs()
         for job in jobs:
             job.ctx.request_cancel()
-            _escalate_cancel(job)
+            _escalate_cancel(job, self)
         return [j.job_id for j in jobs]
 
 
@@ -177,14 +208,31 @@ def _cancel_grace_seconds() -> float:
     return value
 
 
-def _escalate_cancel(job: _Job) -> None:
-    """Give the job's own code a grace period to honour the cancel; then end the process."""
+def _escalate_cancel(job: _Job, worker: _Worker) -> None:
+    """Give the job's own code a grace period to honour the cancel; then end the process.
+
+    The process exits (status 3) only when the stubborn job is the last live one: a worker may
+    host another job or an in-flight custom route, and ending those without a terminal event
+    would trade one orphan for several. When other jobs are live the stubborn thread is left
+    running and reported; it is still counted by ``/busy`` and ends with the process.
+    One watchdog per job: repeated cancels do not stack clocks.
+    """
     grace = _cancel_grace_seconds()
-    if grace <= 0:
+    if grace <= 0 or not job.mark_escalated():
         return
 
     def watch() -> None:
         if job.wait(grace):
+            return
+        others = [j.job_id for j in worker.live_jobs() if j.job_id != job.job_id]
+        if others:
+            logger.error(
+                "Job %s ignored its cancel for %.0fs; the worker keeps running because jobs %s are live "
+                "here. The thread ends with the process.",
+                job.job_id,
+                grace,
+                ", ".join(others),
+            )
             return
         logger.error(
             "Job %s ignored its cancel for %.0fs; the worker exits so the GPU is released (a new worker is "
@@ -212,9 +260,11 @@ class _Job:
         self.job_id = job_id
         self._on_end = on_end
         self._ended = threading.Event()
+        self._escalated = threading.Event()
+        self._abandoned = threading.Event()
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self._cancel = threading.Event()
-        self.ctx = JobContext(job_id, params, state_dir, sink=self.events.put, cancel_event=self._cancel)
+        self.ctx = JobContext(job_id, params, state_dir, sink=self._put_event, cancel_event=self._cancel)
         self._plugin = plugin
         self._thread = threading.Thread(target=self._run, name=f"job-{job_id}", daemon=True)
 
@@ -229,6 +279,32 @@ class _Job:
     def wait(self, timeout: float) -> bool:
         """True when the job ended within ``timeout`` seconds."""
         return self._ended.wait(timeout)
+
+    def mark_escalated(self) -> bool:
+        """Claim the single cancel watchdog for this job; False when one already runs."""
+        if self._escalated.is_set():
+            return False
+        self._escalated.set()
+        return True
+
+    def abandon(self) -> None:
+        """The host's stream is gone: stop buffering events nobody will read.
+
+        Without this a lost-stream training emitting per-step progress accumulates every event
+        in memory for the rest of the run. The thread keeps running and stays registered.
+        """
+        self._abandoned.set()
+        # Drain what was queued for the consumer that left.
+        try:
+            while True:
+                self.events.get_nowait()
+        except queue.Empty:
+            pass
+
+    def _put_event(self, event: dict[str, Any]) -> None:
+        if self._abandoned.is_set():
+            return
+        self.events.put(event)
 
     def _run(self) -> None:
         try:
@@ -246,7 +322,7 @@ class _Job:
         # job's still-cached allocation. Runs for the error path too — see
         # release_gpu_memory() on why a failed job is the case that matters most.
         release_gpu_memory()
-        self.events.put(terminal)
+        self._put_event(terminal)
         self._ended.set()
         if self._on_end is not None:
             self._on_end(self.job_id)
@@ -279,7 +355,12 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
     async def run_job(job_id: str, request: Request[Any, Any, Any]) -> Stream:
         raw = await request.body()
         params: dict[str, Any] = json.loads(raw) if raw else {}
-        job = worker.start_job(job_id, params)
+        try:
+            job = worker.start_job(job_id, params)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except JobAlreadyRunning as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         keepalive = _stream_keepalive_seconds()
 
         def _next_event() -> dict[str, Any] | None:
@@ -292,7 +373,9 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         async def stream() -> AsyncIterator[bytes]:
             try:
                 while True:
-                    event = await anyio.to_thread.run_sync(_next_event)
+                    # abandon_on_cancel: when the host disconnects, do not wait for the next job
+                    # event before the ``finally`` runs (it could be an epoch away).
+                    event = await anyio.to_thread.run_sync(_next_event, abandon_on_cancel=True)
                     if event is None:
                         # Not a job event — hosts (>= the ping-aware supervisor) drop it;
                         # its only purpose is bytes on the wire inside proxy idle windows.
@@ -302,6 +385,8 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
                     if event.get("event") in _TERMINAL:
                         break
             finally:
+                if job.is_alive():
+                    job.abandon()  # the thread runs on, registered and cancellable; events are dropped
                 worker.finish_job(job_id)  # a no-op while the thread still runs (see finish_job)
 
         return Stream(stream(), media_type="application/x-ndjson")
@@ -311,7 +396,7 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         ok = worker.cancel_job(job_id)
         return Response(content={"cancelling": ok, "job_id": job_id}, status_code=200 if ok else 404)
 
-    @post("/jobs/cancel-all")
+    @post("/jobs/cancel-all", status_code=200)
     async def cancel_all() -> dict[str, Any]:
         # The host asks this after a restart it could not re-attach to: whatever still runs here is
         # work nobody can see, so it is stopped (with the same escalation as a single cancel).
@@ -331,7 +416,7 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         released = await anyio.to_thread.run_sync(release_gpu_memory)
         return Response(content={"released": released, "plugin_id": worker.plugin_id}, status_code=200)
 
-    return [run_job, cancel_job, busy, reclaim]
+    return [run_job, cancel_job, cancel_all, busy, reclaim]
 
 
 def _load_plugin(entry: str) -> ComputePlugin:
