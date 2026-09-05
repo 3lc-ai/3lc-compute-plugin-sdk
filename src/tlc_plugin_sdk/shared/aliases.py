@@ -156,6 +156,7 @@ def register_alias(
     alias_token: str | None = None,
     *,
     remote_path: str | None = None,
+    root_url: str | None = None,
 ) -> dict[str, Any]:
     """Register a project URL alias for an image folder.
 
@@ -170,6 +171,8 @@ def register_alias(
             of the project resolves ``<TOKEN>`` to the copy — while this session
             keeps resolving to *image_folder* until the job ends, so paths encode
             correctly from the local files.
+        root_url: The project root the table is written under (``TableWriter(root_url=…)``); the
+            alias is persisted in that project's config. ``None`` = the plugin's default root.
 
     Returns:
         Dict with ``token`` and ``path`` that were registered (plus
@@ -196,6 +199,7 @@ def register_alias(
             token=token,
             path=persisted,
             project_name=project_name,
+            root_url=(root_url.strip().rstrip("/") or None) if root_url else None,
             force=persisted != path,  # re-pointing at the copy is the intent, not a conflict
         )
         # 2. Also register as a session alias so it is active for the current

@@ -168,7 +168,7 @@ def _safe_upload_name(raw: str | None) -> str:
 
 
 def data_source_route_handlers() -> list[BaseRouteHandler]:
-    """Return browse + upload-temp route handlers for the data-source widget."""
+    """Return the browse, upload-temp and project-root route handlers for the shared widgets."""
 
     @get("/browse", sync_to_thread=True)
     def browse_filesystem(request: Request[Any, Any, Any]) -> dict[str, Any]:
@@ -299,4 +299,20 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
 
         return {"path": str(dest), "filename": filename}
 
-    return [browse_filesystem, upload_temp]
+    @get("/project-root", sync_to_thread=True)
+    def project_root(request: Request[Any, Any, Any]) -> dict[str, str]:
+        """Where this plugin's ``tlc`` writes tables — its effective project root.
+
+        The shared alias widget asks this before offering to copy data next to a new table: the
+        answer must come from the process that will write the table (a local controller writes to
+        its local projects folder even when an infrastructure plugin has a bucket root for nodes).
+        ``{"url": ""}`` when ``tlc`` cannot say.
+        """
+        try:
+            import tlc
+
+            return {"url": str(tlc.config.project_root_url).rstrip("/")}
+        except Exception:
+            return {"url": ""}
+
+    return [browse_filesystem, upload_temp, project_root]

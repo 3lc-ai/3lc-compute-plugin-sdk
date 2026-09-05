@@ -85,9 +85,14 @@ def test_register_alias_persists_the_copy_and_keeps_the_session_local(monkeypatc
 def test_alias_widget_offers_the_copy_and_submits_it() -> None:
     js = alias_ui_script()
     for pin in (
+        "function _tlcProjectLocationHtml(",  # "Create project in": this computer, or the bucket root
+        "function _tlcBindProjectLocation(",
+        "function _tlcGetProjectRoot(",
+        "options.length > 1 ? '' : 'none'",  # hidden while there is nothing to choose
+        "rootOverride",  # the copy offer follows the chosen root
         "-alias-copy-enabled",
         "function _tlcAliasReviewCopy(",
-        "'/api/infra/capabilities'",  # the root the compute knows, never guessed
+        "'/project-root'",  # the root this plugin's own tlc writes to — never the infra plugin's bucket
         "_tlcStorageOf(root) !== 'local' && _tlcStorageOf(folder) === 'local'",  # local data, bucket root — only then
         "'/data/' + token.toLowerCase()",
         "alias_copy_to_root:",
@@ -108,3 +113,18 @@ def test_shared_scripts_parse(tmp_path: Path) -> None:
         f = tmp_path / name
         f.write_text(js)
         subprocess.run(["node", "--check", str(f)], check=True)
+
+
+def test_register_alias_persists_under_the_chosen_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tlc
+
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(tlc.url, "get_registered_url_aliases", dict)
+    monkeypatch.setattr(
+        tlc.helpers.ProjectHelper, "register_project_url_alias", staticmethod(lambda **kw: calls.update(kw))
+    )
+    monkeypatch.setattr(tlc.url, "register_url_alias", lambda **kw: None)
+    aliases.register_alias("Fire", "/data/fire", "FIRE", root_url="s3://b/projects/")
+    assert calls["root_url"] == "s3://b/projects"
+    aliases.register_alias("Fire", "/data/fire", "FIRE")
+    assert calls["root_url"] is None  # the plugin's default root
