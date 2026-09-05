@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node-agent before self-destruct) and `POST /jobs/cancel-all` (what the host calls after a
   restart it could not re-attach to). Both are host-owned; plugins implement neither.
 - `PluginConfigStore.exists(config_id)` and `.directory`.
+- `window.TlcCatalog` (`tlc_plugin_sdk.shared.catalog_table`): a sortable, searchable
+  catalogue table with a per-row action button and expandable detail rows, for plugins that
+  list provider offerings (GPU types, instance sizes). Injected into a fragment whose markup
+  contains a `tlc-catalog` container; other fragments are unchanged.
+- `tlc_plugin_sdk.shared.storage_bundle.BundleRegistry`: folder downloads for storage plugins.
+  Streams every object under a prefix into one `ZIP_STORED` archive on a background thread,
+  with progress, cancel, size and file-count caps; the plugin supplies `list_objects`,
+  `open_object` and `store_bundle` (upload the archive, return its download link).
+- Infrastructure contract: `capabilities.flavors` and `capabilities.pricing` (`on_demand`, `spot`)
+  declare what a provider makes; the host sends `flavor` and `pricing` on every node request.
 - Manifest key `kind = "compute" | "infrastructure"` documented: infrastructure plugins
   provision GPU nodes and serve the conventional `/infra/*` node-CRUD routes.
 - Run-body conventions for remote-ready plugins documented: inline `project_config`

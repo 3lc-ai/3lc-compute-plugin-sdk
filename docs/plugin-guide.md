@@ -155,7 +155,12 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   `POST /infra/login/{id}/credentials` (`{account_id, role_name}` → temporary credentials).
   The host forwards these as `/api/infra/login/<plugin>/…`; the Hub renders the panel and
   hands the credentials to the create call exactly like pasted keys. Temporary credentials
-  must never be seeded onto the workspace — it runs its nodes by its own instance role. A
+  must never be seeded onto the workspace — it runs its nodes by its own instance role.
+  Capabilities also declare what the provider makes: `flavors` (`["gpu"]`, or
+  `["gpu", "workspace"]` for a provider that hosts permanent workspace nodes) and `pricing`
+  (`["on_demand"]`, or `["on_demand", "spot"]` when interruptible capacity is offered). The
+  host sends `flavor` and `pricing` in every `POST /infra/nodes` payload and refuses a request
+  for anything the plugin has not declared, so a plugin never has to guess a default. A
   provider can also let a person *grant a role* instead: declare `workspace_role`
   (`{kind, label, help, setup, field: {key, label, placeholder}}`) and serve
   `GET /infra/role-setup?owner=` → `{host_account_id, external_id, role_name, quick_create_url,
@@ -635,6 +640,23 @@ conventions make a plugin remote-ready — all optional locally, all host/plugin
   copy-vs-stream question, or "will NOT run on the node". Opt a field in or out with
   `data-run-target-check="table"|"off"`. Call `checkDataForRunTarget` yourself only for
   bespoke placement, and skip it when `PLUGIN_API.hostChecksTableInputs` is true.
+
+**Listing what a provider offers** (infrastructure plugins): give a container the class
+`tlc-catalog` and the worker injects `window.TlcCatalog` ahead of your script —
+`TlcCatalog.mount(container, {columns, rows, rowId, sort, search, selectedId, onSelect, action,
+details, unavailable})` renders a sortable, searchable table with one action button per row and
+a row that opens to the details you return; `handle.update(rows)` re-renders with fresh data
+and keeps the sort, search and open rows. Column types: `text` (with an optional `sub` line),
+`num` (right-aligned, optional `unit`), `price` (`$/h`, missing prices sort last), `status`
+(a coloured dot from `column.status(row)` → `{level: ok|warn|bad|muted, text}`). See
+`tlc_plugin_sdk/shared/catalog_table.py` for the full option list.
+
+**Folder downloads** (storage plugins): `tlc_plugin_sdk.shared.storage_bundle.BundleRegistry`
+builds one zip from every object under a prefix on a background thread and reports progress;
+you give it `list_objects(url)`, `open_object(key)` and `store_bundle(path, name) -> url`, and
+expose `start`/`status`/`cancel` as `POST /infra/storage/bundle`, `GET /infra/storage/bundle/{id}`,
+`DELETE /infra/storage/bundle/{id}`. Single files need no bundle: answer
+`POST /infra/storage/presign` with `mode: "download"` with presigned GET links.
 
 Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every request must
 carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the
