@@ -580,13 +580,18 @@ field ever reaches the frontend.
 cooperative first: the worker sets `ctx.cancelled` and your loop returns at its next
 checkpoint (the host marks the job "cancelled"). A loop that never checks is not allowed
 to keep a GPU busy: after `TLC_WORKER_CANCEL_GRACE_S` seconds (default 60; `0` disables)
-the worker process exits with status 3 and the host spawns a fresh one for the next job —
-so an unhonoured cancel costs you the process, and any partial state you did not flush.
+the worker process exits with status 3 when the unresponsive job is the last one live in it,
+and the local supervisor or the node-agent spawns a fresh worker for the next job — so an
+unhonoured cancel costs you the process, and any partial state you did not flush. The grace
+period includes your cleanup: flush checkpoints before you return from a cancel, not after.
+When other jobs are live in the same worker the unresponsive thread is left running (it ends
+with the process) and reported in the worker log; nothing else is interrupted.
 The worker keeps a job registered for as long as its **thread** runs, not its event
 stream: a host that restarts mid-run can still cancel the job afterwards, and on its first
 heartbeat after a restart it asks each node's workers (`GET /busy`, `POST /jobs/cancel-all`)
 to stop any job it no longer knows about, so a lost stream never leaves a training
-running for nobody.
+running for nobody. Job ids are chosen by the host and must match `[A-Za-z0-9_-]{1,64}`;
+a run for an id that is still live on the worker answers 409.
 
 **Start a job from the UI** with the generic run route — `POST /api/plugins/{id}/run`
 with the params as the JSON body; it returns `{job_id, status, namespace}`. The easiest

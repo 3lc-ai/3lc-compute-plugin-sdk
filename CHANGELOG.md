@@ -21,11 +21,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `TLC_WORKER_STREAM_KEEPALIVE_S=<seconds>` makes the `/jobs/{id}/run` NDJSON stream
     emit `{"event": "ping"}` between job events so provider HTTP proxies don't kill
     quiet streams during long epochs; ping-aware hosts filter them out.
+- Worker control routes for remote nodes: `GET /busy` (`{"active_jobs": n}`, read by a
+  node-agent before self-destruct) and `POST /jobs/cancel-all` (what the host calls after a
+  restart it could not re-attach to). Both are host-owned; plugins implement neither.
+- `PluginConfigStore.exists(config_id)` and `.directory`.
 - Manifest key `kind = "compute" | "infrastructure"` documented: infrastructure plugins
   provision GPU nodes and serve the conventional `/infra/*` node-CRUD routes.
 - Run-body conventions for remote-ready plugins documented: inline `project_config`
   (self-contained params — remote workers have no controller-local stores) and the
   existing `_alias_overrides` shape; `run_target` is host-owned.
+
+### Changed
+- A job stays registered on the worker for as long as its **thread** runs, not its event
+  stream, so a host that restarts mid-run can still cancel it. A cancel the job ignores for
+  `TLC_WORKER_CANCEL_GRACE_S` seconds (default 60; `0` disables) makes the worker exit with
+  status 3 when that job is the last live one; the supervisor or node-agent spawns a fresh
+  worker for the next job.
+- Job ids must match `[A-Za-z0-9_-]{1,64}` (400 otherwise); a `/jobs/{id}/run` for an id
+  still live on the worker answers 409 rather than replacing the running job.
+- When the host's job stream disconnects the worker stops buffering that job's events (the
+  thread keeps running, cancellable), so a lost stream no longer grows memory for the rest of
+  a training run.
+- The bearer-token guard also covers websocket routes a plugin declares (closed with 1008),
+  and the worker no longer serves generated OpenAPI/Swagger routes.
+- A plugin route handler on a reserved path (`/health`, `/ui`, `/compute`, `/busy`,
+  `/reclaim`, `/jobs/*`) is not mounted; the collision is logged as an error.
+- `PluginConfigStore` writes its directory `0700` and config files `0600` (they hold keys).
 
 ## [0.3.2] - 2026-08-31
 

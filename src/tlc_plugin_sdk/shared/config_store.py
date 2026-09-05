@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import uuid
 from dataclasses import asdict, is_dataclass
@@ -61,7 +62,9 @@ class PluginConfigStore(Generic[T]):
             raise TypeError(msg)
         self._cls = config_cls
         self._dir = CONFIG_ROOT / plugin_id
+        # Configs hold provider keys and tokens: owner-only directory and files.
         self._dir.mkdir(parents=True, exist_ok=True)
+        _restrict(self._dir, 0o700)
         if legacy_dir is not None:
             self._migrate_legacy(Path(legacy_dir))
 
@@ -86,9 +89,16 @@ class PluginConfigStore(Generic[T]):
             config.id = str(uuid.uuid4())  # type: ignore[attr-defined]
         if not getattr(config, "created", ""):
             config.created = datetime.now(timezone.utc).isoformat()  # type: ignore[attr-defined]
-        with open(self._path(config.id), "w") as f:  # type: ignore[attr-defined]
+        path = self._path(config.id)  # type: ignore[attr-defined]
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             json.dump(asdict(config), f, indent=2)  # type: ignore[call-overload]
+        _restrict(path, 0o600)  # an existing world-readable file is tightened too
         return config
+
+    def exists(self, config_id: str) -> bool:
+        """True when a config with ``config_id`` is saved (no read, no deserialisation)."""
+        return self._path(config_id).exists()
 
     def delete_config(self, config_id: str) -> bool:
         """Delete a config. Returns True if it existed."""
@@ -106,6 +116,11 @@ class PluginConfigStore(Generic[T]):
             self.save_config(config)
 
     # ── internals ────────────────────────────────────────────────────────
+    @property
+    def directory(self) -> Path:
+        """Where this plugin's configs live (read-only view for callers that need the path)."""
+        return self._dir
+
     def _path(self, config_id: str) -> Path:
         return self._dir / f"{config_id}.json"
 
@@ -138,3 +153,11 @@ class PluginConfigStore(Generic[T]):
                 moved += 1
         if moved:
             logger.info("Migrated %d config(s) from %s → %s", moved, legacy_dir, self._dir)
+
+
+def _restrict(path: Path, mode: int) -> None:
+    """Best-effort chmod: the store must keep working on filesystems without POSIX modes."""
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        logger.debug("Could not chmod %s", path, exc_info=True)
