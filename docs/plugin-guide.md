@@ -147,7 +147,22 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   `GET /infra/preflight?gpu_type=&datacenter=` → `{ok, checks: [{name, ok, level, detail}],
   summary}` — everything the provider can know *before* a node is requested (funds, stock,
   quotas, permissions), so a payment problem is a dialog and not a run of dead nodes. Give
-  the provider's own words in full in `detail`; the Hub shows them whole. At most one
+  the provider's own words in full in `detail`; the Hub shows them whole. A provider that
+  can sign a person in instead of taking pasted keys declares `workspace_login` in its
+  capabilities (`{kind, label, help, fields: [{key, label, placeholder, remember}],
+  credential_keys}`) and serves the device flow as `POST /infra/login` (start: code + link),
+  `GET /infra/login/{id}` (`{state: pending|authorized|expired|error, accounts?}`) and
+  `POST /infra/login/{id}/credentials` (`{account_id, role_name}` → temporary credentials).
+  The host forwards these as `/api/infra/login/<plugin>/…`; the Hub renders the panel and
+  hands the credentials to the create call exactly like pasted keys. Temporary credentials
+  must never be seeded onto the workspace — it runs its nodes by its own instance role. A
+  provider can also let a person *grant a role* instead: declare `workspace_role`
+  (`{kind, label, help, setup, field: {key, label, placeholder}}`) and serve
+  `GET /infra/role-setup?owner=` → `{host_account_id, external_id, role_name, quick_create_url,
+  trust_policy, template}`; the host forwards it as `/api/infra/role-setup/<plugin>` for the
+  signed-in owner, the Hub shows the link and the manual steps, and the person pastes the
+  role's ARN into the wizard as `role_arn`. Derive the external id from the owner so a role
+  is bound to one person; re-assume the role for deletion (the host sends `owner` along). At most one
   infrastructure plugin is active on a host at a time. `capabilities` should include
   `storage: {"project_root_url": "s3://…"}` when configured — the host's data-prepare
   pipeline (sync + node staging) and the Dashboard union view both key off it.
