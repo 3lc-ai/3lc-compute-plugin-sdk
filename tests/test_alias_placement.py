@@ -88,7 +88,8 @@ def test_alias_widget_offers_the_copy_and_submits_it() -> None:
         "function _tlcProjectLocationHtml(",  # "Create project in": this computer, or the bucket root
         "function _tlcBindProjectLocation(",
         "function _tlcGetProjectRoot(",
-        "options.length > 1 ? '' : 'none'",  # hidden while there is nothing to choose
+        "options.length ? '' : 'none'",  # shown whenever a root is known; one root reads as a statement
+        "var key = 'tlc.projectRoot';",  # one destination for the whole Hub, not one per plugin
         "rootOverride",  # the copy offer follows the chosen root
         "-alias-copy-enabled",
         "function _tlcAliasReviewCopy(",
