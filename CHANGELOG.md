@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/reclaim`, `/jobs/*`) is not mounted; the collision is logged as an error.
 - `PluginConfigStore` writes its directory `0700` and config files `0600` (they hold keys).
 
+## [0.3.3] - 2026-09-07
+
+### Changed
+- Requires `3lc>=3.3.0`. The SDK carries the `3lc[pandas]` data plane for every plugin venv, so
+  raising the floor here moves the whole plugin fleet onto the current 3lc release.
+
 ## [0.3.2] - 2026-08-31
 
 ### Fixed
