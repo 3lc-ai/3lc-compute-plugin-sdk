@@ -147,9 +147,13 @@ ALIAS_UI_JS = (
     "// <root>/<project>/data/<token>/.\n"
     "// rootOverride (optional): the root the person chose for the project (see _tlcProjectLocationHtml);\n"
     "// without it the plugin's own default root is asked for.\n"
-    "function _tlcAliasReviewCopy(idPrefix, projectName, folderValue, pluginId, rootOverride) {\n"
+    "// opts.copyOffer === false: the plugin fetches the data itself and puts it where the alias points,\n"
+    "// so this offer would be a second, competing copy (a Hugging Face import: the data is on the Hub,\n"
+    "// never on this machine).\n"
+    "function _tlcAliasReviewCopy(idPrefix, projectName, folderValue, pluginId, rootOverride, opts) {\n"
     "  var box = document.getElementById(idPrefix + '-alias-copy');\n"
     "  if (!box) return;\n"
+    "  if (opts && opts.copyOffer === false) { box.style.display = 'none'; box.dataset.target = ''; return; }\n"
     "  // An empty folder means it is found at import time (CSV image columns): treat it as local.\n"
     "  var folder = String(folderValue || '').trim();\n"
     "  var enabled = document.getElementById(idPrefix + '-alias-enabled');\n"
@@ -187,7 +191,7 @@ ALIAS_UI_JS = (
     "// rootInputId (optional): the 'Create project in' select (_tlcProjectLocationHtml); its value is the root\n"
     "// the table will be written to, and the copy offer follows it.\n"
     "function _tlcBindAliasAutoUpdate("
-    "idPrefix, projectInputId, folderInputId, pluginId, rootInputId) {\n"
+    "idPrefix, projectInputId, folderInputId, pluginId, rootInputId, opts) {\n"
     "  var projInput = document.getElementById(projectInputId);\n"
     "  var tokenInput = document.getElementById("
     "idPrefix + '-alias-token');\n"
@@ -218,7 +222,7 @@ ALIAS_UI_JS = (
     "  function review() {\n"
     "    var folder = aliasFolderInput ? aliasFolderInput.value : (folderInput ? folderInput.value : '');\n"
     "    var root = rootInput && rootInput.value ? rootInput.value : '';\n"
-    "    _tlcAliasReviewCopy(idPrefix, projInput ? projInput.value : '', folder, pluginId, root);\n"
+    "    _tlcAliasReviewCopy(idPrefix, projInput ? projInput.value : '', folder, pluginId, root, opts);\n"
     "  }\n"
     "  [projInput, folderInput, aliasFolderInput, rootInput, document.getElementById(idPrefix + "
     "'-alias-enabled')].forEach(function(el) {\n"
@@ -369,7 +373,8 @@ def alias_ui_script() -> str:
 
     - ``_tlcAliasSettingsHtml(prefix, project, folder)`` to render HTML
     - ``_tlcBindAliasToggle(prefix)`` after inserting the HTML
-    - ``_tlcBindAliasAutoUpdate(prefix, projectInputId, folderInputId, pluginId, rootInputId)``
+    - ``_tlcBindAliasAutoUpdate(prefix, projectInputId, folderInputId, pluginId, rootInputId, opts)``
+      — ``opts = {copyOffer: false}`` for a plugin that fetches its own data and copies it itself
     - ``_tlcGetAliasValues(prefix)`` at submit time
     - ``_tlcProjectLocationHtml(prefix)`` + ``_tlcBindProjectLocation(prefix, pluginId)`` for the
       "Create project in" choice (this computer or the bucket root); ``_tlcGetProjectRoot(prefix)``
