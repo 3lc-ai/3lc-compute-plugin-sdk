@@ -46,6 +46,7 @@ package surface.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gc
 import json
 import logging
@@ -54,9 +55,9 @@ import queue
 import re
 import sys
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 from litestar import Request, Response, get, post
@@ -308,7 +309,8 @@ class _Job:
 
     def _run(self) -> None:
         try:
-            self._plugin.run_job(self.ctx)
+            with _alias_overrides(self.ctx):
+                self._plugin.run_job(self.ctx)
             status = "cancelled" if self.ctx.cancelled else "completed"
             terminal: dict[str, Any] = {"event": "done", "status": status, "job_id": self.job_id}
         except JobFailed as exc:  # a clean, user-facing failure (ctx.fail / raise JobFailed)
@@ -326,6 +328,35 @@ class _Job:
         self._ended.set()
         if self._on_end is not None:
             self._on_end(self.job_id)
+
+
+@contextlib.contextmanager
+def _alias_overrides(ctx: JobContext) -> Iterator[None]:
+    """Apply the run body's ``_alias_overrides`` around ``run_job``; restore afterwards.
+
+    The host places ``{"enabled": true, "overrides": [{"token": …, "path": …}]}`` at the top
+    level of the run body when a table's data has been staged somewhere else for this worker
+    (a copy on a GPU node). Applying it here, once, means no plugin reads the key: the alias
+    already resolves to the staged copy by the time ``run_job`` opens the table. A plugin that
+    still applies the same overrides itself keeps working — re-registering an alias to the path
+    it already has is a no-op. Overrides that are absent, disabled or malformed apply nothing.
+    """
+    raw = ctx.params.get("_alias_overrides")
+    entries = raw.get("overrides") if isinstance(raw, dict) and raw.get("enabled") else None
+    overrides = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+    if not overrides:
+        yield
+        return
+    from tlc_plugin_sdk.shared.aliases import apply_alias_overrides, restore_aliases
+
+    originals = apply_alias_overrides(cast("list[dict[str, str]]", overrides))
+    if originals:
+        ctx.log(f"Applied {len(originals)} alias override(s)")
+    try:
+        yield
+    finally:
+        if originals:
+            restore_aliases(originals)
 
 
 def _stream_keepalive_seconds() -> float | None:
