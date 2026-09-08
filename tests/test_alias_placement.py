@@ -153,3 +153,14 @@ def test_a_form_can_ask_where_the_table_is_actually_going() -> None:
     assert "data-own-root" not in body  # that rule belongs to the override question, not this one
     # And the roots arrive late, so the select says so once it has them.
     assert "sel.dispatchEvent(new Event('change', { bubbles: true }))" in js
+
+
+def test_one_root_is_stated_rather_than_offered_as_a_choice() -> None:
+    """A cloud workspace has exactly one place its projects can go. Rendering that as a dropdown gave
+    a control that visibly does nothing when clicked (Paul, 2026-09-08). The select stays in the DOM —
+    it still holds the value every form reads — but a lone root is shown as text."""
+    js = alias_ui_script()
+    assert "-project-root-only" in js
+    tail = js.split("var only = document.getElementById(idPrefix + '-project-root-only')")[1].split("box.style.display")[0]
+    assert "options.length === 1" in tail
+    assert "sel.style.display = single ? 'none' : ''" in tail  # hidden, not removed: it carries the value
