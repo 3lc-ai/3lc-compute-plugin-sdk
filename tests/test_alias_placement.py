@@ -82,6 +82,71 @@ def test_register_alias_persists_the_copy_and_keeps_the_session_local(monkeypatc
     assert calls["project"]["path"] == "/data/fire" and calls["project"]["force"] is False
 
 
+def test_data_inside_the_project_is_aliased_relative_to_the_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An absolute alias to a folder inside the project never reaches the rows.
+
+    tlc writes a media URL as a path relative to the table whenever the two share more than one path
+    segment, expanding aliases to absolute *before* deciding — so rows come out as
+    ``../../../../data/tok/x.jpg`` and the alias is gone. A relative row cannot be redirected: an
+    override on a GPU node has no token to bind to, so those images can never be staged and training
+    fails on its first image. Registered as the hop from a table to the folder, the alias matches what
+    tlc actually writes, the row keeps ``<TOKEN>/x.jpg``, and the node override lands (Paul's idea,
+    measured end to end 2026-09-08).
+    """
+    import tlc
+
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(tlc.url, "get_registered_url_aliases", dict)
+    monkeypatch.setattr(
+        tlc.helpers.ProjectHelper,
+        "register_project_url_alias",
+        staticmethod(lambda **kw: calls.setdefault("project", kw)),
+    )
+    monkeypatch.setattr(tlc.url, "register_url_alias", lambda **kw: calls.setdefault("session", kw))
+
+    out = aliases.register_alias(
+        "a44coco", "s3://b/projects/a44coco/data/a44coco", "A44COCO", root_url="s3://b/projects"
+    )
+    # Both ends relative: the session alias is what tlc matches while writing the rows, the persisted
+    # one is what another machine (or a node) reads as the baseline.
+    assert calls["session"]["path"] == "../../../../data/a44coco"
+    assert calls["project"]["path"] == "../../../../data/a44coco"
+    assert out["persisted"] == "../../../../data/a44coco"
+
+    # Data on other storage keeps an absolute alias — that case is redirectable as it stands, and a
+    # relative hop would not even resolve.
+    calls.clear()
+    aliases.register_alias("a44coco", "s3://elsewhere/fire", "FIRE", root_url="s3://b/projects")
+    assert calls["session"]["path"] == "s3://elsewhere/fire"
+    assert calls["project"]["path"] == "s3://elsewhere/fire"
+
+    # Copied local data whose copy lands in the project: the session stays local (the rows are written
+    # from the local files), the persisted alias is the relative hop to the copy.
+    calls.clear()
+    aliases.register_alias(
+        "a44coco", "/data/fire", "FIRE",
+        remote_path="s3://b/projects/a44coco/data/fire", root_url="s3://b/projects",
+    )
+    assert calls["session"]["path"] == "/data/fire"
+    assert calls["project"]["path"] == "../../../../data/fire"
+
+
+def test_the_relative_hop_assumes_the_3lc_table_layout() -> None:
+    """``<project>/datasets/<dataset>/tables/<table>`` — four levels. If that layout ever changes, the
+    hop is wrong for every table written since, so pin it here rather than leave it implied."""
+    assert aliases._TABLE_DEPTH_BELOW_PROJECT == 4
+    assert aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/p/data/tok") == (
+        "../../../../data/tok"
+    )
+    # A folder deeper inside the project keeps its whole tail.
+    assert aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/p/data/a/b") == (
+        "../../../../data/a/b"
+    )
+    # Not inside: a sibling project whose name merely starts the same, and a plain http source.
+    assert aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/pp/data/x") is None
+    assert aliases.relative_alias_value("s3://b/projects", "p", "https://huggingface.co/datasets/x") is None
+
+
 def test_alias_widget_offers_the_copy_and_submits_it() -> None:
     js = alias_ui_script()
     for pin in (

@@ -150,6 +150,41 @@ def default_alias_token(project_name: str) -> str:
     return _sanitize_token(project_name)
 
 
+#: Depth of a table below its project folder: ``<project>/datasets/<dataset>/tables/<table>``. The alias
+#: for data inside the project is written as the hop from a table up to it, so this is how far up.
+_TABLE_DEPTH_BELOW_PROJECT = 4
+
+
+def relative_alias_value(root_url: str | None, project_name: str, target: str) -> str | None:
+    """The value to register for *target* when it lives inside the project — else ``None``.
+
+    ``s3://b/projects/p/data/tok`` under project ``p`` at root ``s3://b/projects`` becomes
+    ``../../../../data/tok``: the hop from a table to the data.
+
+    **Why relative.** tlc writes a media URL as a path relative to the table whenever the two share more
+    than one path segment, and it expands aliases to absolute *before* deciding — so an absolute alias to
+    a folder inside the project never survives into the row. Rows come out as
+    ``../../../../data/tok/x.jpg``, and a relative row cannot be redirected: an alias override on a GPU
+    node has no token to bind to, so the images can never be staged there. Registered relatively, the
+    alias matches the relativized string that tlc produces, the row keeps ``<TOKEN>/x.jpg``, and
+    overriding the token on a node points it at the staged copy.
+
+    It also travels better than an absolute alias: the whole project can move to another bucket or
+    machine and the rows still resolve, because the hop is relative to the table (Paul's idea; measured
+    every way round 2026-09-08).
+
+    Returns ``None`` when the target is not inside the project — data on other storage keeps an absolute
+    alias, which is what makes *that* case redirectable.
+    """
+    if not root_url or not project_name or not target:
+        return None
+    project_dir = f"{root_url.strip().rstrip('/')}/{project_name.strip()}"
+    inside = target.strip().rstrip("/")
+    if not inside.startswith(project_dir + "/"):
+        return None
+    return "../" * _TABLE_DEPTH_BELOW_PROJECT + inside[len(project_dir) + 1 :]
+
+
 def register_alias(
     project_name: str,
     image_folder: str,
@@ -185,7 +220,17 @@ def register_alias(
     # Expand ~ before persisting — an alias stored with a literal tilde would
     # poison every future table that resolves through it.
     path = os.path.expanduser(image_folder.strip())
-    persisted = remote_path.strip().rstrip("/") if remote_path and remote_path.strip() else path
+    copied = bool(remote_path and remote_path.strip())
+    persisted = remote_path.strip().rstrip("/") if copied else path
+    # Data inside the project is aliased relative to the table — see relative_alias_value for why an
+    # absolute alias to that folder is silently dropped when the table is written.
+    relative = relative_alias_value(root_url, project_name, persisted)
+    if relative:
+        persisted = relative
+        if not copied:
+            # The rows are written from this same folder, so the session alias has to be the relative
+            # form too: it is the relativized string that tlc will try to match when it writes them.
+            path = relative
 
     try:
         # Track whether a session alias for this token already existed, so the
@@ -209,6 +254,7 @@ def register_alias(
         result: dict[str, Any] = {"token": token, "path": path, "primary_created": not existed}
         if persisted != path:
             result["remote_path"] = persisted
+        result["persisted"] = persisted  # what other machines and GPU nodes read as the baseline
         return result
     except Exception:
         logger.exception("Failed to register alias <%s> → %s", token, persisted)
