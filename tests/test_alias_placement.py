@@ -129,3 +129,27 @@ def test_register_alias_persists_under_the_chosen_root(monkeypatch: pytest.Monke
     assert calls["root_url"] == "s3://b/projects"
     aliases.register_alias("Fire", "/data/fire", "FIRE")
     assert calls["root_url"] is None  # the plugin's default root
+
+
+def test_a_root_is_named_by_what_it_is_not_by_which_lookup_found_it() -> None:
+    """A compute whose own project root is a bucket offered it as "This computer — s3://…", and said
+    the table would stay in a local projects folder (Paul, 2026-09-07)."""
+    js = alias_ui_script()
+    assert "function _tlcRootLabel(url)" in js
+    label = js.split("function _tlcRootLabel(url)")[1].split("\n}")[0]
+    assert "'S3 bucket'" in label and "'Azure container'" in label
+    assert "_tlcStorageOf(url) === 'local'" in label  # the local case is the exception, not the default
+    # The sentence under the select follows the same test rather than "which promise supplied it".
+    assert "var isCloud = _tlcStorageOf(sel.value) !== 'local'" in js
+
+
+def test_a_form_can_ask_where_the_table_is_actually_going() -> None:
+    """``_tlcGetProjectRoot`` answers "what should I send as an override?" and is empty when the
+    selection is the plugin's own root — the usual case. A form deriving a default path from it got
+    nothing, so the copy destination and the alias folder stayed blank (Paul, 2026-09-07)."""
+    js = alias_ui_script()
+    assert "function _tlcSelectedProjectRoot(idPrefix)" in js
+    body = js.split("function _tlcSelectedProjectRoot(idPrefix)")[1].split("\n}")[0]
+    assert "data-own-root" not in body  # that rule belongs to the override question, not this one
+    # And the roots arrive late, so the select says so once it has them.
+    assert "sel.dispatchEvent(new Event('change', { bubbles: true }))" in js
