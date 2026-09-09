@@ -152,8 +152,13 @@ class _Worker:
                 msg = f"job {job_id!r} is still running on this worker"
                 raise JobAlreadyRunning(msg)
             self._jobs[job_id] = job
-        state_dir.mkdir(parents=True, exist_ok=True)
-        job.start()
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            job.start()
+        except BaseException:
+            with self._lock:
+                self._jobs.pop(job_id, None)
+            raise
         return job
 
     def live_jobs(self) -> list[_Job]:
@@ -261,7 +266,8 @@ class _Job:
         self.job_id = job_id
         self._on_end = on_end
         self._ended = threading.Event()
-        self._escalated = threading.Event()
+        self._escalate_lock = threading.Lock()
+        self._escalated = False
         self._abandoned = threading.Event()
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self._cancel = threading.Event()
@@ -283,10 +289,11 @@ class _Job:
 
     def mark_escalated(self) -> bool:
         """Claim the single cancel watchdog for this job; False when one already runs."""
-        if self._escalated.is_set():
-            return False
-        self._escalated.set()
-        return True
+        with self._escalate_lock:
+            if self._escalated:
+                return False
+            self._escalated = True
+            return True
 
     def abandon(self) -> None:
         """The host's stream is gone: stop buffering events nobody will read.
