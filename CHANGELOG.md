@@ -8,23 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Manifest `[runtime] node_routes`: the custom routes a GPU plugin needs executed on an armed
-  GPU node (inference, model warm-up/status). Undeclared routes — config stores, catalogs,
-  table reads — now stay on the controller's worker while a node is armed, so a plugin's saved
-  configs have one history across nodes. `PLUGIN_API.hostChecksTableInputs` (contract,
-  optional): the host annotates every table input in a GPU fragment with the data verdict
-  itself; fragments that wired `checkDataForRunTarget` by hand can skip it when set.
-- Remote-worker hardening (all opt-in; local Unix-socket workers unchanged):
+- `ctx.identity`: a `JobIdentity` (`user_id`, `org_id`, `project_id` — canonical id strings,
+  `None` when the host did not know) saying who a job runs for. The host stamps it under the
+  host-owned top-level run-body key `_identity`; the worker pops it before `ctx.params` is built,
+  so a plugin never reads the key and never persists it with saved params. Every field is `None`
+  on a host that stamps nothing (an older host, or a keyless local one). Plugins read it for
+  attribution; a later credential API leases to this identity, never to a plugin.
+- Remote-worker hardening for TCP workers (opt-in; a local Unix-socket worker is unchanged):
   - `python -m tlc_plugin_sdk.worker --token …` (default `$TLC_WORKER_TOKEN`) requires
-    `Authorization: Bearer <token>` on every route — the guard for TCP workers on GPU
-    nodes. `build_plugin_app(token=…)` carries the same knob.
-  - `TLC_WORKER_STREAM_KEEPALIVE_S=<seconds>` makes the `/jobs/{id}/run` NDJSON stream
-    emit `{"event": "ping"}` between job events so provider HTTP proxies don't kill
-    quiet streams during long epochs; ping-aware hosts filter them out.
-- Worker control routes for remote nodes: `GET /busy` (`{"active_jobs": n}`, read by a
-  node-agent before self-destruct) and `POST /jobs/cancel-all` (what the host calls after a
-  restart it could not re-attach to). Both are host-owned; plugins implement neither.
+    `Authorization: Bearer <token>` on every HTTP route and on every websocket a plugin
+    declares (closed with 1008). `build_plugin_app(token=…)` carries the same knob. The worker
+    no longer serves generated OpenAPI/Swagger routes.
+  - `TLC_WORKER_STREAM_KEEPALIVE_S=<seconds>` makes the `/jobs/{id}/run` NDJSON stream emit
+    `{"event": "ping"}` between job events so HTTP proxies do not kill quiet streams during
+    long epochs.
+- Worker control routes `GET /busy` (`{"active_jobs": n}`) and `POST /jobs/cancel-all`. Both
+  are host-owned; plugins implement neither.
+- The worker applies the run body's top-level `_alias_overrides` around `run_job` (register
+  before, restore after), so a plugin needs no code for aliases the host re-points at staged
+  data. A plugin that applies the same overrides itself keeps working.
 - `PluginConfigStore.exists(config_id)` and `.directory`.
+- Manifest `[runtime] node_routes` documented: the custom routes that must run where the model
+  lives when a host with remote-node support runs the plugin on a remote worker; everything
+  else stays with the controller's worker. A host without that support ignores the key.
+- Run-body conventions for remote-ready plugins documented: inline `project_config`
+  (self-contained params, since a remote worker has no controller-local store), the
+  `_alias_overrides` shape, and `run_target` / `prepare_job_ids` as host-owned keys.
+- `plugin-api.d.ts`: optional `PLUGIN_API` members `getRunTarget`, `onRunTargetChange`,
+  `checkDataForRunTarget` and `hostChecksTableInputs` for frontends with remote-node support.
+  Absent elsewhere, so fragments feature-detect them.
 - `window.TlcCatalog` (`tlc_plugin_sdk.shared.catalog_table`): a sortable, searchable
   catalogue table with a per-row action button and expandable detail rows, for plugins that
   list provider offerings (GPU types, instance sizes). Injected into a fragment whose markup
@@ -37,23 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declare what a provider makes; the host sends `flavor` and `pricing` on every node request.
 - Manifest key `kind = "compute" | "infrastructure"` documented: infrastructure plugins
   provision GPU nodes and serve the conventional `/infra/*` node-CRUD routes.
-- Run-body conventions for remote-ready plugins documented: inline `project_config`
-  (self-contained params — remote workers have no controller-local stores) and the
-  existing `_alias_overrides` shape; `run_target` is host-owned.
 
 ### Changed
 - A job stays registered on the worker for as long as its **thread** runs, not its event
   stream, so a host that restarts mid-run can still cancel it. A cancel the job ignores for
   `TLC_WORKER_CANCEL_GRACE_S` seconds (default 60; `0` disables) makes the worker exit with
-  status 3 when that job is the last live one; the supervisor or node-agent spawns a fresh
-  worker for the next job.
+  status 3 when that job is the last live one; the supervisor spawns a fresh worker for the
+  next job.
 - Job ids must match `[A-Za-z0-9_-]{1,64}` (400 otherwise); a `/jobs/{id}/run` for an id
   still live on the worker answers 409 rather than replacing the running job.
 - When the host's job stream disconnects the worker stops buffering that job's events (the
   thread keeps running, cancellable), so a lost stream no longer grows memory for the rest of
   a training run.
-- The bearer-token guard also covers websocket routes a plugin declares (closed with 1008),
-  and the worker no longer serves generated OpenAPI/Swagger routes.
 - A plugin route handler on a reserved path (`/health`, `/ui`, `/compute`, `/busy`,
   `/reclaim`, `/jobs/*`) is not mounted; the collision is logged as an error.
 - `PluginConfigStore` writes its directory `0700` and config files `0600` (they hold keys).

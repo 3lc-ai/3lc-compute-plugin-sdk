@@ -14,7 +14,36 @@ from pathlib import Path
 
 import pytest
 
-from tlc_plugin_sdk import JobContext, JobFailed
+from tlc_plugin_sdk import JobContext, JobFailed, JobIdentity
+
+
+def test_identity_defaults_to_unknown() -> None:
+    ctx = _ctx([])
+    assert ctx.identity == JobIdentity()
+    assert not ctx.identity.known
+    assert ctx.identity.user_id is None and ctx.identity.org_id is None and ctx.identity.project_id is None
+
+
+def test_identity_is_carried_when_given() -> None:
+    identity = JobIdentity(user_id="u-1", org_id="o-1")
+    ctx = JobContext("job-1", {}, Path("/tmp"), sink=lambda _e: None, cancel_event=threading.Event(), identity=identity)
+    assert ctx.identity is identity
+    assert ctx.identity.known
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, JobIdentity()),
+        ("garbage", JobIdentity()),
+        ({}, JobIdentity()),
+        ({"user_id": "u-1", "org_id": "o-1", "project_id": "p-1"}, JobIdentity("u-1", "o-1", "p-1")),
+        ({"user_id": "u-1", "unknown_key": 1}, JobIdentity(user_id="u-1")),  # a newer host may add keys
+        ({"user_id": 42, "org_id": "", "project_id": None}, JobIdentity()),  # non-strings and empties read unknown
+    ],
+)
+def test_identity_from_wire_tolerates_anything(raw: object, expected: JobIdentity) -> None:
+    assert JobIdentity.from_wire(raw) == expected
 
 
 def _ctx(events: list[dict]) -> JobContext:

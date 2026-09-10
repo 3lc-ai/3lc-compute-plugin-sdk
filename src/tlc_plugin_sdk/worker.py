@@ -46,6 +46,7 @@ package surface.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gc
 import json
 import logging
@@ -54,16 +55,16 @@ import queue
 import re
 import sys
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 from litestar import Request, Response, get, post
 from litestar.exceptions import HTTPException
 from litestar.response import Stream
 
-from tlc_plugin_sdk.job_context import JobContext, JobFailed
+from tlc_plugin_sdk.job_context import IDENTITY_KEY, JobContext, JobFailed, JobIdentity
 
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
@@ -151,8 +152,13 @@ class _Worker:
                 msg = f"job {job_id!r} is still running on this worker"
                 raise JobAlreadyRunning(msg)
             self._jobs[job_id] = job
-        state_dir.mkdir(parents=True, exist_ok=True)
-        job.start()
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            job.start()
+        except BaseException:
+            with self._lock:
+                self._jobs.pop(job_id, None)
+            raise
         return job
 
     def live_jobs(self) -> list[_Job]:
@@ -260,11 +266,17 @@ class _Job:
         self.job_id = job_id
         self._on_end = on_end
         self._ended = threading.Event()
-        self._escalated = threading.Event()
+        self._escalate_lock = threading.Lock()
+        self._escalated = False
         self._abandoned = threading.Event()
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self._cancel = threading.Event()
-        self.ctx = JobContext(job_id, params, state_dir, sink=self._put_event, cancel_event=self._cancel)
+        # Host-owned key: popped here so a plugin's ``ctx.params`` never carries it (a plugin
+        # that persists its params must not persist who ran them).
+        identity = JobIdentity.from_wire(params.pop(IDENTITY_KEY, None))
+        self.ctx = JobContext(
+            job_id, params, state_dir, sink=self._put_event, cancel_event=self._cancel, identity=identity
+        )
         self._plugin = plugin
         self._thread = threading.Thread(target=self._run, name=f"job-{job_id}", daemon=True)
 
@@ -282,10 +294,11 @@ class _Job:
 
     def mark_escalated(self) -> bool:
         """Claim the single cancel watchdog for this job; False when one already runs."""
-        if self._escalated.is_set():
-            return False
-        self._escalated.set()
-        return True
+        with self._escalate_lock:
+            if self._escalated:
+                return False
+            self._escalated = True
+            return True
 
     def abandon(self) -> None:
         """The host's stream is gone: stop buffering events nobody will read.
@@ -308,7 +321,8 @@ class _Job:
 
     def _run(self) -> None:
         try:
-            self._plugin.run_job(self.ctx)
+            with _alias_overrides(self.ctx):
+                self._plugin.run_job(self.ctx)
             status = "cancelled" if self.ctx.cancelled else "completed"
             terminal: dict[str, Any] = {"event": "done", "status": status, "job_id": self.job_id}
         except JobFailed as exc:  # a clean, user-facing failure (ctx.fail / raise JobFailed)
@@ -326,6 +340,35 @@ class _Job:
         self._ended.set()
         if self._on_end is not None:
             self._on_end(self.job_id)
+
+
+@contextlib.contextmanager
+def _alias_overrides(ctx: JobContext) -> Iterator[None]:
+    """Apply the run body's ``_alias_overrides`` around ``run_job``; restore afterwards.
+
+    The host places ``{"enabled": true, "overrides": [{"token": …, "path": …}]}`` at the top
+    level of the run body when a table's data has been staged somewhere else for this worker
+    (a copy on a GPU node). Applying it here, once, means no plugin reads the key: the alias
+    already resolves to the staged copy by the time ``run_job`` opens the table. A plugin that
+    still applies the same overrides itself keeps working — re-registering an alias to the path
+    it already has is a no-op. Overrides that are absent, disabled or malformed apply nothing.
+    """
+    raw = ctx.params.get("_alias_overrides")
+    entries = raw.get("overrides") if isinstance(raw, dict) and raw.get("enabled") else None
+    overrides = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+    if not overrides:
+        yield
+        return
+    from tlc_plugin_sdk.shared.aliases import apply_alias_overrides, restore_aliases
+
+    originals = apply_alias_overrides(cast("list[dict[str, str]]", overrides))
+    if originals:
+        ctx.log(f"Applied {len(originals)} alias override(s)")
+    try:
+        yield
+    finally:
+        if originals:
+            restore_aliases(originals)
 
 
 def _stream_keepalive_seconds() -> float | None:

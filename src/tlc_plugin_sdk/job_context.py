@@ -15,11 +15,70 @@ Import-light: stdlib only. Must not pull in the server stack.
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
+
+#: The host-owned top-level run-body key that carries :class:`JobIdentity` to the worker.
+#: The worker pops it before ``ctx.params`` is built; a plugin never reads or sets it.
+IDENTITY_KEY = "_identity"
+
+
+@dataclass(frozen=True)
+class JobIdentity:
+    """Who a job runs for: the tenant identity the host stamped when it started the job.
+
+    Every field is the canonical string form of the id the host's identity provider uses
+    (UUIDs in the hosted service) or ``None`` when the host did not know it — a keyless local
+    dev host knows no user, and no host knows a project id yet. Plugins read this for
+    attribution and for authorization decisions made on their behalf later (a credential
+    lease is issued to a *job's* identity, never to a plugin); they never set it.
+
+    Attributes:
+        user_id: The user who started the job.
+        org_id: The organization (tenant) the job belongs to.
+        project_id: The project the job belongs to, when the host resolved one.
+
+    """
+
+    user_id: str | None = None
+    org_id: str | None = None
+    project_id: str | None = None
+
+    @classmethod
+    def from_wire(cls, raw: object) -> JobIdentity:
+        """Build an identity from the run body's ``_identity`` value, tolerating anything.
+
+        Unknown keys are ignored and non-string values read as unknown, so a host of any
+        version can stamp whatever it knows and an old worker never fails a job over it.
+
+        Args:
+            raw: The value found under :data:`IDENTITY_KEY`, or ``None``.
+
+        Returns:
+            The identity; empty when ``raw`` is not a mapping.
+
+        """
+        if not isinstance(raw, dict):
+            return cls()
+        mapping: Mapping[str, object] = raw
+        return cls(
+            user_id=_str_or_none(mapping.get("user_id")),
+            org_id=_str_or_none(mapping.get("org_id")),
+            project_id=_str_or_none(mapping.get("project_id")),
+        )
+
+    @property
+    def known(self) -> bool:
+        """Whether the host stamped any identity at all."""
+        return any((self.user_id, self.org_id, self.project_id))
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 class JobFailed(Exception):
@@ -43,6 +102,7 @@ class JobContext:
             reinstall/reload (plugins must not write inside their package dir).
         sink: Callable invoked with each emitted event dict.
         cancel_event: Set by the host/worker to request cooperative cancellation.
+        identity: Who the job runs for (see :class:`JobIdentity`); empty when omitted.
 
     """
 
@@ -54,10 +114,12 @@ class JobContext:
         *,
         sink: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
+        identity: JobIdentity | None = None,
     ) -> None:
         self.job_id = job_id
         self.params = params or {}
         self.state_dir = state_dir
+        self.identity = identity if identity is not None else JobIdentity()
         self._sink = sink
         self._cancel = cancel_event
 
