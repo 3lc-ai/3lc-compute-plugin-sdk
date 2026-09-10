@@ -105,8 +105,10 @@ class ComputePlugin(ABC):
         plugin's own Litestar app in its worker, reverse-proxied by the host (see
         ``tlc_plugin_sdk/asgi_app.py``); Litestar runs ``def`` handlers in a threadpool,
         so a synchronous, blocking custom route does not block the event loop. The
-        reserved routes (``/run``, ``/health``, ``/ui``, ``/compute``, ``/jobs/*``,
-        and the host admin routes ``/provision`` ``/reload`` ``/venv`` ``/worker/stop``)
-        are host-owned — a plugin must not define them. Empty by default.
+        reserved routes (``/run``, ``/health``, ``/ui``, ``/compute``, ``/busy``,
+        ``/reclaim``, ``/jobs/*`` including ``/jobs/cancel-all``, and the host admin routes
+        ``/provision`` ``/reload`` ``/venv`` ``/worker/stop``) are host-owned — a plugin must
+        not define them; a handler on one of them is not mounted (logged as an error).
+        Empty by default.
         """
         return []

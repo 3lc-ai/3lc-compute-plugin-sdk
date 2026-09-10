@@ -126,6 +126,12 @@ isolation = "venv"                  # "venv" is the only value (and the default 
 entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
 provision_extra = "my-plugin"       # your plugin's dependency group: host runs `uv sync --extra <this>`
+# Custom routes that must run where the model lives when a host with remote-node support
+# runs this plugin on a remote worker (inference, model warm-up/status). Path prefixes
+# relative to your route root. Everything NOT listed stays with the controller's worker —
+# config stores, model catalogs, table reads — so saved configs have one history. A host
+# without remote-node support ignores the key.
+# node_routes = ["/preview", "/model-status"]
 # The plugin's SocketIO namespace is host-derived as "/<plugin-id>" and registered at
 # startup — it is NOT declarable in the manifest (a plugin emits via ctx; the host owns
 # the transport).
@@ -543,9 +549,72 @@ The `progress` / `metric` / `result` calls above are what populate that generic 
 translated to the frontend's plugin-agnostic schema by the host, so no plugin-specific
 field ever reaches the frontend.
 
+**A cancel always ends the job — poll `ctx.cancelled` so it ends cleanly.** Cancel is
+cooperative first: the worker sets `ctx.cancelled` and your loop returns at its next
+checkpoint (the host marks the job "cancelled"). A loop that never checks is not allowed
+to keep a GPU busy: after `TLC_WORKER_CANCEL_GRACE_S` seconds (default 60; `0` disables)
+the worker process exits with status 3 when the unresponsive job is the last one live in it,
+and the supervisor spawns a fresh worker for the next job — so an
+unhonoured cancel costs you the process, and any partial state you did not flush. The grace
+period includes your cleanup: flush checkpoints before you return from a cancel, not after.
+When other jobs are live in the same worker the unresponsive thread is left running (it ends
+with the process) and reported in the worker log; nothing else is interrupted.
+The worker keeps a job registered for as long as its **thread** runs, not its event
+stream: a host that restarts mid-run can still cancel the job afterwards
+(`POST /jobs/{id}/cancel`, or `POST /jobs/cancel-all` for everything still live), so a lost
+stream never leaves a training running for nobody. Job ids are chosen by the host and must
+match `[A-Za-z0-9_-]{1,64}`; a run for an id that is still live on the worker answers 409.
+
 **Start a job from the UI** with the generic run route — `POST /api/plugins/{id}/run`
 with the params as the JSON body; it returns `{job_id, status, namespace}`. The easiest
 way to consume it is `window.PluginJobs` (next section).
+
+### Run-body conventions for remote workers
+
+A host with remote-node support can run a `requires_gpu` job on a **remote worker** — a
+TCP worker on another machine — over the same stream contract. These conventions make a
+plugin remote-ready; all are optional locally and additive:
+
+- **Self-contained params (`project_config`).** A remote worker has none of the
+  controller's local state — in particular, nothing saved by a worker-local config or
+  project store exists on the node. If your `run_job` resolves an id against such a
+  store, also accept the frozen configuration inline (recommended key:
+  `project_config`) and prefer it when present; have your fragment always include it in
+  the run body (harmless locally, required remotely).
+- **`_alias_overrides` is applied by the worker.** When a table's data has been staged
+  somewhere else for this worker (a copy on a remote node), the host puts
+  `{"enabled": true, "overrides": [{"token": "MY_DATA", "path": "/staged/…"}]}` at the top
+  level of the run body (tokens are bare, no angle brackets). The worker registers those
+  aliases before `run_job` and restores them after, so the table resolves to the staged copy
+  with no code in the plugin. A plugin that persists its own alias overrides with its saved
+  config keeps applying those itself; a plugin that used to read the top-level key can drop
+  that code (applying the same override twice is a no-op).
+- **`run_target` is host-owned.** The run body may carry `run_target` (where to run); the
+  host consumes it before params reach the worker — never read or set it in a plugin. The
+  same goes for `prepare_job_ids` (the data-copy jobs a remote run waits for): the host pops
+  it, orders the run behind the copies, and delivers their result as `_alias_overrides`,
+  which the worker applies for you.
+- **Custom routes stay with the controller unless declared.** A host with remote-node
+  support forwards a custom route to the remote worker only if your manifest lists it under
+  `[runtime] node_routes` (e.g. sam3's `/preview`). Config/project stores, model catalogs
+  and table reads must NOT be listed: they are controller state, and the remote copy of your
+  worker starts with an empty store. Nothing to code; keep the list honest.
+- **Selection-time data notes.** A frontend with remote-node support exposes optional
+  `PLUGIN_API` members — `getRunTarget`, `onRunTargetChange`, `checkDataForRunTarget` (see
+  `plugin-api.d.ts`) — and may annotate every table input in a GPU fragment with the verdict
+  itself, announced by `PLUGIN_API.hostChecksTableInputs`; opt a field in or out with
+  `data-run-target-check="table"|"off"`. Feature-detect the members (frontends without
+  remote-node support have none of them) and call `checkDataForRunTarget` yourself only for
+  bespoke placement, skipping it when `hostChecksTableInputs` is true.
+
+Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every request must
+carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the
+job stream (`TLC_WORKER_STREAM_KEEPALIVE_S`) so provider proxies don't kill quiet
+streams; a host that enables keepalives filters the pings before events reach any
+consumer. Neither affects a local Unix-socket worker. Every worker also answers `GET /busy`
+(`{"active_jobs": n}`, read before a remote worker's machine is torn down) and
+`POST /jobs/cancel-all` (what a host calls after a restart it could not re-attach to);
+plugins implement neither.
 
 ---
 
@@ -1027,3 +1096,21 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 Agent-facing guidance for building a plugin end-to-end (reading order, step-by-step,
 code patterns, common mistakes, testing) lives in this repo's
 [`CLAUDE.md`](https://github.com/3lc-ai/3lc-compute-plugin-sdk/blob/main/CLAUDE.md).
+
+## Which 3LC project a job belongs to
+
+The Hub's project page shows a job in its **Queue & Progress** panel only when the host knows the job's
+3LC project. The host resolves it once, when the run starts, in this order — nothing comes from the browser
+address:
+
+1. `project_name` in the run body. The SDK's job starter sets it from the launch context; a plugin that knows
+   the project can set it explicitly, and an explicit value always wins.
+2. Any table or run URL in the body. The Object Service lays projects out as `…/projects/<project>/…`, so an
+   inline config with `train_table_url` names its project by itself.
+3. The plugin's saved project config. A body that carries only `project_id` refers to a record the plugin
+   serves at `GET /projects/{project_id}`; the host reads its `project_name` (the **3LC Project** field every
+   training form has). Keep that route and field if your plugin saves its configs.
+
+While the job runs, any event whose payload carries `project_name` (or a `run_url` under a project) also sets
+the project if it was still unknown. Emit `ctx.result(run_url)` as soon as the run exists and the panel
+catches up even when the start carried nothing.

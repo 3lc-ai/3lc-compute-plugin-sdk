@@ -22,6 +22,7 @@ the import-light :mod:`tlc_plugin_sdk` package surface — so
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from litestar import Litestar, Request, get
@@ -33,6 +34,9 @@ if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
 
     from tlc_plugin_sdk.contract import ComputePlugin
+
+
+logger = logging.getLogger(__name__)
 
 
 def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
@@ -75,11 +79,63 @@ def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
     return [health, ui, compute]
 
 
+def _bearer_guard(token: str) -> Any:
+    """An ASGI middleware factory rejecting requests without ``Authorization: Bearer <token>``.
+
+    Installed only when a token is configured — a worker on a Unix socket runs with no
+    token and never pays for this. Guards every HTTP route, ``/health`` included, and every
+    websocket a plugin declares (closed with code 1008 before accept). Callers that own the
+    token (the controller's supervisor, the node-agent) send it on probes too.
+
+    Litestar applies app middleware per matched route, so an unknown path still answers 404
+    and a wrong method 405 without the token: the guard protects content, not the route
+    table. ``lifespan`` scopes pass through.
+    """
+    import hmac
+
+    expected = f"Bearer {token}".encode()
+
+    def factory(app: Any) -> Any:
+        async def guard(scope: Any, receive: Any, send: Any) -> None:
+            kind = scope["type"]
+            if kind not in ("http", "websocket"):
+                await app(scope, receive, send)
+                return
+            auth = b""
+            for name, value in scope.get("headers", []):
+                if name == b"authorization":
+                    auth = value
+                    break
+            # Constant-time compare: a timing oracle on the token would defeat it.
+            if hmac.compare_digest(auth, expected):
+                await app(scope, receive, send)
+                return
+            if kind == "websocket":
+                # 1008 = policy violation; closing before accept makes the handshake fail.
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            body = b'{"detail":"unauthorized"}'
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+
+        return guard
+
+    return factory
+
+
 def build_plugin_app(
     plugin: ComputePlugin,
     *,
     extra_handlers: list[BaseRouteHandler] | None = None,
     debug: bool = False,
+    token: str | None = None,
 ) -> Litestar:
     """Build the Litestar app serving ``plugin``'s HTTP surface.
 
@@ -88,6 +144,9 @@ def build_plugin_app(
         extra_handlers: The worker's job-channel handlers (the ``/jobs/{id}/run``
             stream, ``/jobs/{id}/cancel``, and ``/reclaim``).
         debug: Litestar debug flag.
+        token: When set, every request must carry ``Authorization: Bearer <token>``
+            (401 otherwise). Set for TCP workers on remote nodes; ``None`` (the
+            default) leaves local/UDS behavior untouched — no middleware installed.
 
     Returns:
         A Litestar app mounting, in trie-priority order: the plugin's own relative
@@ -96,8 +155,40 @@ def build_plugin_app(
 
     """
     handlers: list[Any] = [
-        *plugin.get_route_handlers(),
+        *_without_reserved(plugin.get_route_handlers(), plugin),
         *_generic_handlers(plugin),
         *(extra_handlers or []),
     ]
-    return Litestar(route_handlers=handlers, debug=debug)
+    middleware: list[Any] = [_bearer_guard(token)] if token else []
+    # No generated OpenAPI/Swagger routes: a worker is an internal endpoint, and on a node the
+    # schema would describe the job channel to anyone who reached the port.
+    return Litestar(route_handlers=handlers, debug=debug, middleware=middleware, openapi_config=None)
+
+
+# Paths the host and the worker own. A plugin handler on one of them would shadow the
+# worker's (``/busy`` shadowed = a node-agent's self-destruct guard answers whatever the
+# plugin says). Plugins mount first for trie priority, so collisions are removed here.
+RESERVED_WORKER_PATHS: frozenset[str] = frozenset({"/health", "/ui", "/compute", "/busy", "/reclaim"})
+RESERVED_WORKER_PREFIXES: tuple[str, ...] = ("/jobs",)
+
+
+def _without_reserved(handlers: list[Any], plugin: ComputePlugin) -> list[Any]:
+    kept: list[Any] = []
+    for handler in handlers:
+        paths = {"/" + str(p).strip("/") for p in (getattr(handler, "paths", None) or ())}
+        clash = [
+            p
+            for p in paths
+            if p in RESERVED_WORKER_PATHS or any(p == r or p.startswith(r + "/") for r in RESERVED_WORKER_PREFIXES)
+        ]
+        if clash:
+            logger.error(
+                "Plugin %s declares reserved route(s) %s; the handler is not mounted (host-owned paths: %s, %s/*)",
+                getattr(plugin, "id", "?"),
+                ", ".join(sorted(clash)),
+                ", ".join(sorted(RESERVED_WORKER_PATHS)),
+                ", ".join(RESERVED_WORKER_PREFIXES),
+            )
+            continue
+        kept.append(handler)
+    return kept
