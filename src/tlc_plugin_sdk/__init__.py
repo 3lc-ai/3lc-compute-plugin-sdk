@@ -25,7 +25,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from tlc_plugin_sdk.contract import ComputePlugin
-from tlc_plugin_sdk.job_context import JobContext, JobFailed
+from tlc_plugin_sdk.job_context import JobContext, JobFailed, JobIdentity
 
 # The plugin contract version — one axis, one source of truth: this package's own
 # version (the ``[project] version`` in pyproject), read via importlib.metadata rather
@@ -39,4 +39,4 @@ try:
 except PackageNotFoundError:  # running from a raw checkout that was never installed
     SDK_CONTRACT_VERSION = "0.0.0"
 
-__all__ = ["SDK_CONTRACT_VERSION", "ComputePlugin", "JobContext", "JobFailed"]
+__all__ = ["SDK_CONTRACT_VERSION", "ComputePlugin", "JobContext", "JobFailed", "JobIdentity"]

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ctx.identity`: a `JobIdentity` (`user_id`, `org_id`, `project_id` — canonical id strings,
+  `None` when the host did not know) saying who a job runs for. The host stamps it under the
+  host-owned top-level run-body key `_identity`; the worker pops it before `ctx.params` is built,
+  so a plugin never reads the key and never persists it with saved params. Every field is `None`
+  on a host that stamps nothing (an older host, or a keyless local one). Plugins read it for
+  attribution; a later credential API leases to this identity, never to a plugin.
 - Remote-worker hardening for TCP workers (opt-in; a local Unix-socket worker is unchanged):
   - `python -m tlc_plugin_sdk.worker --token …` (default `$TLC_WORKER_TOKEN`) requires
     `Authorization: Bearer <token>` on every HTTP route and on every websocket a plugin
