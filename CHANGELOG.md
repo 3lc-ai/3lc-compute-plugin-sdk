@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-10
+
 ### Added
 - `ctx.identity`: a `JobIdentity` (`user_id`, `org_id`, `project_id` — canonical id strings,
   `None` when the host did not know) saying who a job runs for. The host stamps it under the
