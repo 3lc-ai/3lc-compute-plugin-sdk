@@ -64,7 +64,7 @@ from litestar import Request, Response, get, post
 from litestar.exceptions import HTTPException
 from litestar.response import Stream
 
-from tlc_plugin_sdk.job_context import JobContext, JobFailed
+from tlc_plugin_sdk.job_context import IDENTITY_KEY, JobContext, JobFailed, JobIdentity
 
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
@@ -271,7 +271,12 @@ class _Job:
         self._abandoned = threading.Event()
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self._cancel = threading.Event()
-        self.ctx = JobContext(job_id, params, state_dir, sink=self._put_event, cancel_event=self._cancel)
+        # Host-owned key: popped here so a plugin's ``ctx.params`` never carries it (a plugin
+        # that persists its params must not persist who ran them).
+        identity = JobIdentity.from_wire(params.pop(IDENTITY_KEY, None))
+        self.ctx = JobContext(
+            job_id, params, state_dir, sink=self._put_event, cancel_event=self._cancel, identity=identity
+        )
         self._plugin = plugin
         self._thread = threading.Thread(target=self._run, name=f"job-{job_id}", daemon=True)
 

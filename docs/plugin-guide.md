@@ -534,6 +534,7 @@ class MyGpuPlugin(ComputePlugin):
 | `ctx.params` | Job parameters (parsed request body / query). |
 | `ctx.cancelled` | `True` once cancel is requested — poll at checkpoints. |
 | `ctx.state_dir` | Writable per-plugin scratch dir (never write inside the package). |
+| `ctx.identity` | Who the job runs for: a `JobIdentity` with `user_id`, `org_id`, `project_id` (canonical id strings, or `None` when the host did not know). Read it for attribution; never set it. |
 | `ctx.progress(*, percent, label="", timing=None)` | Generic progress bar. `percent=-1` = indeterminate. `timing` = `{elapsed_s, eta_s, avg_step_s, step_label}`. |
 | `ctx.metric(label, value)` | Scalar metric card on the generic panel. |
 | `ctx.log(message)` | A log line for the job. |
@@ -594,6 +595,13 @@ plugin remote-ready; all are optional locally and additive:
   same goes for `prepare_job_ids` (the data-copy jobs a remote run waits for): the host pops
   it, orders the run behind the copies, and delivers their result as `_alias_overrides`,
   which the worker applies for you.
+- **`_identity` is host-owned and becomes `ctx.identity`.** The host stamps who the job runs
+  for (`{"user_id", "org_id", "project_id"}`, canonical id strings) under the top-level
+  `_identity` key; the worker pops it before `ctx.params` is built and exposes it as
+  `ctx.identity` (a `JobIdentity`; every field `None` when the host did not know it, as on a
+  keyless local host). A fragment never sets it — the host overwrites whatever the browser
+  sent — and a plugin never persists it with saved params. Read it for attribution; the
+  forthcoming credential API leases credentials to *this* identity, never to a plugin.
 - **Custom routes stay with the controller unless declared.** A host with remote-node
   support forwards a custom route to the remote worker only if your manifest lists it under
   `[runtime] node_routes` (e.g. sam3's `/preview`). Config/project stores, model catalogs

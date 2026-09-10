@@ -12,6 +12,9 @@ package's own docstrings.
 .. autoclass:: tlc_plugin_sdk.JobContext
    :members:
 
+.. autoclass:: tlc_plugin_sdk.JobIdentity
+   :members:
+
 .. autodata:: tlc_plugin_sdk.SDK_CONTRACT_VERSION
 ```
 
