@@ -31,9 +31,14 @@ def test_import_is_light() -> None:
 
 def test_exposes_contract() -> None:
     import tlc_plugin_sdk
-    from tlc_plugin_sdk.contract import ComputePlugin
+    from tlc_plugin_sdk.contract import ComputePlugin, HubPlugin
+    from tlc_plugin_sdk.infrastructure import InfrastructurePlugin
 
     assert tlc_plugin_sdk.ComputePlugin is ComputePlugin
+    assert tlc_plugin_sdk.HubPlugin is HubPlugin
+    assert tlc_plugin_sdk.InfrastructurePlugin is InfrastructurePlugin
+    assert issubclass(ComputePlugin, HubPlugin)
+    assert issubclass(InfrastructurePlugin, HubPlugin)
     # The contract version is this package's own version — one source of truth.
     from importlib.metadata import version
 
