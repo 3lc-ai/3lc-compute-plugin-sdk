@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-11
+
+### Added
+- **Plugin hierarchy:** `HubPlugin` base class extracted from `ComputePlugin`.
+  `ComputePlugin(HubPlugin)` keeps its full interface — no existing import breaks.
+  A plugin that only needs a UI fragment, synchronous compute, and/or custom routes
+  (e.g. a config-service sidebar tool) can now subclass `HubPlugin` directly.
+- **`InfrastructurePlugin(HubPlugin)`:** typed provider contract for remote-node
+  plugins (`kind = "infrastructure"`).  Four abstract methods — `capabilities()`,
+  `create_node()`, `node_state()`, `delete_node()` — plus an optional `preflight()`.
+  The default `get_route_handlers()` auto-mounts Litestar handlers for the five
+  `/infra/*` routes, so a provider plugin gets its HTTP surface for free.
+- **Typed infra dataclasses** in `tlc_plugin_sdk.infra`: `CreateNodeRequest`,
+  `CreateNodeResponse`, `NodeStateResponse`, `CapabilitiesResponse`,
+  `PreflightCheck`, `PreflightResponse`, and `NodeProviderState`.  Each carries
+  `from_dict` / `to_dict` for wire-format conversion.
+- Top-level exports: `HubPlugin` and `InfrastructurePlugin` are now in
+  `tlc_plugin_sdk.__all__` alongside `ComputePlugin`.
+
 ## [0.4.0] - 2026-09-10
 
 ### Added
