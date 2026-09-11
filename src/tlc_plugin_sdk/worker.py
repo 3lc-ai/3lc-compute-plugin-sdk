@@ -462,6 +462,24 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
     return [run_job, cancel_job, cancel_all, busy, reclaim]
 
 
+def _initialise_runtime(plugin: object, plugin_id: str) -> None:
+    """Run the plugin's ``initialise_runtime`` hook, when it has one.
+
+    Only :class:`~tlc_plugin_sdk.contract.ComputePlugin` declares the hook; a plugin that
+    subclasses :class:`~tlc_plugin_sdk.contract.HubPlugin` or
+    :class:`~tlc_plugin_sdk.infrastructure.InfrastructurePlugin` directly has no runtime to
+    initialise, and the worker must come up clean for it rather than log a traceback. A hook
+    that raises is logged, not fatal: the worker still serves its routes.
+    """
+    hook = getattr(plugin, "initialise_runtime", None)
+    if not callable(hook):
+        return
+    try:
+        hook()
+    except Exception:
+        logger.exception("initialise_runtime failed for plugin %s", plugin_id)
+
+
 def _load_plugin(entry: str) -> ComputePlugin:
     module_name, _, cls_name = entry.partition(":")
     if not cls_name:
@@ -523,10 +541,7 @@ def serve(
     root.mkdir(parents=True, exist_ok=True)
     worker = _Worker(plugin, plugin_id, root)
 
-    try:
-        plugin.initialise_runtime()
-    except Exception:
-        logger.exception("initialise_runtime failed for plugin %s", plugin_id)
+    _initialise_runtime(plugin, plugin_id)
 
     if socket_path is not None and os.path.exists(socket_path):
         os.unlink(socket_path)

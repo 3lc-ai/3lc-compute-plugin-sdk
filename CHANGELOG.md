@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The worker no longer logs an `AttributeError` traceback at start-up for a plugin that
+  subclasses `HubPlugin` or `InfrastructurePlugin` directly: `initialise_runtime` is a
+  `ComputePlugin` hook, and is now only called when the plugin has it.
+
 ## [0.5.0] - 2026-09-11
 
 ### Added
