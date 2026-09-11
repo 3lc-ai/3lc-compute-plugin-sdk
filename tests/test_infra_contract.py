@@ -234,11 +234,14 @@ class TestDefaultRouteHandlers:
         assert data["ok"] is True
 
     def test_create_node(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.post("/infra/nodes", json={
-            "node_id": "n1",
-            "node_type": "A100",
-            "token": "tok",
-        })
+        resp = stub_client.post(
+            "/infra/nodes",
+            json={
+                "node_id": "n1",
+                "node_type": "A100",
+                "token": "tok",
+            },
+        )
         assert resp.status_code == 201
         data = resp.json()
         assert data["provider_id"] == "stub-A100"
@@ -246,11 +249,14 @@ class TestDefaultRouteHandlers:
 
     def test_create_node_gpu_type_compat(self, stub_client: TestClient[Litestar]) -> None:
         """The host may still send ``gpu_type`` — accepted for backward compat."""
-        resp = stub_client.post("/infra/nodes", json={
-            "node_id": "n1",
-            "gpu_type": "A100",
-            "token": "tok",
-        })
+        resp = stub_client.post(
+            "/infra/nodes",
+            json={
+                "node_id": "n1",
+                "gpu_type": "A100",
+                "token": "tok",
+            },
+        )
         assert resp.status_code == 201
         assert resp.json()["provider_id"] == "stub-A100"
 
