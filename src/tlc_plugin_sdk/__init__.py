@@ -31,7 +31,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from tlc_plugin_sdk.contract import ComputePlugin, HubPlugin
-from tlc_plugin_sdk.infra import InfrastructurePlugin
+from tlc_plugin_sdk.infrastructure import InfrastructurePlugin
 from tlc_plugin_sdk.job_context import JobContext, JobFailed, JobIdentity
 
 # The plugin contract version — one axis, one source of truth: this package's own

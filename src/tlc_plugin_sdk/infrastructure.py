@@ -37,7 +37,7 @@ class CreateNodeRequest:
     """What the host sends when it asks a provider to create a node."""
 
     node_id: str
-    gpu_type: str
+    node_type: str
     token: str
     env: dict[str, str] = field(default_factory=dict)
     agent_port: int = 8800
@@ -52,7 +52,7 @@ class CreateNodeRequest:
         """Parse from the JSON body the host sends."""
         return cls(
             node_id=str(data.get("node_id", "") or "").strip(),
-            gpu_type=str(data.get("gpu_type", "") or ""),
+            node_type=str(data.get("node_type") or data.get("gpu_type") or ""),
             token=str(data.get("token", "") or ""),
             env={str(k): str(v) for k, v in (data.get("env") or {}).items()},
             agent_port=int(data.get("agent_port", 8800) or 8800),
@@ -141,25 +141,33 @@ class PreflightResponse:
 class CapabilitiesResponse:
     """What a provider returns for a capabilities query.
 
-    The ``gpu_types`` list names what the host's create dialog offers.  Provider
-    plugins may include additional fields — the host passes the dict through.
+    ``node_types`` lists the node kinds this provider can create — instance types
+    for a cloud provider, machine names for a static-machine provider.  The host's
+    create-node dialog offers these as choices.
+
+    ``extra`` carries provider-specific data (machine details, pricing tiers, region
+    info) that the host passes through to the plugin's own UI fragment.
     """
 
     provider: str
-    gpu_types: list[str] = field(default_factory=list)
+    node_types: list[str] = field(default_factory=list)
     flavors: list[str] = field(default_factory=lambda: ["gpu"])
     ready: bool = False
     missing: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the JSON body the host expects."""
-        return {
+        d: dict[str, Any] = {
             "provider": self.provider,
-            "gpu_types": self.gpu_types,
+            "node_types": self.node_types,
             "flavors": self.flavors,
             "ready": self.ready,
             "missing": self.missing,
         }
+        if self.extra:
+            d.update(self.extra)
+        return d
 
 
 # ── The plugin base class ────────────────────────────────────────────────────
@@ -185,7 +193,7 @@ class InfrastructurePlugin(HubPlugin):
     def capabilities(self) -> CapabilitiesResponse:
         """Report what this provider offers.
 
-        Called via ``GET /infra/capabilities``.  The ``gpu_types`` list populates
+        Called via ``GET /infra/capabilities``.  The ``node_types`` list populates
         the host's create-node dialog.
         """
         ...
@@ -224,7 +232,7 @@ class InfrastructurePlugin(HubPlugin):
         """
         ...
 
-    def preflight(self, gpu_type: str = "", datacenter: str = "") -> PreflightResponse:
+    def preflight(self, node_type: str = "", datacenter: str = "") -> PreflightResponse:
         """Optional pre-start checks (funds, stock, quota, reachability).
 
         Called via ``GET /infra/preflight``.  The default returns an unconditional
@@ -259,8 +267,8 @@ def _build_infra_handlers(plugin: InfrastructurePlugin) -> list[Any]:
         return plugin.capabilities().to_dict()
 
     @http_get("/infra/preflight", sync_to_thread=True)
-    def _preflight(gpu_type: str = "", datacenter: str = "") -> dict[str, Any]:
-        return plugin.preflight(gpu_type=gpu_type, datacenter=datacenter).to_dict()
+    def _preflight(node_type: str = "", datacenter: str = "") -> dict[str, Any]:
+        return plugin.preflight(node_type=node_type, datacenter=datacenter).to_dict()
 
     @http_post("/infra/nodes", sync_to_thread=True)
     def _create_node(data: dict[str, Any]) -> dict[str, Any]:

@@ -19,12 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create_node()`, `node_state()`, `delete_node()` — plus an optional `preflight()`.
   The default `get_route_handlers()` auto-mounts Litestar handlers for the five
   `/infra/*` routes, so a provider plugin gets its HTTP surface for free.
-- **Typed infra dataclasses** in `tlc_plugin_sdk.infra`: `CreateNodeRequest`,
+- **Typed infra dataclasses** in `tlc_plugin_sdk.infrastructure`: `CreateNodeRequest`,
   `CreateNodeResponse`, `NodeStateResponse`, `CapabilitiesResponse`,
   `PreflightCheck`, `PreflightResponse`, and `NodeProviderState`.  Each carries
   `from_dict` / `to_dict` for wire-format conversion.
+- `CapabilitiesResponse.extra` — a `dict[str, Any]` for provider-specific data
+  (machine details, pricing tiers, region info) that the host passes through.
 - Top-level exports: `HubPlugin` and `InfrastructurePlugin` are now in
   `tlc_plugin_sdk.__all__` alongside `ComputePlugin`.
+
+### Changed
+- `gpu_type` / `gpu_types` renamed to `node_type` / `node_types` throughout the
+  infra contract — a node is a node, GPU specs are an attribute.
+  `CreateNodeRequest.from_dict()` still accepts the old `gpu_type` key for
+  backward compatibility with hosts that have not yet updated.
 
 ## [0.4.0] - 2026-09-10
 

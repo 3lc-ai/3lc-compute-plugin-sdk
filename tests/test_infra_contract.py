@@ -11,17 +11,15 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 from tlc_plugin_sdk.contract import HubPlugin
-from tlc_plugin_sdk.infra import (
+from tlc_plugin_sdk.infrastructure import (
     CapabilitiesResponse,
     CreateNodeRequest,
     CreateNodeResponse,
     InfrastructurePlugin,
-    NodeProviderState,
     NodeStateResponse,
     PreflightCheck,
     PreflightResponse,
 )
-
 
 # ── Dataclass unit tests ─────────────────────────────────────────────────────
 
@@ -30,7 +28,7 @@ class TestCreateNodeRequest:
     def test_from_dict_full(self) -> None:
         req = CreateNodeRequest.from_dict({
             "node_id": " n1 ",
-            "gpu_type": "A100",
+            "node_type": "A100",
             "token": "tok",
             "env": {"K": "V"},
             "agent_port": 9900,
@@ -41,7 +39,7 @@ class TestCreateNodeRequest:
             "pricing": "spot",
         })
         assert req.node_id == "n1"
-        assert req.gpu_type == "A100"
+        assert req.node_type == "A100"
         assert req.token == "tok"
         assert req.env == {"K": "V"}
         assert req.agent_port == 9900
@@ -51,8 +49,9 @@ class TestCreateNodeRequest:
         assert req.pricing == "spot"
 
     def test_from_dict_minimal(self) -> None:
-        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "gpu_type": "H100"})
+        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "node_type": "H100"})
         assert req.node_id == "n1"
+        assert req.node_type == "H100"
         assert req.env == {}
         assert req.agent_port == 8800
         assert req.ports == []
@@ -61,11 +60,26 @@ class TestCreateNodeRequest:
         assert req.owner == ""
         assert req.pricing == ""
 
+    def test_from_dict_gpu_type_compat(self) -> None:
+        """The host may still send ``gpu_type`` — from_dict accepts both names."""
+        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "gpu_type": "H100"})
+        assert req.node_type == "H100"
+
+    def test_from_dict_node_type_wins(self) -> None:
+        """When both keys are present, ``node_type`` wins."""
+        req = CreateNodeRequest.from_dict({
+            "node_id": "n1",
+            "token": "tok",
+            "node_type": "new",
+            "gpu_type": "old",
+        })
+        assert req.node_type == "new"
+
     def test_from_dict_none_coercion(self) -> None:
         req = CreateNodeRequest.from_dict({
             "node_id": "n1",
             "token": "tok",
-            "gpu_type": "H100",
+            "node_type": "H100",
             "env": None,
             "agent_port": None,
             "idle_ttl_s": None,
@@ -124,13 +138,29 @@ class TestPreflightResponse:
 
 class TestCapabilitiesResponse:
     def test_to_dict(self) -> None:
-        resp = CapabilitiesResponse(provider="test", gpu_types=["A100"], ready=True)
+        resp = CapabilitiesResponse(provider="test", node_types=["A100"], ready=True)
         d = resp.to_dict()
         assert d["provider"] == "test"
-        assert d["gpu_types"] == ["A100"]
+        assert d["node_types"] == ["A100"]
         assert d["flavors"] == ["gpu"]
         assert d["ready"] is True
         assert d["missing"] == []
+
+    def test_extra_merged(self) -> None:
+        resp = CapabilitiesResponse(
+            provider="machines",
+            node_types=["devbox"],
+            ready=True,
+            extra={"machines": [{"name": "devbox", "gpu": "RTX 4090"}]},
+        )
+        d = resp.to_dict()
+        assert d["machines"] == [{"name": "devbox", "gpu": "RTX 4090"}]
+        assert d["node_types"] == ["devbox"]
+
+    def test_extra_empty_not_in_dict(self) -> None:
+        resp = CapabilitiesResponse(provider="test", node_types=[], ready=False)
+        d = resp.to_dict()
+        assert "machines" not in d
 
 
 # ── InfrastructurePlugin hierarchy tests ─────────────────────────────────────
@@ -155,13 +185,18 @@ class _StubProvider(InfrastructurePlugin):
         return "<div>stub</div>"
 
     def capabilities(self) -> CapabilitiesResponse:
-        return CapabilitiesResponse(provider="stub", gpu_types=["T4", "A100"], ready=True)
+        return CapabilitiesResponse(
+            provider="stub",
+            node_types=["T4", "A100"],
+            ready=True,
+            extra={"region": "us-east-1"},
+        )
 
     def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
         return CreateNodeResponse(
-            provider_id=f"stub-{request.gpu_type}",
+            provider_id=f"stub-{request.node_type}",
             agent_url=f"http://stub:{request.agent_port}",
-            worker_url_template=f"http://stub:{{port}}",
+            worker_url_template="http://stub:{port}",
         )
 
     def node_state(self, provider_id: str) -> NodeStateResponse:
@@ -188,8 +223,9 @@ class TestDefaultRouteHandlers:
         assert resp.status_code == 200
         data = resp.json()
         assert data["provider"] == "stub"
-        assert data["gpu_types"] == ["T4", "A100"]
+        assert data["node_types"] == ["T4", "A100"]
         assert data["ready"] is True
+        assert data["region"] == "us-east-1"
 
     def test_preflight_default(self, stub_client: TestClient[Litestar]) -> None:
         resp = stub_client.get("/infra/preflight")
@@ -200,7 +236,7 @@ class TestDefaultRouteHandlers:
     def test_create_node(self, stub_client: TestClient[Litestar]) -> None:
         resp = stub_client.post("/infra/nodes", json={
             "node_id": "n1",
-            "gpu_type": "A100",
+            "node_type": "A100",
             "token": "tok",
         })
         assert resp.status_code == 201
@@ -208,8 +244,18 @@ class TestDefaultRouteHandlers:
         assert data["provider_id"] == "stub-A100"
         assert "agent_url" in data
 
+    def test_create_node_gpu_type_compat(self, stub_client: TestClient[Litestar]) -> None:
+        """The host may still send ``gpu_type`` — accepted for backward compat."""
+        resp = stub_client.post("/infra/nodes", json={
+            "node_id": "n1",
+            "gpu_type": "A100",
+            "token": "tok",
+        })
+        assert resp.status_code == 201
+        assert resp.json()["provider_id"] == "stub-A100"
+
     def test_create_node_missing_fields(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.post("/infra/nodes", json={"gpu_type": "A100"})
+        resp = stub_client.post("/infra/nodes", json={"node_type": "A100"})
         assert resp.status_code == 400
 
     def test_node_state(self, stub_client: TestClient[Litestar]) -> None:
