@@ -300,7 +300,7 @@ export interface PluginApi {
 
   /**
    * The Dashboard link for a table or a run, built the way every Hub page builds it — the base this
-   * browser is on, plus `object_service`, so the Dashboard opens against this workspace's data rather
+   * browser is on, plus `object_service`, so the Dashboard opens against this deployment's data rather
    * than its own default. Prefer it over concatenating `getConfig('dashboard_url')`, which produces a
    * link that works on a laptop and points at the wrong endpoint anywhere else.
    *

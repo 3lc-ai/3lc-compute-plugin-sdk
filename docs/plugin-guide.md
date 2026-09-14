@@ -156,9 +156,9 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   `POST /infra/login/{id}/credentials` (`{account_id, role_name}` → temporary credentials).
   The host forwards these as `/api/infra/login/<plugin>/…`; the Hub renders the panel and
   hands the credentials to the create call exactly like pasted keys. Temporary credentials
-  must never be seeded onto the workspace — it runs its nodes by its own instance role.
+  must never be seeded onto the deployment — it runs its nodes by its own instance role.
   Capabilities also declare what the provider makes: `flavors` (`["gpu"]`, or
-  `["gpu", "workspace"]` for a provider that hosts permanent workspace nodes) and `pricing`
+  `["gpu", "workspace"]` for a provider that hosts permanent deployment nodes) and `pricing`
   (`["on_demand"]`, or `["on_demand", "spot"]` when interruptible capacity is offered). The
   host sends `flavor` and `pricing` in every `POST /infra/nodes` payload and refuses a request
   for anything the plugin has not declared, so a plugin never has to guess a default. A
@@ -436,7 +436,7 @@ at 90, 700, and 260 characters. Content is plain text. No callbacks, HTML, or na
 are accepted. Registering tips does not enable a guide the user paused or turned off.
 
 The optional `experience` selects a host-owned explanation, such as `revisions`, `models`,
-`dashboard`, `workspace`, `storage`, `ecosystem`, `cycle`, `notebooks`, `infrastructure`,
+`dashboard`, `workspace` (the Deployments guide), `storage`, `ecosystem`, `cycle`, `notebooks`, `infrastructure`,
 `extend`, `overview`, or `insights`. Unknown names safely use text-only guidance. Plugins do
 not inject animation code through this API. This feature does not require a higher compute
 service version; the optional member itself is the capability check.
