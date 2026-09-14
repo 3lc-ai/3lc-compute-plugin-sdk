@@ -151,3 +151,83 @@ def test_bad_requests_fail_before_a_thread_exists() -> None:
     with pytest.raises(TransferError, match=re.escape("'..'")):
         registry.start("s3://b/a", "s3://b/c", ["../x"])
     assert registry.status("nope") is None and registry.active() == 0
+
+
+def test_project_copy_notifies_after_all_files_and_markers_are_copied() -> None:
+    src = "s3://b/source/p"
+    dst = "s3://b/target/p"
+    store = _Store({
+        src + "/runs/r/object.3lc.json": 10,
+        src + "/runs/r/data.bin": 200,
+        src + "/index.3lc.json": 20,
+        src + "/config.3lc.yaml": 10,
+    })
+    notifications = []
+
+    def notify(url, operation):
+        assert len(store.copies) == 4
+        assert dst + "/index.3lc.json" in store.objects
+        notifications.append((url, operation))
+
+    registry = _registry(store, notify_change=notify)
+    st = _wait(registry, registry.start("s3://b/source", "s3://b/target", ["p/"])["transfer_id"])
+    assert st["state"] == "done"
+    assert set(notifications) == {(dst + "/runs/r", "write"), (dst + "/config.3lc.yaml", "write")}
+    assert not st["warnings"]
+
+
+def test_partial_copy_notifies_only_successful_objects() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
+    store.fail_on.add("s3://b/src/b/object.3lc.json")
+    notifications = []
+    registry = _registry(store, notify_change=lambda url, op: notifications.append((url, op)))
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/", "b/"])["transfer_id"])
+    assert st["state"] == "failed"
+    assert notifications == [("s3://b/dst/a", "write")]
+
+
+def test_cancelled_copy_still_notifies_the_completed_object() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
+    notifications = []
+    registry = _registry(store, workers=1, notify_change=lambda url, op: notifications.append((url, op)))
+    original = registry._copy
+
+    def copy(src, dst):
+        original(src, dst)
+        next(iter(registry._transfers.values()))._cancel.set()
+
+    registry._copy = copy
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/", "b/"])["transfer_id"])
+    assert st["state"] == "cancelled"
+    assert notifications == [("s3://b/dst/a", "write")]
+
+
+def test_move_notifies_only_successful_source_deletions() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
+    notifications = []
+    registry = _registry(store, notify_change=lambda url, op: notifications.append((url, op)))
+
+    def delete(url):
+        if "/src/b/" in url:
+            message = "delete denied"
+            raise OSError(message)
+        store.delete_object(url)
+
+    registry._delete = delete
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/", "b/"], mode="move")["transfer_id"])
+    assert st["state"] == "failed"
+    assert set(notifications) == {("s3://b/dst/a", "write"), ("s3://b/dst/b", "write"), ("s3://b/src/a", "delete")}
+
+
+def test_notification_failure_is_reported_without_hiding_copy_success() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1})
+
+    def notify(url, operation):
+        message = "marker write denied"
+        raise OSError(message)
+
+    registry = _registry(store, notify_change=notify)
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/"])["transfer_id"])
+    assert st["state"] == "done"
+    assert st["files_done"] == 1
+    assert "discovery could not be refreshed" in st["warnings"][0]

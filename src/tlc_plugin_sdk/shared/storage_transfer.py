@@ -37,6 +37,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,9 @@ class Transfer:
     deleted: int = 0
     error: str = ""
     failures: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    _writes: set[str] = field(default_factory=set, repr=False)
+    _deletes: set[str] = field(default_factory=set, repr=False)
     started_at: float = field(default_factory=time.time)
     finished_at: float = 0.0
     _cancel: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -93,6 +97,7 @@ class Transfer:
             "percent": round(percent, 1),
             "error": self.error,
             "failures": self.failures[:20],
+            "warnings": self.warnings[:20],
             "started_at": self.started_at,
             "finished_at": self.finished_at,
         }
@@ -124,6 +129,35 @@ def _check_not_inside(src: str, dst: str) -> None:
         raise TransferError(msg)
 
 
+def _discovery_objects(urls: Iterable[str]) -> list[str]:
+    """One representative 3LC object per containing directory, excluding marker files.
+
+    Data files do not affect object discovery. Marker copies are deliberately
+    ignored: notifications must run AFTER those copies, to replace stale stamps.
+    """
+    objects: dict[str, str] = {}
+    for url in sorted(urls):
+        path = urlsplit(url).path
+        name = path.rsplit("/", 1)[-1]
+        if name == "object.3lc.json":
+            # A table/run URL names its directory, not its metadata file.
+            object_url = url.rsplit("/", 1)[0]
+            objects.setdefault(object_url, object_url)
+        elif name.endswith((".3lc.yaml", ".3lc.yml")):
+            objects.setdefault(url.rsplit("/", 1)[0], url)
+    return list(objects.values())
+
+
+def _notify_discovery(url: str, operation: str) -> None:
+    # Lazy: copying ordinary datasets must neither import nor activate 3LC.
+    from tlc import discovery
+
+    if operation == "write":
+        discovery.notify_write(url)
+    else:
+        discovery.notify_delete(url)
+
+
 class TransferRegistry:
     """Plans, starts, tracks and cancels transfers for one plugin worker."""
 
@@ -136,6 +170,7 @@ class TransferRegistry:
         delete_object: Callable[[str], None],
         workers: int = 16,
         max_files: int = MAX_TRANSFER_FILES,
+        notify_change: Callable[[str, str], None] = _notify_discovery,
     ) -> None:
         """
         Args:
@@ -147,6 +182,7 @@ class TransferRegistry:
             delete_object: ``url -> None``.
             workers: Copies in flight at once.
             max_files: Refuse a transfer larger than this (the CLI is the tool then).
+            notify_change: Notify 3LC discovery after successful writes/deletes, including partial transfers.
         """
         self._list = list_objects
         self._head = head_object
@@ -154,6 +190,7 @@ class TransferRegistry:
         self._delete = delete_object
         self._workers = max(1, workers)
         self._max_files = max_files
+        self._notify_change = notify_change
         self._transfers: dict[str, Transfer] = {}
         self._lock = threading.Lock()
 
@@ -285,6 +322,7 @@ class TransferRegistry:
                     return
                 with lock:
                     copied.append(pair)
+                    transfer._writes.add(dst)
                     transfer.files_done += 1
                     transfer.bytes_done += size
 
@@ -303,6 +341,7 @@ class TransferRegistry:
                     try:
                         self._delete(src)
                         transfer.deleted += 1
+                        transfer._deletes.add(src)
                     except Exception as exc:
                         transfer.failures.append({
                             "path": src,
@@ -317,8 +356,21 @@ class TransferRegistry:
             logger.exception("Transfer %s (%s → %s) failed", transfer.id, transfer.src_url, transfer.dst_url)
             self._finish(transfer, "failed", str(exc)[:400])
 
-    @staticmethod
-    def _finish(transfer: Transfer, state: str, error: str) -> None:
+    def _finish(self, transfer: Transfer, state: str, error: str) -> None:
+        # The worker has joined every copy thread before finishing. Notify even
+        # after cancellation or partial failure; never announce unsuccessful IO.
+        # Do this before publishing the terminal state, independent of UI polling.
+        for operation, urls in (("write", transfer._writes), ("delete", transfer._deletes)):
+            for url in _discovery_objects(urls):
+                try:
+                    self._notify_change(url, operation)
+                except Exception:
+                    logger.warning("Transfer %s: discovery notification failed for %s", transfer.id, url, exc_info=True)
+                    if not transfer.warnings:
+                        transfer.warnings.append(
+                            "Files were transferred, but 3LC discovery could not be refreshed. "
+                            "The Object Service may not show the changes yet."
+                        )
         transfer.state = state
         transfer.error = error
         transfer.finished_at = time.time()
