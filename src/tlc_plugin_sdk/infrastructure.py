@@ -34,7 +34,16 @@ from tlc_plugin_sdk.contract import HubPlugin
 
 @dataclass
 class CreateNodeRequest:
-    """What the host sends when it asks a provider to create a node."""
+    """What the host sends when it asks a provider to create a node.
+
+    ``compute_spec`` is the pip requirement for the node agent's own distribution, pinned to
+    the host's version (``3lc-compute==1.2``): a provider that installs the agent as part of
+    creating the node installs exactly this. ``wheelhouse`` is where the host says wheels for
+    unpublished builds can be found — a directory on the controller, or a URL to a flat
+    index — for the agent install and for every plugin venv the node builds. A provider that
+    can ship a directory to the node does so; one that cannot honours a URL and ignores a
+    directory. Either is ``""`` when the host has none.
+    """
 
     node_id: str
     node_type: str
@@ -46,6 +55,8 @@ class CreateNodeRequest:
     flavor: str = "gpu"
     owner: str = ""
     pricing: str = ""
+    compute_spec: str = ""
+    wheelhouse: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CreateNodeRequest:
@@ -61,6 +72,8 @@ class CreateNodeRequest:
             flavor=str(data.get("flavor", "gpu") or "gpu"),
             owner=str(data.get("owner", "") or ""),
             pricing=str(data.get("pricing", "") or ""),
+            compute_spec=str(data.get("compute_spec", "") or "").strip(),
+            wheelhouse=str(data.get("wheelhouse", "") or "").strip(),
         )
 
 

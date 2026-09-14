@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `CreateNodeRequest` carries `compute_spec` (the host's pinned requirement for the node
+  agent's own distribution, e.g. `3lc-compute==1.2`) and `wheelhouse` (a directory on the
+  controller or a URL where wheels for unpublished builds live). A provider that installs the
+  agent while creating a node installs `compute_spec`, from the wheelhouse when one is given;
+  both are `""` when the host has nothing to say.
+
 ### Fixed
 - The worker no longer logs an `AttributeError` traceback at start-up for a plugin that
   subclasses `HubPlugin` or `InfrastructurePlugin` directly: `initialise_runtime` is a

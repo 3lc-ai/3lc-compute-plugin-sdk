@@ -37,6 +37,8 @@ class TestCreateNodeRequest:
             "flavor": "gpu",
             "owner": "user@x",
             "pricing": "spot",
+            "compute_spec": " 3lc-compute==1.2 ",
+            "wheelhouse": "/srv/wheels",
         })
         assert req.node_id == "n1"
         assert req.node_type == "A100"
@@ -47,6 +49,8 @@ class TestCreateNodeRequest:
         assert req.idle_ttl_s == 600.0
         assert req.owner == "user@x"
         assert req.pricing == "spot"
+        assert req.compute_spec == "3lc-compute==1.2"
+        assert req.wheelhouse == "/srv/wheels"
 
     def test_from_dict_minimal(self) -> None:
         req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "node_type": "H100"})
@@ -58,6 +62,8 @@ class TestCreateNodeRequest:
         assert req.idle_ttl_s == 1800.0
         assert req.flavor == "gpu"
         assert req.owner == ""
+        assert req.compute_spec == ""
+        assert req.wheelhouse == ""
         assert req.pricing == ""
 
     def test_from_dict_gpu_type_compat(self) -> None:
