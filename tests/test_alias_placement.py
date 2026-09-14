@@ -1,0 +1,236 @@
+# Copyright 2026 3LC Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Alias placement: copying data next to the table and registering the alias against the copy.
+
+The case: a project root on a bucket, the images on this machine. The shared alias widget
+offers one checkbox; the helper copies the folder through ``tlc.Url`` and the persisted alias
+points at the copy while this session keeps resolving to the local folder.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tlc_plugin_sdk.shared import aliases
+from tlc_plugin_sdk.shared.alias_ui import alias_ui_script
+from tlc_plugin_sdk.shared.data_source_ui import data_source_ui_script
+
+
+def _tree(root: Path) -> None:
+    (root / "train").mkdir(parents=True)
+    (root / "train" / "a.jpg").write_bytes(b"a" * 10)
+    (root / "train" / "b.jpg").write_bytes(b"bb" * 10)
+    (root / "c.txt").write_bytes(b"c")
+    (root / ".DS_Store").write_bytes(b"junk")  # never copied
+
+
+def test_copy_folder_to_url_copies_the_tree_and_reports_progress(tmp_path: Path) -> None:
+    src, dst = tmp_path / "src", tmp_path / "dst" / "data" / "token"
+    _tree(src)
+    seen: list[tuple[int, int, int, int]] = []
+    stats = aliases.copy_folder_to_url(str(src), str(dst), progress=lambda *a: seen.append(a), workers=2)
+    assert stats == {"files": 3, "bytes": 31, "skipped": 0, "url": str(dst)}
+    assert (dst / "train" / "a.jpg").read_bytes() == b"a" * 10 and (dst / "c.txt").read_bytes() == b"c"
+    assert not (dst / ".DS_Store").exists()
+    assert seen[-1] == (3, 3, 31, 31) and len(seen) == 3
+
+
+def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path) -> None:
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    _tree(src)
+    aliases.copy_folder_to_url(str(src), str(dst))
+    (dst / "train" / "b.jpg").unlink()  # one file missing → only that one is written again
+    stats = aliases.copy_folder_to_url(str(src), str(dst))
+    assert stats["files"] == 3 and stats["skipped"] == 2
+    assert (dst / "train" / "b.jpg").exists()
+
+
+def test_copy_folder_to_url_rejects_a_missing_folder(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        aliases.copy_folder_to_url(str(tmp_path / "nope"), str(tmp_path / "dst"))
+
+
+def test_is_remote_url() -> None:
+    assert aliases.is_remote_url("s3://bucket/projects") and aliases.is_remote_url(" runpod://vol/x ")
+    assert not aliases.is_remote_url("/Users/me/data") and not aliases.is_remote_url("C:\\data")
+
+
+def test_register_alias_persists_the_copy_and_keeps_the_session_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tlc
+
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(tlc.url, "get_registered_url_aliases", dict)
+    monkeypatch.setattr(
+        tlc.helpers.ProjectHelper,
+        "register_project_url_alias",
+        staticmethod(lambda **kw: calls.setdefault("project", kw)),
+    )
+    monkeypatch.setattr(tlc.url, "register_url_alias", lambda **kw: calls.setdefault("session", kw))
+
+    out = aliases.register_alias("Fire", "~/data/fire", "FIRE", remote_path="s3://b/projects/Fire/data/fire/")
+    assert out["remote_path"] == "s3://b/projects/Fire/data/fire" and out["primary_created"]
+    assert calls["project"]["path"] == "s3://b/projects/Fire/data/fire" and calls["project"]["force"] is True
+    assert calls["session"]["path"] == out["path"] and "~" not in out["path"]  # local, expanded
+
+    calls.clear()
+    aliases.register_alias("Fire", "/data/fire", "FIRE")
+    assert calls["project"]["path"] == "/data/fire" and calls["project"]["force"] is False
+
+
+def test_data_inside_the_project_is_aliased_relative_to_the_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An absolute alias to a folder inside the project never reaches the rows.
+
+    tlc writes a media URL as a path relative to the table whenever the two share more than one path
+    segment, expanding aliases to absolute *before* deciding — so rows come out as
+    ``../../../../data/tok/x.jpg`` and the alias is gone. A relative row cannot be redirected: an
+    override on a GPU node has no token to bind to, so those images can never be staged and training
+    fails on its first image. Registered as the hop from a table to the folder, the alias matches what
+    tlc actually writes, the row keeps ``<TOKEN>/x.jpg``, and the node override lands (Paul's idea,
+    measured end to end 2026-09-08).
+    """
+    import tlc
+
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(tlc.url, "get_registered_url_aliases", dict)
+    monkeypatch.setattr(
+        tlc.helpers.ProjectHelper,
+        "register_project_url_alias",
+        staticmethod(lambda **kw: calls.setdefault("project", kw)),
+    )
+    monkeypatch.setattr(tlc.url, "register_url_alias", lambda **kw: calls.setdefault("session", kw))
+
+    out = aliases.register_alias(
+        "a44coco", "s3://b/projects/a44coco/data/a44coco", "A44COCO", root_url="s3://b/projects"
+    )
+    # Both ends relative: the session alias is what tlc matches while writing the rows, the persisted
+    # one is what another machine (or a node) reads as the baseline.
+    assert calls["session"]["path"] == "../../../../data/a44coco"
+    assert calls["project"]["path"] == "../../../../data/a44coco"
+    assert out["persisted"] == "../../../../data/a44coco"
+
+    # Data on other storage keeps an absolute alias — that case is redirectable as it stands, and a
+    # relative hop would not even resolve.
+    calls.clear()
+    aliases.register_alias("a44coco", "s3://elsewhere/fire", "FIRE", root_url="s3://b/projects")
+    assert calls["session"]["path"] == "s3://elsewhere/fire"
+    assert calls["project"]["path"] == "s3://elsewhere/fire"
+
+    # Copied local data whose copy lands in the project: the session stays local (the rows are written
+    # from the local files), the persisted alias is the relative hop to the copy.
+    calls.clear()
+    aliases.register_alias(
+        "a44coco",
+        "/data/fire",
+        "FIRE",
+        remote_path="s3://b/projects/a44coco/data/fire",
+        root_url="s3://b/projects",
+    )
+    assert calls["session"]["path"] == "/data/fire"
+    assert calls["project"]["path"] == "../../../../data/fire"
+
+
+def test_the_relative_hop_assumes_the_3lc_table_layout() -> None:
+    """``<project>/datasets/<dataset>/tables/<table>`` — four levels. If that layout ever changes, the
+    hop is wrong for every table written since, so pin it here rather than leave it implied."""
+    assert aliases._TABLE_DEPTH_BELOW_PROJECT == 4
+    assert aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/p/data/tok") == (
+        "../../../../data/tok"
+    )
+    # A folder deeper inside the project keeps its whole tail.
+    assert aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/p/data/a/b") == (
+        "../../../../data/a/b"
+    )
+    # Not inside: a sibling project whose name merely starts the same, and a plain http source.
+    assert aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/pp/data/x") is None
+    assert aliases.relative_alias_value("s3://b/projects", "p", "https://huggingface.co/datasets/x") is None
+
+
+def test_alias_widget_offers_the_copy_and_submits_it() -> None:
+    js = alias_ui_script()
+    for pin in (
+        "function _tlcProjectLocationHtml(",  # "Create project in": this computer, or the bucket root
+        "function _tlcBindProjectLocation(",
+        "function _tlcGetProjectRoot(",
+        "options.length ? '' : 'none'",  # shown whenever a root is known; one root reads as a statement
+        "var key = 'tlc.projectRoot';",  # one destination for the whole Hub, not one per plugin
+        "rootOverride",  # the copy offer follows the chosen root
+        "-alias-copy-enabled",
+        "function _tlcAliasReviewCopy(",
+        "'/project-root'",  # the root this plugin's own tlc writes to — never the infra plugin's bucket
+        "_tlcStorageOf(root) !== 'local' && _tlcStorageOf(folder) === 'local'",  # local data, bucket root — only then
+        "'/data/' + token.toLowerCase()",
+        "alias_copy_to_root:",
+        "alias_copy_target:",
+    ):
+        assert pin in js, pin
+
+
+def test_data_source_widget_browses_buckets_through_the_generic_storage_surface() -> None:
+    js = data_source_ui_script()
+    for pin in ("'/api/infra/storage'", "/list?url=", "data-ds-loc", "function _globToRegex(", "This compute"):
+        assert pin in js, pin
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_shared_scripts_parse(tmp_path: Path) -> None:
+    for name, js in (("alias.js", alias_ui_script()), ("ds.js", data_source_ui_script())):
+        f = tmp_path / name
+        f.write_text(js)
+        subprocess.run(["node", "--check", str(f)], check=True)
+
+
+def test_register_alias_persists_under_the_chosen_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tlc
+
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(tlc.url, "get_registered_url_aliases", dict)
+    monkeypatch.setattr(
+        tlc.helpers.ProjectHelper, "register_project_url_alias", staticmethod(lambda **kw: calls.update(kw))
+    )
+    monkeypatch.setattr(tlc.url, "register_url_alias", lambda **kw: None)
+    aliases.register_alias("Fire", "/data/fire", "FIRE", root_url="s3://b/projects/")
+    assert calls["root_url"] == "s3://b/projects"
+    aliases.register_alias("Fire", "/data/fire", "FIRE")
+    assert calls["root_url"] is None  # the plugin's default root
+
+
+def test_a_root_is_named_by_what_it_is_not_by_which_lookup_found_it() -> None:
+    """A compute whose own project root is a bucket offered it as "This computer — s3://…", and said
+    the table would stay in a local projects folder (Paul, 2026-09-07)."""
+    js = alias_ui_script()
+    assert "function _tlcRootLabel(url)" in js
+    label = js.split("function _tlcRootLabel(url)")[1].split("\n}")[0]
+    assert "'S3 bucket'" in label and "'Azure container'" in label
+    assert "_tlcStorageOf(url) === 'local'" in label  # the local case is the exception, not the default
+    # The sentence under the select follows the same test rather than "which promise supplied it".
+    assert "var isCloud = _tlcStorageOf(sel.value) !== 'local'" in js
+
+
+def test_a_form_can_ask_where_the_table_is_actually_going() -> None:
+    """``_tlcGetProjectRoot`` answers "what should I send as an override?" and is empty when the
+    selection is the plugin's own root — the usual case. A form deriving a default path from it got
+    nothing, so the copy destination and the alias folder stayed blank (Paul, 2026-09-07)."""
+    js = alias_ui_script()
+    assert "function _tlcSelectedProjectRoot(idPrefix)" in js
+    body = js.split("function _tlcSelectedProjectRoot(idPrefix)")[1].split("\n}")[0]
+    assert "data-own-root" not in body  # that rule belongs to the override question, not this one
+    # And the roots arrive late, so the select says so once it has them.
+    assert "sel.dispatchEvent(new Event('change', { bubbles: true }))" in js
+
+
+def test_one_root_is_stated_rather_than_offered_as_a_choice() -> None:
+    """A cloud workspace has exactly one place its projects can go. Rendering that as a dropdown gave
+    a control that visibly does nothing when clicked (Paul, 2026-09-08). The select stays in the DOM —
+    it still holds the value every form reads — but a lone root is shown as text."""
+    js = alias_ui_script()
+    assert "-project-root-only" in js
+    tail = js.split("var only = document.getElementById(idPrefix + '-project-root-only')")[1].split(
+        "box.style.display"
+    )[0]
+    assert "options.length === 1" in tail
+    assert "sel.style.display = single ? 'none' : ''" in tail  # hidden, not removed: it carries the value

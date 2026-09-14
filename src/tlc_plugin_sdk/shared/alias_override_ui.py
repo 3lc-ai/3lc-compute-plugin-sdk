@@ -31,14 +31,18 @@ ALIAS_OVERRIDE_UI_JS = (
     " + '-alias-override-container\" style=\"' + s + '\">';\n"
     "  html += '<label style=\"display:flex;align-items:center;gap:6px;"
     "font-size:12px;font-weight:600;cursor:pointer\">';\n"
+    # Not the alias switch. Registering an alias is settled when the table is written (alias_ui) and is
+    # not optional; this is a per-run redirect for data that already has one. Two plugins' worth of
+    # confusion says the old label, "Override URL Aliases", read like the same setting (Paul, 2026-09-07).
     "  html += '<input type=\"checkbox\" id=\"' + idPrefix"
-    " + '-alias-override-enabled\"> Override URL Aliases';\n"
+    " + '-alias-override-enabled\"> Read this data from somewhere else for this run';\n"
     "  html += '</label>';\n"
     "  html += '<div style=\"margin:4px 0 8px 0;font-size:11px;"
     "color:var(--text-muted)\">';\n"
-    "  html += 'Redirect alias paths to local storage for faster I/O "
+    "  html += 'The table records where its images live. Point that somewhere else "
+    "for this run only "
     "\u2014 ';\n"
-    "  html += 'e.g. use a local SSD copy instead of S3. ';\n"
+    "  html += 'a copy on the node\\'s SSD instead of S3, say. The table is not changed. ';\n"
     "  html += '<a href=\"https://docs.3lc.ai/3lc/latest/user-guide/"
     "sharing.html#alias-best-practices\" ';\n"
     "  html += 'target=\"_blank\" style=\"color:var(--accent)\">"

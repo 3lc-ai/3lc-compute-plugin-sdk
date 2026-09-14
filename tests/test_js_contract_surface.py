@@ -44,6 +44,26 @@ def test_pluginjobs_client_and_dts_agree() -> None:
     assert js_names == dts_names, f"client exports {js_names} but the d.ts declares {dts_names}"
 
 
+def test_guide_is_an_optional_browser_only_capability() -> None:
+    dts = _dts_text()
+    assert "guide?: PluginGuide | null;" in dts
+    block = re.search(r"export interface PluginGuide\s*\{(.*?)\n\}", dts, re.DOTALL)
+    assert block
+    assert "readonly version: 1;" in block.group(1)
+    assert set(re.findall(r"^\s*(\w+)\(", block.group(1), re.MULTILINE)) == {"register", "complete", "dispose"}
+    assert "register(tips: readonly PluginGuideTip[]): void;" in block.group(1)
+    tip = re.search(r"export interface PluginGuideTip\s*\{(.*?)\n\}", dts, re.DOTALL)
+    assert tip
+    assert set(re.findall(r"^\s*(\w+)\??:", tip.group(1), re.MULTILINE)) == {
+        "id",
+        "target",
+        "title",
+        "body",
+        "task",
+        "experience",
+    }
+
+
 def test_list_is_present_on_both_sides() -> None:
     # The 0.3 addition — guard it explicitly so a regression is unambiguous.
     assert "list" in _js_exported_names()

@@ -232,3 +232,11 @@ class TestSelfReferentialSymlink:
         body = _browse(client, path=str(root / "loop" / "loop" / "loop"))
         assert body["path"] == str(root.resolve())  # realpath collapsed the whole chain
         assert body["parent"] is None  # and it IS the root, so no phantom "up"
+
+
+def test_project_root_is_the_plugins_own_tlc_root(client: TestClient[Litestar]) -> None:
+    """The alias widget asks the writing plugin, not the infrastructure plugin, where tables land."""
+    import tlc
+
+    body = client.get("/project-root").json()
+    assert body["url"] == str(tlc.config.project_root_url).rstrip("/") and body["url"]

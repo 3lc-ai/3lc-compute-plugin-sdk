@@ -2,11 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared URL alias utilities for plugins.
 
-Two concerns:
+Three concerns:
 
 1. **Registration** — when creating a new table, register a persistent project
    alias so image paths use a portable ``<TOKEN>`` prefix.
-2. **Override** — when consuming an existing table, temporarily override an
+2. **Placement** — when the table lands on other storage than the data (a project
+   root on a bucket, images on a laptop), copy the data next to the table first
+   (:func:`copy_folder_to_url`) and register the alias against the copy, so every
+   reader of the table — GPU nodes, the Dashboard, this machine — resolves
+   ``<TOKEN>`` to one place. The copy goes through ``tlc.Url``: whatever can write
+   the table can write the data, with the same credentials.
+3. **Override** — when consuming an existing table, temporarily override an
    alias so ``<TOKEN>`` resolves to a fast local path (e.g. SSD) instead of
    the default (e.g. S3).  Overrides are session-scoped and never persisted.
 """
@@ -16,9 +22,105 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def is_remote_url(value: str) -> bool:
+    """True for ``scheme://…`` values (a bucket or volume), False for local paths."""
+    from tlc_plugin_sdk.shared.url_utils import is_url
+
+    return is_url(value)
+
+
+CopyProgress = Callable[[int, int, int, int], None]
+"""``(files_done, files_total, bytes_done, bytes_total)`` — called after every file."""
+
+
+def copy_folder_to_url(
+    src_dir: str,
+    dst_url: str,
+    *,
+    progress: CopyProgress | None = None,
+    workers: int = 8,
+) -> dict[str, Any]:
+    """Copy a local folder, recursively, to a URL prefix through ``tlc.Url``.
+
+    Files land at ``<dst_url>/<relative path>``. When the first file already exists
+    at the destination the folder is treated as a repeat (the same data imported
+    again) and files that exist are skipped; otherwise nothing is probed and every
+    file is written, which keeps a first copy at one request per file.
+
+    Args:
+        src_dir: Local folder to copy.
+        dst_url: Destination prefix, e.g. ``s3://bucket/projects/p/data/token``.
+        progress: Optional callback, see :data:`CopyProgress`.
+        workers: Parallel uploads.
+
+    Returns:
+        ``{"files": n, "bytes": b, "skipped": k, "url": dst_url}``.
+
+    Raises:
+        FileNotFoundError: *src_dir* is not a folder.
+        RuntimeError: A file could not be written (the first failure, after the
+            other uploads in flight have finished).
+
+    """
+    import tlc
+
+    root = Path(os.path.expanduser(src_dir.strip()))
+    if not root.is_dir():
+        msg = f"Not a folder: {root}"
+        raise FileNotFoundError(msg)
+    base = dst_url.strip().rstrip("/")
+    files = sorted(p for p in root.rglob("*") if p.is_file() and not p.name.startswith("."))
+    total_bytes = sum(p.stat().st_size for p in files)
+    if not files:
+        return {"files": 0, "bytes": 0, "skipped": 0, "url": base}
+
+    def target(path: Path) -> Any:
+        return tlc.Url(base + "/" + path.relative_to(root).as_posix())
+
+    # One probe decides the mode for the whole folder: repeat copies skip what is there.
+    skip_existing = bool(target(files[0]).exists())
+
+    done_files = 0
+    done_bytes = 0
+    skipped = 0
+    first_error: Exception | None = None
+
+    def put(path: Path) -> tuple[int, bool]:
+        size = path.stat().st_size
+        url = target(path)
+        if skip_existing and url.exists():
+            return size, True
+        url.write_bytes(path.read_bytes())
+        return size, False
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for path, fut in [(p, pool.submit(put, p)) for p in files]:
+            try:
+                size, was_skipped = fut.result()
+            except Exception as exc:  # surfaced once, below
+                if first_error is None:
+                    first_error = exc
+                    logger.warning("Copy failed for %s → %s: %s", path, base, exc)
+                continue
+            done_files += 1
+            done_bytes += size
+            skipped += int(was_skipped)
+            if progress is not None:
+                progress(done_files, len(files), done_bytes, total_bytes)
+
+    if first_error is not None:
+        msg = f"Could not copy {root} to {base}: {first_error}"
+        raise RuntimeError(msg) from first_error
+    logger.info("Copied %s → %s (%d files, %d bytes, %d already there)", root, base, done_files, done_bytes, skipped)
+    return {"files": done_files, "bytes": done_bytes, "skipped": skipped, "url": base}
 
 
 def _sanitize_token(name: str) -> str:
@@ -48,22 +150,68 @@ def default_alias_token(project_name: str) -> str:
     return _sanitize_token(project_name)
 
 
+#: Depth of a table below its project folder: ``<project>/datasets/<dataset>/tables/<table>``. The alias
+#: for data inside the project is written as the hop from a table up to it, so this is how far up.
+_TABLE_DEPTH_BELOW_PROJECT = 4
+
+
+def relative_alias_value(root_url: str | None, project_name: str, target: str) -> str | None:
+    """The value to register for *target* when it lives inside the project — else ``None``.
+
+    ``s3://b/projects/p/data/tok`` under project ``p`` at root ``s3://b/projects`` becomes
+    ``../../../../data/tok``: the hop from a table to the data.
+
+    **Why relative.** tlc writes a media URL as a path relative to the table whenever the two share more
+    than one path segment, and it expands aliases to absolute *before* deciding — so an absolute alias to
+    a folder inside the project never survives into the row. Rows come out as
+    ``../../../../data/tok/x.jpg``, and a relative row cannot be redirected: an alias override on a GPU
+    node has no token to bind to, so the images can never be staged there. Registered relatively, the
+    alias matches the relativized string that tlc produces, the row keeps ``<TOKEN>/x.jpg``, and
+    overriding the token on a node points it at the staged copy.
+
+    It also travels better than an absolute alias: the whole project can move to another bucket or
+    machine and the rows still resolve, because the hop is relative to the table (Paul's idea; measured
+    every way round 2026-09-08).
+
+    Returns ``None`` when the target is not inside the project — data on other storage keeps an absolute
+    alias, which is what makes *that* case redirectable.
+    """
+    if not root_url or not project_name or not target:
+        return None
+    project_dir = f"{root_url.strip().rstrip('/')}/{project_name.strip()}"
+    inside = target.strip().rstrip("/")
+    if not inside.startswith(project_dir + "/"):
+        return None
+    return "../" * _TABLE_DEPTH_BELOW_PROJECT + inside[len(project_dir) + 1 :]
+
+
 def register_alias(
     project_name: str,
     image_folder: str,
     alias_token: str | None = None,
+    *,
+    remote_path: str | None = None,
+    root_url: str | None = None,
 ) -> dict[str, Any]:
     """Register a project URL alias for an image folder.
 
     Args:
         project_name: The 3LC project that owns the alias.
-        image_folder: Absolute path to the image root folder.
+        image_folder: Absolute path to the image root folder — where the rows
+            being written point today, so the SDK can fold it into ``<TOKEN>``.
         alias_token: Override token name.  If *None*, one is derived from
             *project_name* via :func:`default_alias_token`.
+        remote_path: Where the data was copied (see :func:`copy_folder_to_url`).
+            When given, the *persisted* project alias points here — every reader
+            of the project resolves ``<TOKEN>`` to the copy — while this session
+            keeps resolving to *image_folder* until the job ends, so paths encode
+            correctly from the local files.
+        root_url: The project root the table is written under (``TableWriter(root_url=…)``); the
+            alias is persisted in that project's config. ``None`` = the plugin's default root.
 
     Returns:
-        Dict with ``token`` and ``path`` that were registered, or ``error``
-        on failure.
+        Dict with ``token`` and ``path`` that were registered (plus
+        ``remote_path`` when one was used), or ``error`` on failure.
 
     """
     import tlc
@@ -72,6 +220,17 @@ def register_alias(
     # Expand ~ before persisting — an alias stored with a literal tilde would
     # poison every future table that resolves through it.
     path = os.path.expanduser(image_folder.strip())
+    copied = bool(remote_path and remote_path.strip())
+    persisted = remote_path.strip().rstrip("/") if copied and remote_path else path
+    # Data inside the project is aliased relative to the table — see relative_alias_value for why an
+    # absolute alias to that folder is silently dropped when the table is written.
+    relative = relative_alias_value(root_url, project_name, persisted)
+    if relative:
+        persisted = relative
+        if not copied:
+            # The rows are written from this same folder, so the session alias has to be the relative
+            # form too: it is the relativized string that tlc will try to match when it writes them.
+            path = relative
 
     try:
         # Track whether a session alias for this token already existed, so the
@@ -83,17 +242,23 @@ def register_alias(
         # 1. Persist the alias in the project config.
         tlc.helpers.ProjectHelper.register_project_url_alias(
             token=token,
-            path=path,
+            path=persisted,
             project_name=project_name,
+            root_url=(root_url.strip().rstrip("/") or None) if root_url else None,
+            force=persisted != path,  # re-pointing at the copy is the intent, not a conflict
         )
         # 2. Also register as a session alias so it is active for the current
         #    process when the SDK encodes image paths.
         tlc.url.register_url_alias(token=token, path=path, force=True)
-        logger.info("Registered alias <%s> → %s for project %r", token, path, project_name)
-        return {"token": token, "path": path, "primary_created": not existed}
+        logger.info("Registered alias <%s> → %s for project %r", token, persisted, project_name)
+        result: dict[str, Any] = {"token": token, "path": path, "primary_created": not existed}
+        if persisted != path:
+            result["remote_path"] = persisted
+        result["persisted"] = persisted  # what other machines and GPU nodes read as the baseline
+        return result
     except Exception:
-        logger.exception("Failed to register alias <%s> → %s", token, path)
-        return {"error": f"Failed to register alias <{token}> → {path}"}
+        logger.exception("Failed to register alias <%s> → %s", token, persisted)
+        return {"error": f"Failed to register alias <{token}> → {persisted}"}
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +302,9 @@ def get_table_aliases(table_url: str) -> list[dict[str, str]]:
 
     if url_col_names and len(table) > 0:
         try:
-            row = table[0]
+            # STORED values, not the sample view: table[i] resolves aliases through
+            # this machine's registry, so tokens would already be expanded away here.
+            row = table.table_rows[0]
             for col in url_col_names:
                 val = str(row.get(col, ""))
                 for m in _ALIAS_TOKEN_RE.finditer(val):
