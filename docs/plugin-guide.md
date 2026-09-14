@@ -139,6 +139,40 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 
 **Other keys the host reads** (all optional, read without importing the plugin):
 
+- top-level: `kind = "compute"` (default) or `"infrastructure"`. An **infrastructure
+  plugin** provisions nodes instead of computing. It subclasses `InfrastructurePlugin`
+  (`tlc_plugin_sdk.infrastructure`) and implements the typed `capabilities` / `create_node` /
+  `node_state` / `delete_node` methods, plus the optional `preflight(node_type, datacenter)` —
+  everything the provider can know *before* a node is requested (funds, stock, quotas,
+  permissions), so a payment problem is a dialog and not a run of dead nodes. Give the
+  provider's own words in full in each check's `detail`; the Hub shows them whole. The default
+  `get_route_handlers()` mounts the five `/infra/*` routes the host's infra manager calls
+  through the worker proxy. Capabilities also say what the provider makes: `flavors`
+  (`["gpu"]`, or `["gpu", "workspace"]` for a provider that hosts permanent deployment nodes)
+  and, through `extra`, `pricing` (`["on_demand"]`, or `["on_demand", "spot"]` when
+  interruptible capacity is offered). Every create request carries `flavor` and `pricing`, and
+  the host refuses a request for anything the plugin has not declared, so a plugin never has to
+  guess a default. Put `storage: {"project_root_url": "s3://…"}` in `extra` when configured —
+  the host's data-prepare pipeline (sync + node staging) and the Dashboard union view both key
+  off it. At most one infrastructure plugin is active on a host at a time.
+
+  **Provisional: provider sign-in.** A provider that can sign a person in instead of taking
+  pasted keys may declare `workspace_login` in its capabilities (`{kind, label, help, fields:
+  [{key, label, placeholder, remember}], credential_keys}`) and serve the device flow as
+  `POST /infra/login` (start: code + link), `GET /infra/login/{id}` (`{state:
+  pending|authorized|expired|error, accounts?}`) and `POST /infra/login/{id}/credentials`
+  (`{account_id, role_name}` → temporary credentials); the host forwards these as
+  `/api/infra/login/<plugin>/…`, the Hub renders the panel and hands the credentials to the
+  create call exactly like pasted keys. A provider can instead let a person *grant a role*:
+  declare `workspace_role` (`{kind, label, help, setup, field: {key, label, placeholder}}`) and
+  serve `GET /infra/role-setup?owner=` → `{host_account_id, external_id, role_name,
+  quick_create_url, trust_policy, template}`, forwarded as `/api/infra/role-setup/<plugin>` for
+  the signed-in owner; derive the external id from the owner so a role is bound to one person,
+  and re-assume the role for deletion (the host sends `owner` along). Temporary credentials must
+  never be seeded onto the deployment — it runs its nodes by its own instance role. This
+  sign-in surface is provider-shaped and **not part of the typed `InfrastructurePlugin`
+  contract**: it stays open, and may change without notice, until the Hub's credentials
+  handling is settled (credentials become references a plugin resolves through the host).
 - `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
   plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
   (pin the interpreter the plugin's venv is built with).
@@ -352,6 +386,65 @@ A plugin fragment is plain HTML+JS+CSS, served by the plugin's worker and revers
 by the host — the frontend can't tell where it came from. `PLUGIN_API` is the **single** host→fragment JS contract; a fragment should
 reach for nothing else (the `API` shorthand some plugins use is just
 `var API = window.PLUGIN_API`).
+
+### Optional interactive guide
+
+The Hub can supply `PLUGIN_API.guide`, an optional browser-only hook. No Python hook,
+compute-service endpoint, plugin allowlist, or guide manifest is needed. The plugin owns its
+instructions and registers them after its UI fragment mounts. Feature-detect the member so
+the same plugin works on hosts without a guide:
+
+```javascript
+var api = window.PLUGIN_API;
+var guide = api.guide && api.guide.version === 1 ? api.guide : null;
+if (guide) guide.register([
+  {
+    id: 'inputs',
+    target: '[data-guide="inputs"]',
+    title: 'Choose input data',
+    body: 'Select the table revision this operation should use.',
+    task: 'Check the revision before starting.',
+    experience: 'revisions'
+  },
+  {
+    id: 'results',
+    target: '[data-guide="results"]',
+    title: 'Inspect the result',
+    body: 'Review the output before using it in another operation.'
+  }
+]);
+```
+
+`guide.register(tips)` replaces this mount's tips in the supplied order. Targets are CSS
+selectors scoped to the plugin container, not the whole page. Missing or hidden targets
+wait until visible, so asynchronous results can be registered before they arrive.
+A nonempty valid registration replaces the Hub's generic tips on this plugin's page,
+including the AI/Data category explanation. This holds while targets are still hidden:
+the guide waits for your UI instead of showing duplicate generic instructions. An empty
+registration or disposal restores the generic fallback. Hub-wide navigation guidance is
+unaffected. A runtime widget on a different page adds only its own scoped tips.
+`guide.complete(id)` marks a known tip as seen; it neither changes user settings nor
+claims that a task succeeded. `guide.dispose()` invalidates the handle. The host also
+invalidates handles on fragment replacement or unmount, so late callbacks cannot alter
+another mount's guidance. Capture the bridge at initialization rather than looking up the
+global `PLUGIN_API` inside a later callback.
+
+The host accepts up to 12 tips per registration and eight live registrations. IDs are
+1–48 ASCII letters, digits, underscores, or hyphens and are automatically namespaced by the
+plugin ID. Use static IDs, never credentials, URLs, project names, or sample identifiers.
+Selectors have a 200-character limit. Titles, body text, and optional task text are bounded
+at 90, 700, and 260 characters. Content is plain text. No callbacks, HTML, or navigation URLs
+are accepted. Registering tips does not enable a guide the user paused or turned off.
+
+The optional `experience` selects a host-owned explanation, such as `revisions`, `models`,
+`dashboard`, `workspace` (the Deployments guide), `storage`, `ecosystem`, `cycle`, `notebooks`, `infrastructure`,
+`extend`, `overview`, or `insights`. Unknown names safely use text-only guidance. Plugins do
+not inject animation code through this API. This feature does not require a higher compute
+service version; the optional member itself is the capability check.
+
+This API is not a security sandbox: existing plugin fragments are trusted scripts running
+in the Hub origin. Untrusted extensions require separate-origin isolation. Cross-origin
+iframe guide integration is not supported by this hook.
 
 ### The bridge object
 
@@ -614,6 +707,43 @@ plugin remote-ready; all are optional locally and additive:
   `data-run-target-check="table"|"off"`. Feature-detect the members (frontends without
   remote-node support have none of them) and call `checkDataForRunTarget` yourself only for
   bespoke placement, skipping it when `hostChecksTableInputs` is true.
+
+**Listing what a provider offers** (infrastructure plugins): give a container the class
+`tlc-catalog` and the worker injects `window.TlcCatalog` ahead of your script —
+`TlcCatalog.mount(container, {columns, rows, rowId, sort, search, selectedId, onSelect, action,
+details, unavailable})` renders a sortable, searchable table with one action button per row and
+a row that opens to the details you return; `handle.update(rows)` re-renders with fresh data
+and keeps the sort, search and open rows. Column types: `text` (with an optional `sub` line),
+`num` (right-aligned, optional `unit`), `price` (`$/h`, missing prices sort last), `status`
+(a coloured dot from `column.status(row)` → `{level: ok|warn|bad|muted, text}`). See
+`tlc_plugin_sdk/shared/catalog_table.py` for the full option list.
+
+**Folder downloads** (storage plugins): `tlc_plugin_sdk.shared.storage_bundle.BundleRegistry`
+builds one zip from every object under a prefix on a background thread and reports progress;
+you give it `list_objects(url)`, `open_object(key)` and `store_bundle(path, name) -> url`, and
+expose `start`/`status`/`cancel` as `POST /infra/storage/bundle`, `GET /infra/storage/bundle/{id}`,
+`DELETE /infra/storage/bundle/{id}`. Single files need no bundle: answer
+`POST /infra/storage/presign` with `mode: "download"` with presigned GET links. Copies, moves
+and renames inside one provider run the same way through
+`tlc_plugin_sdk.shared.storage_transfer.TransferRegistry` (`POST /infra/storage/transfer`,
+`GET`/`DELETE /infra/storage/transfer/{id}`); a failed copy never deletes its source.
+
+**Paths or URLs, one vocabulary** (import and export plugins): people point at this machine
+(`/data/coco`) or at a bucket (`s3://bucket/data/coco`), and the shared data-source picker
+offers both. `tlc_plugin_sdk.shared.url_utils` (`is_url`, `join_path_or_url`, `parent_of`,
+`iter_files`, `read_bytes`, …) lets a plugin treat the two alike — URLs go through `tlc.Url`
+and its adapters, the same transport and credentials that read and write tables, so no extra
+cloud SDKs.
+
+**When a table has landed** (importers, converters): end the same way every time. Inject
+`tlc_plugin_sdk.shared.table_landed.table_landed_script()` and render
+`_tlcTableLandedHtml(project, dataset, tableUrl)` — **Open in Project** (the Datasets tab with
+the new table selected) and **Open in Dashboard** (built by the host via
+`PLUGIN_API.dashboardUrl`, so it carries this deployment's object service; a plain
+`dashboard_url + '?table='` concatenation works on a laptop and points at the wrong endpoint
+anywhere else). The shared alias widget asks your worker's `GET /project-root` (served by
+`data_source_route_handlers()`) where *this* plugin's `tlc` writes tables before it offers to copy
+data next to a new one — the answer must come from the process that writes the table.
 
 Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every request must
 carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the
@@ -1091,7 +1221,7 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 - [ ] Custom CSS uses `var(--*)` variables, not hardcoded colors
 - [ ] Job progress follows the generic schema (no plugin-specific fields in frontend)
 - [ ] If GPU-bound: `requires_gpu = true` in `[runtime]`; long work is `run_job(ctx)` — never grab a queue
-- [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`)
+- [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`). The alias is not optional — the shared widget no longer offers to turn it off (a table written without one is full of absolute paths that resolve on one machine only); the token and folder stay editable under Details, and data inside the project is aliased relative to the table so the token survives a move
 - [ ] UI follows the page structure and card conventions from "Styling & UI Conventions" above
 - [ ] Hero section with icon, title, description, and 3 feature badges
 - [ ] Config bar if plugin has saved configurations

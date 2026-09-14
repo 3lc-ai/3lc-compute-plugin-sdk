@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from litestar import Litestar, Request, get
 
+from tlc_plugin_sdk.shared.catalog_table import CATALOG_MARKER, CATALOG_TABLE_JS
 from tlc_plugin_sdk.shared.job_tracker import JOB_TRACKER_JS
 from tlc_plugin_sdk.shared.ui_inject import inject_scripts
 
@@ -66,8 +67,11 @@ def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
         # is harmless. A fragment with no inline <script> has nothing to drive PluginJobs
         # from — inject_scripts() raises there, so serve it unchanged.
         raw = plugin.get_ui_fragment()
+        # The catalogue table rides along only for fragments that use it (a container with the
+        # ``tlc-catalog`` class): most plugins never list provider offerings.
+        scripts = [JOB_TRACKER_JS, CATALOG_TABLE_JS] if CATALOG_MARKER in raw else [JOB_TRACKER_JS]
         try:
-            return inject_scripts(raw, JOB_TRACKER_JS)
+            return inject_scripts(raw, *scripts)
         except ValueError:
             return raw
 

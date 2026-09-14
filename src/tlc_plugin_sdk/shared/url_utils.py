@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from collections.abc import Collection
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -110,3 +113,161 @@ def get_url_column_names(table: Any) -> list[str]:
     except Exception:
         logger.debug("Could not extract URL column names from table", exc_info=True)
     return names
+
+
+# ---------------------------------------------------------------------------
+# Paths or URLs — one vocabulary for "where the data is"
+#
+# Import and export plugins take folders and files from people who may point at this
+# machine (``/data/coco``) or at a bucket (``s3://bucket/data/coco``): the shared
+# data-source picker offers both. These helpers let a plugin treat the two alike. Local
+# paths go through ``pathlib``; URLs go through ``tlc.Url`` and its adapters — the same
+# transport and credentials that read and write tables, so no extra cloud SDKs.
+# ---------------------------------------------------------------------------
+
+_URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+
+
+def is_url(value: str) -> bool:
+    """True for ``scheme://…`` values (a bucket, volume or http location), False for local paths."""
+    return bool(_URL_RE.match(value.strip()))
+
+
+def normalize_path_or_url(value: str) -> str:
+    """Normalize a user-typed location: a URL is trimmed, a local path goes through :func:`normalize_local_path`.
+
+    Raises:
+        ValueError: The value is empty, or a local path that is not absolute.
+
+    """
+    text = value.strip()
+    if is_url(text):
+        return text.rstrip("/") if text.count("/") > 2 else text  # keep ``s3://bucket`` intact
+    return normalize_local_path(text)
+
+
+def join_path_or_url(base: str, *parts: str) -> str:
+    """Join child segments onto a folder path or URL."""
+    if is_url(base):
+        return "/".join([base.rstrip("/"), *(p.strip("/") for p in parts if p)])
+    return str(Path(base, *parts))
+
+
+def parent_of(value: str) -> str:
+    """The folder containing *value* (for a URL: everything before the last segment)."""
+    if is_url(value):
+        trimmed = value.rstrip("/")
+        scheme, _, rest = trimmed.partition("://")
+        head, _, _ = rest.rpartition("/")
+        return f"{scheme}://{head}" if head else trimmed
+    return str(Path(value).parent)
+
+
+def name_of(value: str) -> str:
+    """The last segment of a path or URL (``images`` for ``s3://b/data/images/``)."""
+    return value.rstrip("/").rpartition("/")[2] if is_url(value) else Path(value).name
+
+
+def stem_of(value: str) -> str:
+    """The last segment without its extension."""
+    return Path(name_of(value)).stem
+
+
+def suffix_of(value: str) -> str:
+    """The extension of the last segment, lower-cased, with its dot (``.json``)."""
+    return Path(name_of(value)).suffix.lower()
+
+
+def is_absolute(value: str) -> bool:
+    """True for a URL or an absolute local path."""
+    return is_url(value) or Path(value).is_absolute()
+
+
+def is_folder(value: str) -> bool:
+    """True when *value* is a local directory or a URL prefix with content under it."""
+    if not is_url(value):
+        return Path(value).is_dir()
+    import tlc
+    from tlcurl.url_adapters._registry import UrlAdapterRegistry
+
+    url = tlc.Url(value.rstrip("/") + "/")
+    try:
+        if UrlAdapterRegistry.is_dir(url):
+            return True
+    except Exception:
+        logger.debug("is_dir failed for %s", value, exc_info=True)
+    try:
+        return next(iter(UrlAdapterRegistry.list_dir(url)), None) is not None
+    except Exception:
+        return False
+
+
+def is_file(value: str) -> bool:
+    """True when *value* is a local file or an object that exists at the URL."""
+    if not is_url(value):
+        return Path(value).is_file()
+    import tlc
+
+    try:
+        return bool(tlc.Url(value).exists())
+    except Exception:
+        return False
+
+
+def read_bytes(value: str) -> bytes:
+    """Read a local file or a URL."""
+    if not is_url(value):
+        return Path(value).read_bytes()
+    import tlc
+
+    data: bytes = tlc.Url(value).read_bytes()
+    return data
+
+
+def read_text(value: str, *, encoding: str = "utf-8") -> str:
+    """Read a local file or a URL as text."""
+    return read_bytes(value).decode(encoding)
+
+
+def list_folder(value: str) -> list[tuple[str, bool]]:
+    """One level of a folder: ``(child path or URL, is_dir)`` pairs, sorted by name."""
+    if not is_url(value):
+        root = Path(value)
+        return sorted(((str(p), p.is_dir()) for p in root.iterdir()), key=lambda t: t[0])
+    import tlc
+    from tlcurl.url_adapters._registry import UrlAdapterRegistry
+
+    base = value.rstrip("/")
+    out: list[tuple[str, bool]] = []
+    for entry in UrlAdapterRegistry.list_dir(tlc.Url(base + "/")):
+        flag = entry.is_dir
+        is_dir = bool(flag()) if callable(flag) else bool(flag)
+        name = str(entry.name).rstrip("/")
+        if name:
+            out.append((base + "/" + name, is_dir))
+    return sorted(out, key=lambda t: t[0])
+
+
+def iter_files(folder: str, *, extensions: Collection[str] | None = None, recursive: bool = True) -> list[str]:
+    """Files under a folder path or URL, sorted; hidden files skipped, optionally filtered by extension.
+
+    Args:
+        folder: Local directory or URL prefix.
+        extensions: Lower-case extensions with the dot (``{".jpg", ".png"}``); ``None`` for all files.
+        recursive: Descend into subfolders.
+
+    """
+    wanted = {e.lower() for e in extensions} if extensions else None
+    found: list[str] = []
+    stack = [folder]
+    while stack:
+        current = stack.pop()
+        for child, is_dir in list_folder(current):
+            if name_of(child).startswith("."):
+                continue
+            if is_dir:
+                if recursive:
+                    stack.append(child)
+            elif wanted is None or suffix_of(child) in wanted:
+                found.append(child)
+    return sorted(found)

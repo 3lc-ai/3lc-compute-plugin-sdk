@@ -256,6 +256,22 @@ export interface PluginContext {
   projectName: string;
 }
 
+export interface PluginGuideTip {
+  id: string;
+  target: string;
+  title: string;
+  body: string;
+  task?: string;
+  experience?: string;
+}
+
+export interface PluginGuide {
+  readonly version: 1;
+  register(tips: readonly PluginGuideTip[]): void;
+  complete(tipId: string): void;
+  dispose(): void;
+}
+
 /**
  * The single host -> fragment JS contract. The frontend injects this as
  * `window.PLUGIN_API` when it mounts a plugin fragment; a fragment should reach
@@ -272,6 +288,7 @@ export interface PluginApi {
    * `<body data-contract-version>`. '' if the host predates it.
    */
   contractVersion: string;
+  guide?: PluginGuide | null;
 
   /**
    * Return a configured URL by key. `dashboard_url` has its trailing slash
@@ -280,6 +297,17 @@ export interface PluginApi {
    * recognized — any other key returns ''.
    */
   getConfig(key: "dashboard_url" | "compute_service_url" | "object_service_url"): string;
+
+  /**
+   * The Dashboard link for a table or a run, built the way every Hub page builds it — the base this
+   * browser is on, plus `object_service`, so the Dashboard opens against this deployment's data rather
+   * than its own default. Prefer it over concatenating `getConfig('dashboard_url')`, which produces a
+   * link that works on a laptop and points at the wrong endpoint anywhere else.
+   *
+   * Returns '' when the deployment has no Dashboard configured. Older hosts do not define this — a
+   * plugin that wants to run on them should feature-detect.
+   */
+  dashboardUrl(params: { table?: string; project?: string; run?: string }): string;
 
   /**
    * Authenticated `fetch`. Injects `Authorization` (from `TlcAuth`) and a default
