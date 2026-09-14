@@ -158,6 +158,31 @@ def _notify_discovery(url: str, operation: str) -> None:
         discovery.notify_delete(url)
 
 
+def notify_storage_deletes(urls: Iterable[str], *, removed_folders: Iterable[str] = ()) -> list[str]:
+    """Announce successful raw-storage deletes, collapsing fully removed folders.
+
+    A deleted project only touches its parent scan root; notifying its former
+    tables individually would write markers back inside the removed project.
+    Ordinary data-file deletions do not affect object discovery.
+    """
+    folders = sorted({url.rstrip("/") for url in removed_folders}, key=len)
+    objects = set()
+    for url in _discovery_objects(urls):
+        objects.add(next((folder for folder in folders if url == folder or url.startswith(folder + "/")), url))
+    warnings = []
+    for url in sorted(objects):
+        try:
+            _notify_discovery(url, "delete")
+        except Exception:
+            logger.warning("Storage delete: discovery notification failed for %s", url, exc_info=True)
+            if not warnings:
+                warnings.append(
+                    "Files were deleted, but 3LC discovery could not be refreshed. "
+                    "The Object Service may still list them."
+                )
+    return warnings
+
+
 class TransferRegistry:
     """Plans, starts, tracks and cancels transfers for one plugin worker."""
 
