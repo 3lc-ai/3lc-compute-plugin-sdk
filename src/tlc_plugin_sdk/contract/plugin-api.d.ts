@@ -296,7 +296,12 @@ export interface PluginApi {
    * `object_service_url` comes from `TlcApi`. These three keys are the only ones
    * recognized — any other key returns ''.
    */
-  getConfig(key: "dashboard_url" | "compute_service_url" | "object_service_url"): string;
+  getConfig(key: "dashboard_url" | "compute_service_url" | "object_service_url" | "deployment_name"): string;
+
+  /** Optional display helper using the node's saved hourly quote or this browser's cached quote.
+   * No pricing request is made. Returns a USD/hour label or "Cost unavailable".
+   */
+  nodeHourlyCost?(node: { id?: string; node_id?: string; plugin_id?: string; gpu_type?: string; pricing?: string; created_at?: number; hourly_rate?: number | null }): string;
 
   /**
    * The Dashboard link for a table or a run, built the way every Hub page builds it — the base this
