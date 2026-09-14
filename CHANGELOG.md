@@ -8,45 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Shared storage helpers for infrastructure plugins** (`tlc_plugin_sdk.shared`):
-  `storage_bundle.BundleRegistry` zips every object under a prefix on a background thread with
-  progress and cancel, for the `/infra/storage/bundle*` routes; `storage_transfer.TransferRegistry`
-  plans and runs copies, moves and renames inside one provider as a job, for the
-  `/infra/storage/transfer*` routes — a failed copy is reported and its source is never deleted.
-- **`window.TlcCatalog`** (`shared/catalog_table.py`): a sortable, searchable offerings table with
-  one action per row and expandable details, injected into a fragment's `/ui` only when it has a
-  `tlc-catalog` container — most plugins never list provider offerings and pay nothing.
-- **Paths or URLs, one vocabulary** (`shared/url_utils.py`): `is_url`, `normalize_path_or_url`,
-  `join_path_or_url`, `parent_of`, `name_of`, `is_folder`, `is_file`, `read_bytes`, `list_folder`,
-  `iter_files` treat a local folder and a bucket prefix alike; URLs go through `tlc.Url` and its
-  adapters, so a plugin needs no cloud SDK of its own.
-- **One ending for a table-creating plugin** (`shared/table_landed.py`): `_tlcTableLandedHtml`
-  renders *Open in Project* (the Datasets tab with the new table selected) and *Open in
-  Dashboard*, the latter built by the host through the new optional `PLUGIN_API.dashboardUrl`
-  so it carries this deployment's object service.
-- **Shared alias and data-source widgets learn where data is going.** The data-source picker
-  browses buckets through the host's generic storage surface; the alias widget can copy a local
-  folder next to the new table (`aliases.copy_folder_to_url`, resumable) and alias it there, asks
-  the writing plugin for its project root (`GET /project-root`, now part of
-  `data_source_route_handlers()`), states a lone root rather than offering it as a choice, and a
-  form can ask where the table is actually going. Data inside the project is aliased *relative
-  to the table* (`aliases.relative_alias_value`), so the token survives a move; alias scanning
-  also reads stored row values for tokens.
-- **Optional browser guide contract.** `PLUGIN_API.guide` (`PluginGuide`, `PluginGuideTip` in
-  `plugin-api.d.ts`): a fragment registers its own scoped tips after it mounts; feature-detect
-  the member, no Python hook or manifest field involved.
-- Guide: the infrastructure-plugin section (typed `InfrastructurePlugin` contract, preflight,
-  `flavors`/`pricing`, `storage.project_root_url`), with provider sign-in (`workspace_login`,
-  `workspace_role`) documented as **provisional** — outside the typed contract until the Hub's
-  credentials handling is settled.
-
-### Changed
-- **Registering a URL alias is no longer optional** in the shared alias widget: the checkbox
-  that turned it off is gone (it quietly produced tables full of absolute paths). The token and
-  folder stay editable; `_tlcBindAliasToggle` remains as a no-op and `_tlcGetAliasValues`
-  reports `alias_enabled: true`, so existing plugins keep working unchanged.
-- The alias-override widget's label says what it does — *Read this data from somewhere else for
-  this run* — instead of reading like the alias switch.
 - `CreateNodeRequest` carries `compute_spec` (the host's pinned requirement for the node
   agent's own distribution, e.g. `3lc-compute==1.2`) and `wheelhouse` (a directory on the
   controller or a URL where wheels for unpublished builds live). A provider that installs the
