@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Optional browser-side `PLUGIN_API.guide` contract for runtime plugin guidance: mount-scoped
+  plain-text tips, bounded selectors, seen-state reporting, and disposal. Plugins feature-detect
+  the hook; no compute-service endpoint, plugin allowlist, or Python import is required.
 - `ctx.identity`: a `JobIdentity` (`user_id`, `org_id`, `project_id` — canonical id strings,
   `None` when the host did not know) saying who a job runs for. The host stamps it under the
   host-owned top-level run-body key `_identity`; the worker pops it before `ctx.params` is built,

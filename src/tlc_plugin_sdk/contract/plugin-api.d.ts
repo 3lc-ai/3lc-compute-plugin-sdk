@@ -256,6 +256,22 @@ export interface PluginContext {
   projectName: string;
 }
 
+export interface PluginGuideTip {
+  id: string;
+  target: string;
+  title: string;
+  body: string;
+  task?: string;
+  experience?: string;
+}
+
+export interface PluginGuide {
+  readonly version: 1;
+  register(tips: readonly PluginGuideTip[]): void;
+  complete(tipId: string): void;
+  dispose(): void;
+}
+
 /**
  * The single host -> fragment JS contract. The frontend injects this as
  * `window.PLUGIN_API` when it mounts a plugin fragment; a fragment should reach
@@ -272,6 +288,7 @@ export interface PluginApi {
    * `<body data-contract-version>`. '' if the host predates it.
    */
   contractVersion: string;
+  guide?: PluginGuide | null;
 
   /**
    * Return a configured URL by key. `dashboard_url` has its trailing slash

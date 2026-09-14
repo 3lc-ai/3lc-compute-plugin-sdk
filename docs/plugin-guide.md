@@ -386,6 +386,65 @@ by the host — the frontend can't tell where it came from. `PLUGIN_API` is the 
 reach for nothing else (the `API` shorthand some plugins use is just
 `var API = window.PLUGIN_API`).
 
+### Optional interactive guide
+
+The Hub can supply `PLUGIN_API.guide`, an optional browser-only hook. No Python hook,
+compute-service endpoint, plugin allowlist, or guide manifest is needed. The plugin owns its
+instructions and registers them after its UI fragment mounts. Feature-detect the member so
+the same plugin works on hosts without a guide:
+
+```javascript
+var api = window.PLUGIN_API;
+var guide = api.guide && api.guide.version === 1 ? api.guide : null;
+if (guide) guide.register([
+  {
+    id: 'inputs',
+    target: '[data-guide="inputs"]',
+    title: 'Choose input data',
+    body: 'Select the table revision this operation should use.',
+    task: 'Check the revision before starting.',
+    experience: 'revisions'
+  },
+  {
+    id: 'results',
+    target: '[data-guide="results"]',
+    title: 'Inspect the result',
+    body: 'Review the output before using it in another operation.'
+  }
+]);
+```
+
+`guide.register(tips)` replaces this mount's tips in the supplied order. Targets are CSS
+selectors scoped to the plugin container, not the whole page. Missing or hidden targets
+wait until visible, so asynchronous results can be registered before they arrive.
+A nonempty valid registration replaces the Hub's generic tips on this plugin's page,
+including the AI/Data category explanation. This holds while targets are still hidden:
+the guide waits for your UI instead of showing duplicate generic instructions. An empty
+registration or disposal restores the generic fallback. Hub-wide navigation guidance is
+unaffected. A runtime widget on a different page adds only its own scoped tips.
+`guide.complete(id)` marks a known tip as seen; it neither changes user settings nor
+claims that a task succeeded. `guide.dispose()` invalidates the handle. The host also
+invalidates handles on fragment replacement or unmount, so late callbacks cannot alter
+another mount's guidance. Capture the bridge at initialization rather than looking up the
+global `PLUGIN_API` inside a later callback.
+
+The host accepts up to 12 tips per registration and eight live registrations. IDs are
+1–48 ASCII letters, digits, underscores, or hyphens and are automatically namespaced by the
+plugin ID. Use static IDs, never credentials, URLs, project names, or sample identifiers.
+Selectors have a 200-character limit. Titles, body text, and optional task text are bounded
+at 90, 700, and 260 characters. Content is plain text. No callbacks, HTML, or navigation URLs
+are accepted. Registering tips does not enable a guide the user paused or turned off.
+
+The optional `experience` selects a host-owned explanation, such as `revisions`, `models`,
+`dashboard`, `workspace`, `storage`, `ecosystem`, `cycle`, `notebooks`, `infrastructure`,
+`extend`, `overview`, or `insights`. Unknown names safely use text-only guidance. Plugins do
+not inject animation code through this API. This feature does not require a higher compute
+service version; the optional member itself is the capability check.
+
+This API is not a security sandbox: existing plugin fragments are trusted scripts running
+in the Hub origin. Untrusted extensions require separate-origin isolation. Cross-origin
+iframe guide integration is not supported by this hook.
+
 ### The bridge object
 
 When a plugin UI fragment is mounted, the frontend creates a global `PLUGIN_API` object:
