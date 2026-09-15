@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,32 @@ from tlc_plugin_sdk.shared.alias_ui import alias_ui_script
 from tlc_plugin_sdk.shared.data_source_ui import data_source_ui_script
 
 
+class _LocalUrl:
+    """The two ``tlc.Url`` calls the copy makes, backed by the filesystem.
+
+    The helper reaches ``tlc`` lazily and only for ``Url(...).exists()`` and
+    ``.write_bytes()``. A real ``tlc`` activates a 3LC account on first use, which a test
+    (and CI) does not have — so the copy tests run against this stand-in.
+    """
+
+    def __init__(self, url: str) -> None:
+        self._path = Path(url)
+
+    def exists(self) -> bool:
+        return self._path.exists()
+
+    def write_bytes(self, data: bytes) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_bytes(data)
+
+
+@pytest.fixture
+def local_tlc(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = types.ModuleType("tlc")
+    setattr(fake, "Url", _LocalUrl)
+    monkeypatch.setitem(sys.modules, "tlc", fake)
+
+
 def _tree(root: Path) -> None:
     (root / "train").mkdir(parents=True)
     (root / "train" / "a.jpg").write_bytes(b"a" * 10)
@@ -29,7 +57,7 @@ def _tree(root: Path) -> None:
     (root / ".DS_Store").write_bytes(b"junk")  # never copied
 
 
-def test_copy_folder_to_url_copies_the_tree_and_reports_progress(tmp_path: Path) -> None:
+def test_copy_folder_to_url_copies_the_tree_and_reports_progress(tmp_path: Path, local_tlc: None) -> None:
     src, dst = tmp_path / "src", tmp_path / "dst" / "data" / "token"
     _tree(src)
     seen: list[tuple[int, int, int, int]] = []
@@ -40,7 +68,7 @@ def test_copy_folder_to_url_copies_the_tree_and_reports_progress(tmp_path: Path)
     assert seen[-1] == (3, 3, 31, 31) and len(seen) == 3
 
 
-def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path) -> None:
+def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path, local_tlc: None) -> None:
     src, dst = tmp_path / "src", tmp_path / "dst"
     _tree(src)
     aliases.copy_folder_to_url(str(src), str(dst))
@@ -50,7 +78,7 @@ def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path) -> No
     assert (dst / "train" / "b.jpg").exists()
 
 
-def test_copy_folder_to_url_rejects_a_missing_folder(tmp_path: Path) -> None:
+def test_copy_folder_to_url_rejects_a_missing_folder(tmp_path: Path, local_tlc: None) -> None:
     with pytest.raises(FileNotFoundError):
         aliases.copy_folder_to_url(str(tmp_path / "nope"), str(tmp_path / "dst"))
 
