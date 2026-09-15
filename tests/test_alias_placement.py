@@ -24,12 +24,7 @@ from tlc_plugin_sdk.shared.data_source_ui import data_source_ui_script
 
 
 class _LocalUrl:
-    """The two ``tlc.Url`` calls the copy makes, backed by the filesystem.
-
-    The helper reaches ``tlc`` lazily and only for ``Url(...).exists()`` and
-    ``.write_bytes()``. A real ``tlc`` activates a 3LC account on first use, which a test
-    (and CI) does not have — so the copy tests run against this stand-in.
-    """
+    """The two ``tlc.Url`` calls the copy makes, backed by the filesystem."""
 
     def __init__(self, url: str) -> None:
         self._path = Path(url)
@@ -42,11 +37,40 @@ class _LocalUrl:
         self._path.write_bytes(data)
 
 
-@pytest.fixture
-def local_tlc(monkeypatch: pytest.MonkeyPatch) -> None:
+class _ProjectHelper:
+    @staticmethod
+    def register_project_url_alias(**kwargs: Any) -> None:
+        raise AssertionError("register_project_url_alias was not patched by the test")
+
+
+def _fake_tlc() -> types.ModuleType:
+    """A stand-in for the ``tlc`` surface ``shared.aliases`` reaches for.
+
+    The helpers import ``tlc`` lazily and touch only ``Url``, ``url.*`` alias registration
+    and ``helpers.ProjectHelper``. The real ``tlc`` activates a 3LC account the first time
+    one of those is used, which a test (and CI) does not have — so every test here runs
+    against this module and patches the call it is about.
+    """
     fake = types.ModuleType("tlc")
+    url = types.ModuleType("tlc.url")
+    setattr(url, "get_registered_url_aliases", dict)
+    setattr(url, "register_url_alias", lambda **kw: None)
+    setattr(url, "unregister_url_alias", lambda **kw: None)
+    setattr(url, "get_alias_path", lambda token: None)
+    helpers = types.ModuleType("tlc.helpers")
+    setattr(helpers, "ProjectHelper", _ProjectHelper)
     setattr(fake, "Url", _LocalUrl)
+    setattr(fake, "url", url)
+    setattr(fake, "helpers", helpers)
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def local_tlc(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _fake_tlc()
     monkeypatch.setitem(sys.modules, "tlc", fake)
+    monkeypatch.setitem(sys.modules, "tlc.url", fake.url)
+    monkeypatch.setitem(sys.modules, "tlc.helpers", fake.helpers)
 
 
 def _tree(root: Path) -> None:
@@ -57,7 +81,7 @@ def _tree(root: Path) -> None:
     (root / ".DS_Store").write_bytes(b"junk")  # never copied
 
 
-def test_copy_folder_to_url_copies_the_tree_and_reports_progress(tmp_path: Path, local_tlc: None) -> None:
+def test_copy_folder_to_url_copies_the_tree_and_reports_progress(tmp_path: Path) -> None:
     src, dst = tmp_path / "src", tmp_path / "dst" / "data" / "token"
     _tree(src)
     seen: list[tuple[int, int, int, int]] = []
@@ -68,7 +92,7 @@ def test_copy_folder_to_url_copies_the_tree_and_reports_progress(tmp_path: Path,
     assert seen[-1] == (3, 3, 31, 31) and len(seen) == 3
 
 
-def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path, local_tlc: None) -> None:
+def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path) -> None:
     src, dst = tmp_path / "src", tmp_path / "dst"
     _tree(src)
     aliases.copy_folder_to_url(str(src), str(dst))
@@ -78,7 +102,7 @@ def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path, local
     assert (dst / "train" / "b.jpg").exists()
 
 
-def test_copy_folder_to_url_rejects_a_missing_folder(tmp_path: Path, local_tlc: None) -> None:
+def test_copy_folder_to_url_rejects_a_missing_folder(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         aliases.copy_folder_to_url(str(tmp_path / "nope"), str(tmp_path / "dst"))
 
