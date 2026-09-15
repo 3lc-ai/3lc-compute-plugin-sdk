@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,57 @@ import pytest
 from tlc_plugin_sdk.shared import aliases
 from tlc_plugin_sdk.shared.alias_ui import alias_ui_script
 from tlc_plugin_sdk.shared.data_source_ui import data_source_ui_script
+
+
+class _LocalUrl:
+    """The two ``tlc.Url`` calls the copy makes, backed by the filesystem."""
+
+    def __init__(self, url: str) -> None:
+        self._path = Path(url)
+
+    def exists(self) -> bool:
+        return self._path.exists()
+
+    def write_bytes(self, data: bytes) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_bytes(data)
+
+
+class _ProjectHelper:
+    @staticmethod
+    def register_project_url_alias(**kwargs: Any) -> None:
+        msg = "register_project_url_alias was not patched by the test"
+        raise AssertionError(msg)
+
+
+def _fake_tlc() -> types.ModuleType:
+    """A stand-in for the ``tlc`` surface ``shared.aliases`` reaches for.
+
+    The helpers import ``tlc`` lazily and touch only ``Url``, ``url.*`` alias registration
+    and ``helpers.ProjectHelper``. The real ``tlc`` activates a 3LC account the first time
+    one of those is used, which a test (and CI) does not have — so every test here runs
+    against this module and patches the call it is about.
+    """
+    fake = types.ModuleType("tlc")
+    url = types.ModuleType("tlc.url")
+    setattr(url, "get_registered_url_aliases", dict)
+    setattr(url, "register_url_alias", lambda **kw: None)
+    setattr(url, "unregister_url_alias", lambda **kw: None)
+    setattr(url, "get_alias_path", lambda token: None)
+    helpers = types.ModuleType("tlc.helpers")
+    setattr(helpers, "ProjectHelper", _ProjectHelper)
+    setattr(fake, "Url", _LocalUrl)
+    setattr(fake, "url", url)
+    setattr(fake, "helpers", helpers)
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def local_tlc(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _fake_tlc()
+    monkeypatch.setitem(sys.modules, "tlc", fake)
+    monkeypatch.setitem(sys.modules, "tlc.url", fake.url)
+    monkeypatch.setitem(sys.modules, "tlc.helpers", fake.helpers)
 
 
 def _tree(root: Path) -> None:

@@ -291,12 +291,33 @@ export interface PluginApi {
   guide?: PluginGuide | null;
 
   /**
-   * Return a configured URL by key. `dashboard_url` has its trailing slash
+   * Return a configured value by key. `dashboard_url` has its trailing slash
    * stripped; `compute_service_url` is the GPU/CPU-routed service for THIS plugin;
-   * `object_service_url` comes from `TlcApi`. These three keys are the only ones
-   * recognized — any other key returns ''.
+   * `object_service_url` comes from `TlcApi`. `deployment_name` is the label the Hub
+   * shows for the deployment this fragment's compute service belongs to (a managed
+   * deployment's label, the demo deployment, or "Custom Deployment · host") — '' on a
+   * host that predates it. These four keys are the only ones recognized — any other
+   * key returns ''.
    */
-  getConfig(key: "dashboard_url" | "compute_service_url" | "object_service_url"): string;
+  getConfig(key: "dashboard_url" | "compute_service_url" | "object_service_url" | "deployment_name"): string;
+
+  /**
+   * A cost label for a node, from the hourly quote the host saved when the node was
+   * created (`hourly_rate`, a provider's `CreateNodeResponse.hourly_rate`) or from this
+   * browser's cached quote for the same node. No pricing request is made. Returns a
+   * USD/hour label ("≈ $1.21/h", "Spot estimate $0.30/h") or "Cost unavailable".
+   * `node` is a record as `GET /api/infra/nodes` returns it; `node_type` is the node
+   * kind the provider was asked for. Optional — older hosts do not define it.
+   */
+  nodeHourlyCost?(node: {
+    id?: string;
+    node_id?: string;
+    plugin_id?: string;
+    node_type?: string;
+    pricing?: string;
+    created_at?: number;
+    hourly_rate?: number | null;
+  }): string;
 
   /**
    * The Dashboard link for a table or a run, built the way every Hub page builds it — the base this

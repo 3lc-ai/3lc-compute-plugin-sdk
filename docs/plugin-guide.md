@@ -726,7 +726,13 @@ expose `start`/`status`/`cancel` as `POST /infra/storage/bundle`, `GET /infra/st
 `POST /infra/storage/presign` with `mode: "download"` with presigned GET links. Copies, moves
 and renames inside one provider run the same way through
 `tlc_plugin_sdk.shared.storage_transfer.TransferRegistry` (`POST /infra/storage/transfer`,
-`GET`/`DELETE /infra/storage/transfer/{id}`); a failed copy never deletes its source.
+`GET`/`DELETE /infra/storage/transfer/{id}`); a failed copy never deletes its source. When a
+transfer finishes — done, failed or cancelled — the registry tells 3LC object discovery about
+every table, run or `.3lc.yaml` object it wrote or removed, so the Object Service lists the
+moved objects without a rescan; a notification that fails is reported in the status
+payload's `warnings`, never as a failed transfer. A plugin that deletes raw storage itself
+calls `notify_storage_deletes(urls, removed_folders=...)` from the same module for the same
+effect.
 
 **Paths or URLs, one vocabulary** (import and export plugins): people point at this machine
 (`/data/coco`) or at a bucket (`s3://bucket/data/coco`), and the shared data-source picker
