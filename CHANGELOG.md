@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Storage transfers refresh object discovery.** `TransferRegistry` now tells 3LC object
+  discovery (`tlc.discovery.notify_write` / `notify_delete`) about every table, run and
+  `.3lc.yaml` object a transfer wrote or removed, once the transfer has finished — done, failed
+  or cancelled alike, and only for objects whose copy or delete actually succeeded — so the
+  Object Service lists a moved project without a rescan. A notification that fails does not fail
+  the transfer: the status payload gains a `warnings` list that says discovery could not be
+  refreshed. Pass `notify_change=` to `TransferRegistry` to substitute or silence the
+  notifier (tests do).
+- `tlc_plugin_sdk.shared.storage_transfer.notify_storage_deletes(urls, removed_folders=...)`
+  for a plugin that deletes raw storage itself: announces the deleted objects to discovery,
+  collapsing everything under a fully removed folder into that one folder so no marker is
+  written back inside a project that no longer exists. Returns the same warning strings.
+- `CreateNodeResponse.hourly_rate` (`float | None`): a provider that knows the hourly price of
+  the node it just created returns it here; the host saves it on the node record and the Hub
+  shows it as the node's cost. Omitted from the wire body when `None`.
+- Browser contract (`plugin-api.d.ts`): `getConfig("deployment_name")` returns the label the
+  Hub shows for the deployment this fragment's compute service belongs to; the optional
+  `nodeHourlyCost?(node)` renders a node record's saved (or browser-cached) hourly quote as a
+  USD/hour label, or "Cost unavailable". Both are `''`/undefined on hosts that predate them.
 - `CreateNodeRequest` carries `compute_spec` (the host's pinned requirement for the node
   agent's own distribution, e.g. `3lc-compute==1.2`) and `wheelhouse` (a directory on the
   controller or a URL where wheels for unpublished builds live). A provider that installs the

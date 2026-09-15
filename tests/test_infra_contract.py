@@ -102,6 +102,14 @@ class TestCreateNodeResponse:
         assert d == {"provider_id": "p1", "agent_url": "http://x:8800", "worker_url_template": "http://x:{port}"}
         assert "token" not in d
         assert "pricing" not in d
+        assert "hourly_rate" not in d
+
+    def test_to_dict_hourly_rate(self) -> None:
+        """A quote is emitted as a number; zero is a real quote, ``None`` is no quote."""
+        base = {"provider_id": "p1", "agent_url": "http://x:8800", "worker_url_template": "http://x:{port}"}
+        assert CreateNodeResponse(**base, hourly_rate=1.21).to_dict()["hourly_rate"] == 1.21
+        assert CreateNodeResponse(**base, hourly_rate=0).to_dict()["hourly_rate"] == 0.0
+        assert "hourly_rate" not in CreateNodeResponse(**base, hourly_rate=None).to_dict()
 
     def test_to_dict_with_optionals(self) -> None:
         resp = CreateNodeResponse(

@@ -87,6 +87,10 @@ class CreateNodeResponse:
     token: str = ""
     pricing: str = ""
     detail: str = ""
+    #: The provider's hourly quote for this node in USD, when it knows one (an on-demand list
+    #: price, or the spot bid it placed). The host saves it on the node record and the Hub shows
+    #: it as the node's cost; ``None`` means "no quote" and the Hub says so.
+    hourly_rate: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the JSON body the host expects."""
@@ -101,6 +105,8 @@ class CreateNodeResponse:
             d["pricing"] = self.pricing
         if self.detail:
             d["detail"] = self.detail
+        if self.hourly_rate is not None:
+            d["hourly_rate"] = float(self.hourly_rate)
         return d
 
 

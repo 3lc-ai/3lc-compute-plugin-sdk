@@ -11,7 +11,8 @@ from typing import Any
 
 import pytest
 
-from tlc_plugin_sdk.shared.storage_transfer import TransferError, TransferRegistry
+from tlc_plugin_sdk.shared import storage_transfer
+from tlc_plugin_sdk.shared.storage_transfer import TransferError, TransferRegistry, notify_storage_deletes
 
 
 class _Store:
@@ -151,3 +152,114 @@ def test_bad_requests_fail_before_a_thread_exists() -> None:
     with pytest.raises(TransferError, match=re.escape("'..'")):
         registry.start("s3://b/a", "s3://b/c", ["../x"])
     assert registry.status("nope") is None and registry.active() == 0
+
+
+def test_project_copy_notifies_after_all_files_and_markers_are_copied() -> None:
+    src = "s3://b/source/p"
+    dst = "s3://b/target/p"
+    store = _Store({
+        src + "/runs/r/object.3lc.json": 10,
+        src + "/runs/r/data.bin": 200,
+        src + "/index.3lc.json": 20,
+        src + "/config.3lc.yaml": 10,
+    })
+    notifications = []
+
+    def notify(url, operation):
+        assert len(store.copies) == 4
+        assert dst + "/index.3lc.json" in store.objects
+        notifications.append((url, operation))
+
+    registry = _registry(store, notify_change=notify)
+    st = _wait(registry, registry.start("s3://b/source", "s3://b/target", ["p/"])["transfer_id"])
+    assert st["state"] == "done"
+    assert set(notifications) == {(dst + "/runs/r", "write"), (dst + "/config.3lc.yaml", "write")}
+    assert not st["warnings"]
+
+
+def test_partial_copy_notifies_only_successful_objects() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
+    store.fail_on.add("s3://b/src/b/object.3lc.json")
+    notifications = []
+    registry = _registry(store, notify_change=lambda url, op: notifications.append((url, op)))
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/", "b/"])["transfer_id"])
+    assert st["state"] == "failed"
+    assert notifications == [("s3://b/dst/a", "write")]
+
+
+def test_cancelled_copy_still_notifies_the_completed_object() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
+    notifications = []
+    registry = _registry(store, workers=1, notify_change=lambda url, op: notifications.append((url, op)))
+    original = registry._copy
+
+    def copy(src, dst):
+        original(src, dst)
+        next(iter(registry._transfers.values()))._cancel.set()
+
+    registry._copy = copy
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/", "b/"])["transfer_id"])
+    assert st["state"] == "cancelled"
+    assert notifications == [("s3://b/dst/a", "write")]
+
+
+def test_move_notifies_only_successful_source_deletions() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
+    notifications = []
+    registry = _registry(store, notify_change=lambda url, op: notifications.append((url, op)))
+
+    def delete(url):
+        if "/src/b/" in url:
+            message = "delete denied"
+            raise OSError(message)
+        store.delete_object(url)
+
+    registry._delete = delete
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/", "b/"], mode="move")["transfer_id"])
+    assert st["state"] == "failed"
+    assert set(notifications) == {("s3://b/dst/a", "write"), ("s3://b/dst/b", "write"), ("s3://b/src/a", "delete")}
+
+
+def test_notification_failure_is_reported_without_hiding_copy_success() -> None:
+    store = _Store({"s3://b/src/a/object.3lc.json": 1})
+
+    def notify(url, operation):
+        message = "marker write denied"
+        raise OSError(message)
+
+    registry = _registry(store, notify_change=notify)
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a/"])["transfer_id"])
+    assert st["state"] == "done"
+    assert st["files_done"] == 1
+    assert "discovery could not be refreshed" in st["warnings"][0]
+
+
+def test_raw_deletes_notify_one_object_per_folder_and_collapse_removed_folders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(storage_transfer, "_notify_discovery", lambda url, op: notifications.append((url, op)))
+    deleted = [
+        "s3://b/proj/tables/t1/object.3lc.json",  # inside the removed project → collapses to the project
+        "s3://b/proj/tables/t1/data.parquet",  # data files never notify
+        "s3://b/other/config.3lc.yaml",  # a yaml object outside any removed folder → notified by URL
+        "s3://b/other/runs/r/object.3lc.json",  # a table/run → notified by its directory
+    ]
+    warnings = notify_storage_deletes(deleted, removed_folders=["s3://b/proj/"])
+    assert warnings == []
+    assert sorted(notifications) == [
+        ("s3://b/other/config.3lc.yaml", "delete"),
+        ("s3://b/other/runs/r", "delete"),
+        ("s3://b/proj", "delete"),
+    ]
+
+
+def test_raw_delete_notification_failure_is_one_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    def notify(url: str, op: str) -> None:
+        message = "marker write denied"
+        raise OSError(message)
+
+    monkeypatch.setattr(storage_transfer, "_notify_discovery", notify)
+    warnings = notify_storage_deletes(["s3://b/a/object.3lc.json", "s3://b/c/object.3lc.json"])
+    assert len(warnings) == 1
+    assert "discovery could not be refreshed" in warnings[0]
