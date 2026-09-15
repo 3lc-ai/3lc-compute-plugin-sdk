@@ -40,7 +40,8 @@ class _LocalUrl:
 class _ProjectHelper:
     @staticmethod
     def register_project_url_alias(**kwargs: Any) -> None:
-        raise AssertionError("register_project_url_alias was not patched by the test")
+        msg = "register_project_url_alias was not patched by the test"
+        raise AssertionError(msg)
 
 
 def _fake_tlc() -> types.ModuleType:
