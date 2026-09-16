@@ -4,16 +4,18 @@ name: Release
 # To cut a release: bump `version` in pyproject.toml (regenerate uv.lock), update CHANGELOG.md,
 # commit, then push a tag `vX.Y.Z` that matches the version.
 #
-# Manual (workflow_dispatch) runs publish build-numbered prereleases to the legacy CloudRepo
-# index (pypi.3lc.ai) — kept as a grace-period fallback; retire that job (and the CLOUDREPO_*
-# secrets/vars on the "release" environment) once nothing consumes the CloudRepo index. The
-# split deliberately keeps build-numbered versions OFF PyPI: `X.Y.Z.N` sorts above `X.Y.Z`,
-# so a prerelease build would win over the real release in `>=X.Y,<X.Y+1`-style pins.
+# Manual runs build POC wheels for the private CloudRepo prereleases repository.
+# Build-only is the default; publishing is an explicit input. Build stamps never reach PyPI.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified build to the private CloudRepo prereleases repository
+        type: boolean
+        default: false
 
 jobs:
   # Gate the release on the full CI suite (ruff · mypy · pytest).
@@ -40,7 +42,7 @@ jobs:
 
       - name: Verify tag matches pyproject version
         run: |
-          PKG=$(uv version --output-format json | jq -r '.version')
+          PKG=$(uv version --frozen --output-format json | jq -r '.version')
           TAG="${GITHUB_REF_NAME#v}"
           echo "pyproject=$PKG tag=$TAG"
           [ "$PKG" = "$TAG" ] || { echo "::error::tag $GITHUB_REF_NAME ($TAG) != pyproject version $PKG"; exit 1; }
@@ -79,14 +81,14 @@ jobs:
           draft: false
           generate_release_notes: false
 
-  # Manual (workflow_dispatch) runs → build-numbered prereleases to the legacy CloudRepo index.
+  # Manual runs exercise the same build whether or not publishing is requested.
   publish-cloudrepo-prerelease:
     if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
     environment: release
     env:
-      UV_PUBLISH_URL: ${{ vars.CLOUDREPO_PUBLISH_URL }}
+      UV_PUBLISH_URL: https://pypi.3lc.ai/repositories/prereleases
       UV_PUBLISH_USERNAME: ${{ secrets.CLOUDREPO_USERNAME }}
       UV_PUBLISH_PASSWORD: ${{ secrets.CLOUDREPO_PASSWORD }}
     steps:
@@ -98,22 +100,31 @@ jobs:
           version: "0.8.15"
 
       - name: Verify the 'release' environment is configured
+        if: inputs.publish
         run: |
           : "${UV_PUBLISH_URL:?set the CLOUDREPO_PUBLISH_URL variable on the 'release' environment}"
           : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'release' environment}"
           : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'release' environment}"
 
-      # A 4th version segment keeps every prerelease publish unique (CloudRepo has overwrites
-      # disabled) while sorting above the base version, so `<X.Y+1`-style pins still resolve it
-      # — unlike `.devN` (sorts below) or `+localN` (rejected on upload).
+      # The UTC stamp sorts after existing timestamped POC builds. Run + attempt distinguish
+      # concurrent builds and reruns, while numeric segments satisfy ordinary SDK ranges.
       - name: Stamp build-numbered version
         run: |
-          BASE=$(uv version --output-format json | jq -r '.version')
-          uv version "${BASE}.${GITHUB_RUN_NUMBER}"
-          echo "prerelease build version: ${BASE}.${GITHUB_RUN_NUMBER}"
+          BASE=$(uv version --frozen --output-format json | jq -r '.version')
+          STAGED_VERSION="${BASE}.$(date -u +%Y%m%d%H%M%S).${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          uv version --frozen "$STAGED_VERSION"
+          echo "staged build version: $STAGED_VERSION"
 
       - name: Build
         run: uv build --no-sources
 
+      - name: Retain build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-poc-${{ github.run_number }}-${{ github.run_attempt }}
+          path: dist/*
+          if-no-files-found: error
+
       - name: Publish to CloudRepo
+        if: inputs.publish
         run: uv publish
