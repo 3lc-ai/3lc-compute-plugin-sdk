@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Manual release workflows build POC artifacts by default and publish to the private
+  CloudRepo `prereleases` repository only when requested. Build versions include the workflow
+  attempt, so reruns do not try to overwrite an existing artifact.
+
 ### Added
 - **Storage transfers refresh object discovery.** `TransferRegistry` now tells 3LC object
   discovery (`tlc.discovery.notify_write` / `notify_delete`) about every table, run and

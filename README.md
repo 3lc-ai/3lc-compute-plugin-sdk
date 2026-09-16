@@ -55,9 +55,25 @@ runs in its own isolated environment.
 
 ## Status
 
-**0.3 is the current contract line.** Within 0.x the contract still evolves — mostly additively,
+**0.5 is the current development contract line.** Within 0.x the contract still evolves — mostly additively,
 but a coordinated breaking change may land on a MINOR bump while the fleet re-pins in lockstep (0.3
 did: `JobContext.result` took a positional `url`, and the `PY_CONTRACT`/`JS_CONTRACT` axes
 collapsed into `SDK_CONTRACT_VERSION`). Anything reshaping the core still waits for a major bump. In
 the browser bridge, `PLUGIN_API.libs.io` is a stable part of the contract; the other bundled
 libs are best-effort (see the guide).
+
+## POC builds
+
+The manual `Release` workflow tests and builds an SDK snapshot. Its default is build-only;
+download the wheel and source archive from the workflow artifacts. Select `publish` to upload
+them to the private CloudRepo `prereleases` repository. The `release` environment needs
+`CLOUDREPO_USERNAME` and `CLOUDREPO_PASSWORD` secrets for publishing.
+
+Snapshots use `BASE.RUN.ATTEMPT` versions, for example `0.5.0.42.1`. They satisfy ordinary
+`>=0.5.0,<0.6.0` requirements, and rerunning a workflow produces a distinct artifact version.
+Consumers need authenticated access to that index; a public PyPI release is not required to
+test them. Record the exact tested snapshot when validating a group of consumers. A Git source
+override in a development checkout does not provide that SDK to users installing a built wheel.
+
+Public releases still use a `vX.Y.Z` tag whose version matches `pyproject.toml`. POC snapshots
+are never published to PyPI.
