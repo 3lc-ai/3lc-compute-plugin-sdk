@@ -69,8 +69,9 @@ download the wheel and source archive from the workflow artifacts. Select `publi
 them to the private CloudRepo `prereleases` repository. The `release` environment needs
 `CLOUDREPO_USERNAME` and `CLOUDREPO_PASSWORD` secrets for publishing.
 
-Snapshots use `BASE.RUN.ATTEMPT` versions, for example `0.5.0.42.1`. They satisfy ordinary
-`>=0.5.0,<0.6.0` requirements, and rerunning a workflow produces a distinct artifact version.
+Snapshots use `BASE.UTCSTAMP.RUN.ATTEMPT` versions, for example `0.5.0.20260916080000.42.1`.
+They satisfy ordinary `>=0.5.0,<0.6.0` requirements and sort after older timestamped snapshots.
+The run and attempt distinguish concurrent builds and reruns.
 Consumers need authenticated access to that index; a public PyPI release is not required to
 test them. Record the exact tested snapshot when validating a group of consumers. A Git source
 override in a development checkout does not provide that SDK to users installing a built wheel.

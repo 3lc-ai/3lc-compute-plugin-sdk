@@ -106,13 +106,14 @@ jobs:
           : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'release' environment}"
           : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'release' environment}"
 
-      # Numeric build + attempt segments satisfy ordinary SDK ranges. Including the attempt
-      # lets a rerun publish a fresh version without overwriting an earlier artifact.
+      # The UTC stamp sorts after existing timestamped POC builds. Run + attempt distinguish
+      # concurrent builds and reruns, while numeric segments satisfy ordinary SDK ranges.
       - name: Stamp build-numbered version
         run: |
           BASE=$(uv version --frozen --output-format json | jq -r '.version')
-          uv version --frozen "${BASE}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          echo "staged build version: ${BASE}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          STAGED_VERSION="${BASE}.$(date -u +%Y%m%d%H%M%S).${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          uv version --frozen "$STAGED_VERSION"
+          echo "staged build version: $STAGED_VERSION"
 
       - name: Build
         run: uv build --no-sources
