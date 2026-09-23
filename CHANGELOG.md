@@ -8,11 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `build_plugin_app` is typed to take any `HubPlugin` (it only ever used the `HubPlugin` surface),
+  so infrastructure and service plugins type-check where they are served.
 - Manual release workflows build POC artifacts by default and publish to the private
   CloudRepo `prereleases` repository only when requested. Build versions include the workflow
   attempt, so reruns do not try to overwrite an existing artifact.
 
 ### Added
+- **`tlc_plugin_sdk.harness`: run a plugin's routes in-process, without a compute service.**
+  `PluginHarness` builds the same Litestar app a worker serves and calls it directly — no host,
+  supervisor, socket or sign-in — for headless tests and smoke checks of a plugin's own routes
+  plus `/health`, `/ui` and `/compute`. `PluginHarness.from_manifest(dir)` loads the plugin a
+  `plugin.toml` / `[tool.tlc-compute]` manifest names (importing an uninstalled source checkout);
+  `config_root=` points `PluginConfigStore` at a prepared settings directory for the harness's
+  lifetime. The harness adds nothing to a request: identity and credentials are whatever the
+  caller passes. Also a CLI: `python -m tlc_plugin_sdk.harness <plugin_dir> GET /infra/capabilities`.
 - **Storage transfers refresh object discovery.** `TransferRegistry` now tells 3LC object
   discovery (`tlc.discovery.notify_write` / `notify_delete`) about every table, run and
   `.3lc.yaml` object a transfer wrote or removed, once the transfer has finished — done, failed
