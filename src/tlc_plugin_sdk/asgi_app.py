@@ -163,7 +163,10 @@ def build_plugin_app(
         *_generic_handlers(plugin),
         *(extra_handlers or []),
     ]
-    middleware: list[Any] = [_bearer_guard(token)] if token else []
+    from tlc_plugin_sdk.connections import connection_middleware
+
+    # Outermost first: an unauthenticated request is refused before any Connection is resolved.
+    middleware: list[Any] = [*([_bearer_guard(token)] if token else []), connection_middleware]
     # No generated OpenAPI/Swagger routes: a worker is an internal endpoint, and on a node the
     # schema would describe the job channel to anyone who reached the port.
     return Litestar(route_handlers=handlers, debug=debug, middleware=middleware, openapi_config=None)

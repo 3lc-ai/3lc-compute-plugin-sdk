@@ -325,7 +325,7 @@ class PluginHarness:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m tlc_plugin_sdk.harness <plugin_dir> <METHOD> <path> [--json BODY]``.
+    """``python -m tlc_plugin_sdk.harness <plugin_dir> <METHOD> <path> [--json BODY] [--header N=V]``.
 
     Prints the status line to stderr and the body to stdout (pretty-printed when it is JSON).
 
@@ -340,6 +340,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("method", help="HTTP method")
     parser.add_argument("path", help="Plugin-relative path, e.g. /infra/capabilities")
     parser.add_argument("--json", dest="body", default=None, help="JSON request body")
+    parser.add_argument(
+        "--header", action="append", default=[], metavar="NAME=VALUE", help="Request header (repeatable)"
+    )
     parser.add_argument("--config-root", default=None, help="Settings root instead of ~/.3lc-plugin-configs")
     parser.add_argument("--no-initialise", action="store_true", help="Skip the plugin's initialise_runtime hook")
     args = parser.parse_args(argv)
@@ -349,11 +352,12 @@ def main(argv: list[str] | None = None) -> int:
     # The in-process client logs every request at INFO; the status line below says the same.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     body = json.loads(args.body) if args.body is not None else None
+    headers = dict(item.split("=", 1) for item in args.header)
     harness = PluginHarness.from_manifest(
         args.plugin_dir, config_root=args.config_root, initialise=not args.no_initialise
     )
     with harness as h:
-        response = h.call(args.method, args.path, json_body=body)
+        response = h.call(args.method, args.path, json_body=body, headers=headers or None)
     print(f"{response.status_code} {args.method.upper()} {args.path}", file=sys.stderr)
     try:
         print(json.dumps(response.json(), indent=2))

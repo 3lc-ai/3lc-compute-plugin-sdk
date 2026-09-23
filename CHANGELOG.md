@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attempt, so reruns do not try to overwrite an existing artifact.
 
 ### Added
+- **`tlc_plugin_sdk.connections`: the Connection a request acts on, resolved before the handler.**
+  A host that authorized a plugin operation on a Connection sends its non-secret binding in the
+  host-owned `x-3lc-connection` header (`{id, provider, kind, metadata}`); middleware every worker
+  app now installs resolves it and exposes `current_connection()` / `current_credential()` for that
+  one request (sync handlers in a thread included), then resets them. `AMBIENT` — use the
+  deployment's own identity, never credentials saved in plugin settings — is resolved by the SDK
+  to `Ambient`; other kinds by provider resolvers a plugin registers with `register_resolver`
+  (e.g. `KEYLESS` → `AwsSession`). A malformed or repeated header answers 400, a binding the
+  worker cannot resolve 424; a request without the header is untouched.
 - **`tlc_plugin_sdk.harness`: run a plugin's routes in-process, without a compute service.**
   `PluginHarness` builds the same Litestar app a worker serves and calls it directly — no host,
   supervisor, socket or sign-in — for headless tests and smoke checks of a plugin's own routes
@@ -22,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plugin.toml` / `[tool.tlc-compute]` manifest names (importing an uninstalled source checkout);
   `config_root=` points `PluginConfigStore` at a prepared settings directory for the harness's
   lifetime. The harness adds nothing to a request: identity and credentials are whatever the
-  caller passes. Also a CLI: `python -m tlc_plugin_sdk.harness <plugin_dir> GET /infra/capabilities`.
+  caller passes. Also a CLI: `python -m tlc_plugin_sdk.harness <plugin_dir> GET /infra/capabilities
+  [--header NAME=VALUE]`.
 - **Storage transfers refresh object discovery.** `TransferRegistry` now tells 3LC object
   discovery (`tlc.discovery.notify_write` / `notify_delete`) about every table, run and
   `.3lc.yaml` object a transfer wrote or removed, once the transfer has finished — done, failed
