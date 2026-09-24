@@ -66,14 +66,18 @@ libs are best-effort (see the guide).
 
 The manual `Release` workflow tests and builds an SDK snapshot. Its default is build-only;
 download the wheel and source archive from the workflow artifacts. Select `publish` to upload
-them to the private CloudRepo `prereleases` repository. The `release` environment needs
-`CLOUDREPO_USERNAME` and `CLOUDREPO_PASSWORD` secrets for publishing.
+them to the private staging index (CloudRepo `prereleases`). The `release` environment needs
+the `STAGING_INDEX_PUBLISH_USERNAME` / `STAGING_INDEX_PUBLISH_PASSWORD` secrets and the
+`STAGING_INDEX_URL` variable for publishing.
 
 Snapshots use `BASE.UTCSTAMP.RUN.ATTEMPT` versions, for example `0.5.0.20260916080000.42.1`.
 They satisfy ordinary `>=0.5.0,<0.6.0` requirements and sort after older timestamped snapshots.
 The run and attempt distinguish concurrent builds and reruns.
 Consumers need authenticated access to that index; a public PyPI release is not required to
-test them. Record the exact tested snapshot when validating a group of consumers. A Git source
+test them. A consumer declares it as an explicit uv index named `staging`
+(`https://pypi.3lc.ai/repositories/prereleases/`), routes the SDK to it with
+`3lc-compute-plugin-sdk = { index = "staging" }` in `[tool.uv.sources]`, and sets only
+`UV_INDEX_STAGING_USERNAME` / `UV_INDEX_STAGING_PASSWORD`. Record the exact tested snapshot when validating a group of consumers. A Git source
 override in a development checkout does not provide that SDK to users installing a built wheel.
 
 Public releases still use a `vX.Y.Z` tag whose version matches `pyproject.toml`. POC snapshots
