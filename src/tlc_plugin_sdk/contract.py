@@ -8,21 +8,26 @@ The hierarchy has three tiers:
     The root base. Every plugin that contributes a UI fragment and optional routes
     or a synchronous ``compute()`` endpoint descends from this. A plugin that is
     *only* a sidebar tool (e.g. the config service) subclasses ``HubPlugin``
-    directly.
+    directly and declares ``kind = "service"`` in its manifest.
 
 :class:`ComputePlugin` (:class:`HubPlugin`)
     Adds the long-running-job surface: ``run_job`` + ``initialise_runtime``.
-    The default for data-curation, training, and inference plugins.
+    The default for data-curation, training, and inference plugins
+    (``kind = "compute"``, or omitted).
 
 :class:`InfrastructurePlugin` (:class:`HubPlugin`)
     The provider contract for remote-node plugins — typed abstract methods for
     ``capabilities`` / ``create_node`` / ``node_state`` / ``delete_node`` and an
-    optional ``preflight``.  Lives in :mod:`tlc_plugin_sdk.infra`.
+    optional ``preflight``.  Lives in :mod:`tlc_plugin_sdk.infra`
+    (``kind = "infrastructure"``).
 
-All *metadata* (id, name, ui placement, gpu flag, socketio namespace, …) lives in
-the plugin manifest — a standalone ``plugin.toml`` or a ``[tool.tlc-compute]``
-table in ``pyproject.toml`` — the single source of truth.  There is **no metadata
-on the class** and **no** ``register()`` call at import.
+All *metadata* lives in the plugin manifest — a standalone ``plugin.toml`` or a
+``[tool.tlc-compute]`` table in ``pyproject.toml`` — the single source of truth.
+That includes ``kind``, the plugin's taxonomy: one of ``compute`` (the default),
+``infrastructure``, or ``service``. ``kind`` is orthogonal to *placement*
+(``[ui] section`` / ``display_mode``, e.g. where a sidebar tool appears) and to the
+job-queue *lane* (``[runtime] long_running``); each is set independently. There is
+**no metadata on the class** and **no** ``register()`` call at import.
 """
 
 from __future__ import annotations
@@ -40,7 +45,8 @@ class HubPlugin(ABC):
     Subclass this directly for a plugin that only needs a UI fragment, optional
     synchronous compute, and/or custom routes — no long-running jobs and no
     infrastructure provider contract.  Examples: a config-service sidebar tool, a
-    dashboard widget.
+    dashboard widget.  A plugin subclassing ``HubPlugin`` directly declares
+    ``kind = "service"`` in its manifest (see the module docstring's taxonomy).
 
     Attributes:
         id: Unique slug (e.g. ``config-service``).  Hydrated onto the instance
