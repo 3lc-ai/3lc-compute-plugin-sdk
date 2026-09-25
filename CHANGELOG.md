@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`CreateNodeRequest.project_storage`** (`ProjectStorage`: `project_root_url`, `project_scan_urls`): the
+  deployment's node-reachable project storage the host sends on create, for a provider that scopes a
+  node's storage credential. Empty from an older host.
+
 ### Changed
 - **Plugin guide: infrastructure plugins keep no project root, and a Connections section.** The
   guide says a provider reports no root (the host carries it in the job), and documents the

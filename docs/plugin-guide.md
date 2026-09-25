@@ -154,7 +154,10 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   the host refuses a request for anything the plugin has not declared, so a plugin never has to
   guess a default. An infrastructure plugin keeps no project root and reports none: the root a job
   writes to is the host's, carried in the run body (see `ctx.project_root_url`), and the host
-  marks which listed bucket holds it. (A host still reads a `storage: {"project_root_url": …}`
+  marks which listed bucket holds it. Where a provider needs the deployment's storage, the host
+  passes it: `CreateNodeRequest.project_storage` (the node-reachable root and scan folders, for
+  scoping a node's storage credential), `fallback_url` on `GET /infra/storage` (the root's bucket,
+  for credentials that may not list buckets). (A host still reads a `storage: {"project_root_url": …}`
   entry in `extra` from an older provider, as a stand-in for a node run from a host whose own
   root is its disk; don't add one.) Which account the plugin acts on comes from the request's
   Connection — see [Connections](#connections-infrastructure-plugins). At most one
