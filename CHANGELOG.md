@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The "Create project in" select takes its choices from the deployment, not the worker.** The
+  host's configured root comes first (`GET /api/deployment/storage`, the root a run gets when
+  nothing is chosen), then the deployment's other locations from `PLUGIN_API.data.getLocations()`;
+  a location the deployment does not scan is offered with a note that the Dashboard will not list
+  the project. The infrastructure plugin's bucket root is no longer asked for.
 - `build_plugin_app` is typed to take any `HubPlugin` (it only ever used the `HubPlugin` surface),
   so infrastructure and service plugins type-check where they are served.
 - Manual release workflows build POC artifacts by default and publish to the private
@@ -17,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secrets in place of the `CLOUDREPO_*` names.
 
 ### Added
+- **`ctx.project_root_url`: the project root a job writes to.** The host resolves it at submit and
+  stamps it into the run body as `project_root_url` (exported as `PROJECT_ROOT_KEY`); a plugin that
+  creates tables or runs passes it as `root_url` to the core library instead of relying on its
+  worker's environment. A body from an older host falls back to the worker's own `tlc` root.
+
 - **`tlc_plugin_sdk.connections`: the Connection a request acts on, resolved before the handler.**
   A host that authorized a plugin operation on a Connection sends its non-secret binding in the
   host-owned `x-3lc-connection` header (`{id, provider, kind, metadata}`); middleware every worker
@@ -59,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controller or a URL where wheels for unpublished builds live). A provider that installs the
   agent while creating a node installs `compute_spec`, from the wheelhouse when one is given;
   both are `""` when the host has nothing to say.
+
+### Removed
+- The worker's `GET /project-root` route from `data_source_route_handlers()`: the root a job writes
+  to is the host's to say, and is carried in the run body.
 
 ### Fixed
 - The worker no longer logs an `AttributeError` traceback at start-up for a plugin that

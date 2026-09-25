@@ -32,7 +32,7 @@ from importlib.metadata import version as _pkg_version
 
 from tlc_plugin_sdk.contract import ComputePlugin, HubPlugin
 from tlc_plugin_sdk.infrastructure import InfrastructurePlugin
-from tlc_plugin_sdk.job_context import JobContext, JobFailed, JobIdentity
+from tlc_plugin_sdk.job_context import PROJECT_ROOT_KEY, JobContext, JobFailed, JobIdentity
 
 # The plugin contract version — one axis, one source of truth: this package's own
 # version (the ``[project] version`` in pyproject), read via importlib.metadata rather
@@ -48,6 +48,7 @@ except PackageNotFoundError:  # running from a raw checkout that was never insta
     SDK_CONTRACT_VERSION = "0.0.0"
 
 __all__ = [
+    "PROJECT_ROOT_KEY",
     "SDK_CONTRACT_VERSION",
     "ComputePlugin",
     "HubPlugin",

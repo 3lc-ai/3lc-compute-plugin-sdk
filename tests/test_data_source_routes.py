@@ -234,21 +234,6 @@ class TestSelfReferentialSymlink:
         assert body["parent"] is None  # and it IS the root, so no phantom "up"
 
 
-def test_project_root_is_the_plugins_own_tlc_root(
-    client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The alias widget asks the writing plugin, not the infrastructure plugin, where tables land.
-
-    The route imports ``tlc`` lazily and reads ``tlc.config.project_root_url``; the real ``tlc``
-    activates a 3LC account on that read, which a test has no key for, so a stand-in answers.
-    """
-    import sys
-    import types
-
-    fake = types.ModuleType("tlc")
-    config = types.SimpleNamespace(project_root_url="s3://bucket/projects/")
-    setattr(fake, "config", config)
-    monkeypatch.setitem(sys.modules, "tlc", fake)
-
-    body = client.get("/project-root").json()
-    assert body["url"] == "s3://bucket/projects"
+def test_the_worker_no_longer_answers_where_tables_go(client: TestClient[Litestar]) -> None:
+    """The root a job writes to is the host's to say, carried in the run body (``ctx.project_root_url``)."""
+    assert client.get("/project-root").status_code == 404

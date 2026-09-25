@@ -214,7 +214,9 @@ def test_alias_widget_offers_the_copy_and_submits_it() -> None:
         "rootOverride",  # the copy offer follows the chosen root
         "-alias-copy-enabled",
         "function _tlcAliasReviewCopy(",
-        "'/project-root'",  # the root this plugin's own tlc writes to — never the infra plugin's bucket
+        "'/api/deployment/storage/'",  # the host's default root — what a run gets when nothing is chosen
+        "data.getLocations()",  # the deployment's other locations, from the host's data API
+        "does not scan this location",  # a root outside the scan set is allowed, and said to be invisible
         "_tlcStorageOf(root) !== 'local' && _tlcStorageOf(folder) === 'local'",  # local data, bucket root — only then
         "'/data/' + token.toLowerCase()",
         "alias_copy_to_root:",
@@ -266,7 +268,7 @@ def test_a_root_is_named_by_what_it_is_not_by_which_lookup_found_it() -> None:
 
 def test_a_form_can_ask_where_the_table_is_actually_going() -> None:
     """``_tlcGetProjectRoot`` answers "what should I send as an override?" and is empty when the
-    selection is the plugin's own root — the usual case. A form deriving a default path from it got
+    selection is the host's default root — the usual case. A form deriving a default path from it got
     nothing, so the copy destination and the alias folder stayed blank (Paul, 2026-09-07)."""
     js = alias_ui_script()
     assert "function _tlcSelectedProjectRoot(idPrefix)" in js
