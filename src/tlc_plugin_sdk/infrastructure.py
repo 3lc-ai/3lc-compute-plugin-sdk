@@ -37,9 +37,10 @@ class ProjectStorage:
     """Where the deployment keeps its projects, as far as a node can reach them.
 
     ``project_root_url`` is the deployment's project root when a node can write it (a bucket or
-    container URL), else ``""``; ``project_scan_urls`` are its node-reachable scan folders. A
-    provider that scopes a node's storage access (a container SAS, a bucket policy) scopes it to
-    these; a provider keeps no root of its own. A job may still carry another root.
+    container URL), else ``""``; ``project_scan_urls`` are its node-reachable scan folders. Both are
+    a snapshot taken when the node is created, and scan folders change over time: treat them as a
+    hint for what a node's storage credential should *at least* cover, never as a boundary to
+    refuse or restrict access by. A provider keeps no root of its own, and a job may carry another.
     """
 
     project_root_url: str = ""
