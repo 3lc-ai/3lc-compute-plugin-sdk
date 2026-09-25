@@ -6,7 +6,9 @@ An infrastructure plugin (``kind = "infrastructure"`` in its manifest) owns exac
 the provider API: capabilities, create node, node state, delete node, and an
 optional preflight.  The host's ``InfraManager`` calls these through the worker
 proxy; everything else (node registry, lifecycle state machine, heartbeats, idle
-teardown) lives in the host.
+teardown) lives in the host.  A created node is reached by its agent URL alone: the
+host talks to the node agent, and the agent proxies host traffic to the node's
+loopback-only workers.
 
 Subclass :class:`InfrastructurePlugin` and implement the four abstract methods.
 The base class provides a default :meth:`get_route_handlers` that auto-mounts
@@ -70,6 +72,11 @@ class CreateNodeRequest:
     can ship a directory to the node does so; one that cannot honours a URL and ignores a
     directory. Either is ``""`` when the host has none. ``project_storage`` is the deployment's
     node-reachable project storage (:class:`ProjectStorage`).
+
+    ``agent_port`` is where the node agent listens; ``ports`` are the browser-facing app ports
+    (a notebook server, for example) the provider exposes besides ``agent_port``. Workers on the
+    node are loopback-only: the host reaches them through the agent, so no worker port is ever
+    exposed or listed here.
     """
 
     node_id: str
@@ -108,11 +115,14 @@ class CreateNodeRequest:
 
 @dataclass
 class CreateNodeResponse:
-    """What a provider returns after successfully creating a node."""
+    """What a provider returns after successfully creating a node.
+
+    ``agent_url`` is the one address the host needs: it talks to the node agent there and reaches
+    the node's workers through the agent's proxy.
+    """
 
     provider_id: str
     agent_url: str
-    worker_url_template: str
     token: str = ""
     pricing: str = ""
     detail: str = ""
@@ -126,7 +136,6 @@ class CreateNodeResponse:
         d: dict[str, Any] = {
             "provider_id": self.provider_id,
             "agent_url": self.agent_url,
-            "worker_url_template": self.worker_url_template,
         }
         if self.token:
             d["token"] = self.token
