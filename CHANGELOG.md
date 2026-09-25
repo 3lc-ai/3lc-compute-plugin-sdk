@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Plugin guide: infrastructure plugins keep no project root, and a Connections section.** The
+  guide says a provider reports no root (the host carries it in the job), and documents the
+  `x-3lc-connection` seam for infrastructure plugins: `AMBIENT` never falls back to saved keys,
+  other kinds resolve through `register_resolver`, 400/424 answers, and credential precedence.
 - **The "Create project in" select takes its choices from the deployment, not the worker.** The
   host's configured root comes first (`GET /api/deployment/storage`, the root a run gets when
   nothing is chosen), then the deployment's other locations from `PLUGIN_API.data.getLocations()`;

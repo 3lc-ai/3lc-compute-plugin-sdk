@@ -152,10 +152,13 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   and, through `extra`, `pricing` (`["on_demand"]`, or `["on_demand", "spot"]` when
   interruptible capacity is offered). Every create request carries `flavor` and `pricing`, and
   the host refuses a request for anything the plugin has not declared, so a plugin never has to
-  guess a default. A `storage: {"project_root_url": "s3://…"}` entry in `extra` is transitional: the host
-  reads it only as a stand-in for a node run from a host whose own configured root is its disk,
-  when the run form chose nothing. The root a job writes to is otherwise the host's, carried in
-  the run body (see `ctx.project_root_url`). At most one infrastructure plugin is active on a host at a time.
+  guess a default. An infrastructure plugin keeps no project root and reports none: the root a job
+  writes to is the host's, carried in the run body (see `ctx.project_root_url`), and the host
+  marks which listed bucket holds it. (A host still reads a `storage: {"project_root_url": …}`
+  entry in `extra` from an older provider, as a stand-in for a node run from a host whose own
+  root is its disk; don't add one.) Which account the plugin acts on comes from the request's
+  Connection — see [Connections](#connections-infrastructure-plugins). At most one
+  infrastructure plugin is active on a host at a time.
 
   **Provisional: provider sign-in.** A provider that can sign a person in instead of taking
   pasted keys may declare `workspace_login` in its capabilities (`{kind, label, help, fields:
@@ -573,6 +576,46 @@ The plugin class's `get_route_handlers()` delegates to this module-level functio
 real example.
 
 ---
+
+## Connections (infrastructure plugins)
+
+A **Connection** names the external account a request acts on — an AWS account, a RunPod team —
+without the plugin holding credentials for it. The host sends the Connection's non-secret
+*binding* (`{id, provider, kind, metadata}`) in the host-owned `x-3lc-connection` header; the
+worker app resolves it before your route handler runs and exposes the result for that one
+request:
+
+```python
+from tlc_plugin_sdk import connections
+
+binding = connections.current_connection()     # ConnectionBinding | None
+credential = connections.current_credential()  # Ambient | AwsSession | None
+```
+
+- **No header:** both are `None` and the plugin behaves as it did before Connections.
+- **`AMBIENT`:** the SDK resolves it to `Ambient` — use the deployment's own identity, the
+  provider SDK's default credential chain (an instance profile, a workload identity, a
+  developer's profile). Do **not** fall back to credentials saved in your plugin's settings:
+  the Connection said which identity to use.
+- **Other kinds** are resolved by a resolver the plugin registers at import. The AWS plugin
+  resolves `KEYLESS` (a role ARN and external id in `metadata`) by assuming the role with the
+  deployment's own identity:
+
+  ```python
+  connections.register_resolver("aws", "KEYLESS", assume_connection_role)
+  ```
+
+  A resolver returns a credential (`AwsSession` for AWS) or raises `CredentialUnavailable`
+  with a sentence a person can act on. Resolution runs in a worker thread, so it may call the
+  provider.
+- A malformed or repeated header answers **400**; a binding the plugin cannot resolve answers
+  **424** with the resolver's reason. Neither reaches your handler.
+
+Resolved credentials live for the request only; don't cache them in settings or on disk.
+Precedence inside a plugin should be: credentials the request itself carries (a person's own
+keys or sign-in), then the Connection, then — only when the request names no Connection — the
+plugin's legacy settings. The header is host-owned: a host strips any copy a caller sends, so a
+fragment can never choose the identity.
 
 ## Long-Running Jobs (`run_job(ctx)`)
 
