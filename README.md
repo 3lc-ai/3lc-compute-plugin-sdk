@@ -67,7 +67,7 @@ libs are best-effort (see the guide).
 The manual `Release` workflow tests and builds an SDK snapshot. Its default is build-only;
 download the wheel and source archive from the workflow artifacts. Select `publish` to upload
 them to the private staging index (CloudRepo `prereleases`). The `release` environment needs
-the `STAGING_INDEX_PUBLISH_USERNAME` / `STAGING_INDEX_PUBLISH_PASSWORD` secrets for publishing.
+the `CLOUDREPO_USERNAME` / `CLOUDREPO_PASSWORD` secrets for publishing.
 
 Snapshots use `BASE.UTCSTAMP.RUN.ATTEMPT` versions, for example `0.5.0.20260916080000.42.1`.
 They satisfy ordinary `>=0.5.0,<0.6.0` requirements and sort after older timestamped snapshots.

@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Manual release workflows build POC artifacts by default and publish to the private
   CloudRepo `prereleases` repository only when requested. Build versions include the workflow
   attempt, so reruns do not try to overwrite an existing artifact.
-- The staging publish reads the `STAGING_INDEX_PUBLISH_USERNAME` / `STAGING_INDEX_PUBLISH_PASSWORD`
+- The staging publish reads the `CLOUDREPO_USERNAME` / `CLOUDREPO_PASSWORD`
   secrets in place of the `CLOUDREPO_*` names.
 
 ### Added

@@ -89,8 +89,8 @@ jobs:
     environment: release
     env:
       UV_PUBLISH_URL: https://pypi.3lc.ai/repositories/prereleases
-      UV_PUBLISH_USERNAME: ${{ secrets.STAGING_INDEX_PUBLISH_USERNAME }}
-      UV_PUBLISH_PASSWORD: ${{ secrets.STAGING_INDEX_PUBLISH_PASSWORD }}
+      UV_PUBLISH_USERNAME: ${{ secrets.CLOUDREPO_USERNAME }}
+      UV_PUBLISH_PASSWORD: ${{ secrets.CLOUDREPO_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,8 +102,8 @@ jobs:
       - name: Verify the 'release' environment is configured
         if: inputs.publish
         run: |
-          : "${UV_PUBLISH_USERNAME:?set the STAGING_INDEX_PUBLISH_USERNAME secret on the 'release' environment}"
-          : "${UV_PUBLISH_PASSWORD:?set the STAGING_INDEX_PUBLISH_PASSWORD secret on the 'release' environment}"
+          : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'release' environment}"
+          : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'release' environment}"
 
       # The UTC stamp sorts after existing timestamped POC builds. Run + attempt distinguish
       # concurrent builds and reruns, while numeric segments satisfy ordinary SDK ranges.
