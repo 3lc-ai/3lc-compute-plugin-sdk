@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node's storage credential. Empty from an older host.
 
 ### Changed
+- **`CreateNodeResponse` no longer carries `worker_url_template`.** A created node is reached by its
+  `agent_url` alone: the host talks to the node agent, which proxies its traffic to the node's
+  loopback-only workers. `CreateNodeRequest.ports` are the browser-facing app ports a provider
+  exposes besides `agent_port`; worker ports are never exposed or listed.
 - **Plugin guide: infrastructure plugins keep no project root, and a Connections section.** The
   guide says a provider reports no root (the host carries it in the job), and documents the
   `x-3lc-connection` seam for infrastructure plugins: `AMBIENT` never falls back to saved keys,
