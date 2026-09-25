@@ -3,7 +3,7 @@
 """Build a plugin's HTTP surface as a Litestar ASGI app.
 
 This is the single route-authoring pattern: a plugin exposes its custom routes as
-relative Litestar route handlers via :meth:`ComputePlugin.get_route_handlers`, and
+relative Litestar route handlers via :meth:`HubPlugin.get_route_handlers`, and
 the worker (``tlc_plugin_sdk.worker``) serves the app with uvicorn on a Unix socket
 (or TCP, for a remote worker); the host reverse-proxies to it.
 
@@ -34,13 +34,13 @@ from tlc_plugin_sdk.shared.ui_inject import inject_scripts
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
 
-    from tlc_plugin_sdk.contract import ComputePlugin
+    from tlc_plugin_sdk.contract import HubPlugin
 
 
 logger = logging.getLogger(__name__)
 
 
-def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
+def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
     """The host-reserved generic routes, bound to ``plugin`` (served by the worker)."""
 
     @get("/health", sync_to_thread=False)
@@ -135,7 +135,7 @@ def _bearer_guard(token: str) -> Any:
 
 
 def build_plugin_app(
-    plugin: ComputePlugin,
+    plugin: HubPlugin,
     *,
     extra_handlers: list[BaseRouteHandler] | None = None,
     debug: bool = False,
@@ -163,7 +163,10 @@ def build_plugin_app(
         *_generic_handlers(plugin),
         *(extra_handlers or []),
     ]
-    middleware: list[Any] = [_bearer_guard(token)] if token else []
+    from tlc_plugin_sdk.connections import connection_middleware
+
+    # Outermost first: an unauthenticated request is refused before any Connection is resolved.
+    middleware: list[Any] = [*([_bearer_guard(token)] if token else []), connection_middleware]
     # No generated OpenAPI/Swagger routes: a worker is an internal endpoint, and on a node the
     # schema would describe the job channel to anyone who reached the port.
     return Litestar(route_handlers=handlers, debug=debug, middleware=middleware, openapi_config=None)
@@ -176,7 +179,7 @@ RESERVED_WORKER_PATHS: frozenset[str] = frozenset({"/health", "/ui", "/compute",
 RESERVED_WORKER_PREFIXES: tuple[str, ...] = ("/jobs",)
 
 
-def _without_reserved(handlers: list[Any], plugin: ComputePlugin) -> list[Any]:
+def _without_reserved(handlers: list[Any], plugin: HubPlugin) -> list[Any]:
     kept: list[Any] = []
     for handler in handlers:
         paths = {"/" + str(p).strip("/") for p in (getattr(handler, "paths", None) or ())}

@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 #: The host-owned top-level run-body key that carries :class:`JobIdentity` to the worker.
 #: The worker pops it before ``ctx.params`` is built; a plugin never reads or sets it.
 IDENTITY_KEY = "_identity"
+#: The run-body key carrying the project root the job writes to; the host stamps it at submit.
+PROJECT_ROOT_KEY = "project_root_url"
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,8 @@ class JobContext:
         cancel_event: Set by the host/worker to request cooperative cancellation.
         identity: Who the job runs for (see :class:`JobIdentity`); empty when omitted.
 
+    ``project_root_url`` (a property) is the root the job writes to — see there.
+
     """
 
     def __init__(
@@ -122,8 +126,30 @@ class JobContext:
         self.identity = identity if identity is not None else JobIdentity()
         self._sink = sink
         self._cancel = cancel_event
+        self._project_root: str | None = None
 
     # ── plugin-facing API ────────────────────────────────────────────────
+    @property
+    def project_root_url(self) -> str:
+        """The project root this job writes to, without a trailing slash.
+
+        The host resolves it at submit (the person's choice, else the host's configured root) and
+        stamps it into the run body as ``project_root_url``; a plugin that creates tables or runs
+        passes it as ``root_url`` to the core library. A body from a host that predates the key
+        falls back to this worker's own ``tlc`` root, and to ``""`` only when ``tlc`` cannot say.
+        """
+        raw = self.params.get(PROJECT_ROOT_KEY)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().rstrip("/")
+        if self._project_root is None:
+            try:
+                import tlc
+
+                self._project_root = str(tlc.config.project_root_url).rstrip("/")
+            except Exception:
+                self._project_root = ""
+        return self._project_root
+
     @property
     def cancelled(self) -> bool:
         """Whether cancellation has been requested (poll this at checkpoints)."""

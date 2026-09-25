@@ -152,9 +152,17 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   and, through `extra`, `pricing` (`["on_demand"]`, or `["on_demand", "spot"]` when
   interruptible capacity is offered). Every create request carries `flavor` and `pricing`, and
   the host refuses a request for anything the plugin has not declared, so a plugin never has to
-  guess a default. Put `storage: {"project_root_url": "s3://…"}` in `extra` when configured —
-  the host's data-prepare pipeline (sync + node staging) and the Dashboard union view both key
-  off it. At most one infrastructure plugin is active on a host at a time.
+  guess a default. An infrastructure plugin keeps no project root and reports none: the root a job
+  writes to is the host's, carried in the run body (see `ctx.project_root_url`), and the host
+  marks which listed bucket holds it. Where a provider needs the deployment's storage, the host
+  passes it: `CreateNodeRequest.project_storage` (the node-reachable root and scan folders when
+  the node is created — a hint for what the node's storage credential should at least cover,
+  not a boundary: scan folders change over time), `fallback_url` on `GET /infra/storage` (the root's bucket,
+  for credentials that may not list buckets). (A host still reads a `storage: {"project_root_url": …}`
+  entry in `extra` from an older provider, as a stand-in for a node run from a host whose own
+  root is its disk; don't add one.) Which account the plugin acts on comes from the request's
+  Connection — see [Connections](#connections-infrastructure-plugins). At most one
+  infrastructure plugin is active on a host at a time.
 
   **Provisional: provider sign-in.** A provider that can sign a person in instead of taking
   pasted keys may declare `workspace_login` in its capabilities (`{kind, label, help, fields:
@@ -573,6 +581,46 @@ real example.
 
 ---
 
+## Connections (infrastructure plugins)
+
+A **Connection** names the external account a request acts on — an AWS account, a RunPod team —
+without the plugin holding credentials for it. The host sends the Connection's non-secret
+*binding* (`{id, provider, kind, metadata}`) in the host-owned `x-3lc-connection` header; the
+worker app resolves it before your route handler runs and exposes the result for that one
+request:
+
+```python
+from tlc_plugin_sdk import connections
+
+binding = connections.current_connection()     # ConnectionBinding | None
+credential = connections.current_credential()  # Ambient | AwsSession | None
+```
+
+- **No header:** both are `None` and the plugin behaves as it did before Connections.
+- **`AMBIENT`:** the SDK resolves it to `Ambient` — use the deployment's own identity, the
+  provider SDK's default credential chain (an instance profile, a workload identity, a
+  developer's profile). Do **not** fall back to credentials saved in your plugin's settings:
+  the Connection said which identity to use.
+- **Other kinds** are resolved by a resolver the plugin registers at import. The AWS plugin
+  resolves `KEYLESS` (a role ARN and external id in `metadata`) by assuming the role with the
+  deployment's own identity:
+
+  ```python
+  connections.register_resolver("aws", "KEYLESS", assume_connection_role)
+  ```
+
+  A resolver returns a credential (`AwsSession` for AWS) or raises `CredentialUnavailable`
+  with a sentence a person can act on. Resolution runs in a worker thread, so it may call the
+  provider.
+- A malformed or repeated header answers **400**; a binding the plugin cannot resolve answers
+  **424** with the resolver's reason. Neither reaches your handler.
+
+Resolved credentials live for the request only; don't cache them in settings or on disk.
+Precedence inside a plugin should be: credentials the request itself carries (a person's own
+keys or sign-in), then the Connection, then — only when the request names no Connection — the
+plugin's legacy settings. The header is host-owned: a host strips any copy a caller sends, so a
+fragment can never choose the identity.
+
 ## Long-Running Jobs (`run_job(ctx)`)
 
 A plugin with a long-running task (training, inference, import) **declares** the job
@@ -628,6 +676,7 @@ class MyGpuPlugin(ComputePlugin):
 | `ctx.cancelled` | `True` once cancel is requested — poll at checkpoints. |
 | `ctx.state_dir` | Writable per-plugin scratch dir (never write inside the package). |
 | `ctx.identity` | Who the job runs for: a `JobIdentity` with `user_id`, `org_id`, `project_id` (canonical id strings, or `None` when the host did not know). Read it for attribution; never set it. |
+| `ctx.project_root_url` | The project root this job writes to, without a trailing slash: the person's choice, else the host's configured root, resolved and stamped by the host at submit. A plugin that creates tables or runs passes it as `root_url` to the core library; a plugin that derives an object from its input places it beside the input and ignores it. Never empty on a current host; a body from an older host falls back to this worker's own `tlc` root. |
 | `ctx.progress(*, percent, label="", timing=None)` | Generic progress bar. `percent=-1` = indeterminate. `timing` = `{elapsed_s, eta_s, avg_step_s, step_label}`. |
 | `ctx.metric(label, value)` | Scalar metric card on the generic panel. |
 | `ctx.log(message)` | A log line for the job. |
@@ -688,6 +737,12 @@ plugin remote-ready; all are optional locally and additive:
   same goes for `prepare_job_ids` (the data-copy jobs a remote run waits for): the host pops
   it, orders the run behind the copies, and delivers their result as `_alias_overrides`,
   which the worker applies for you.
+- **`project_root_url` is stamped by the host and becomes `ctx.project_root_url`.** Every run body
+  carries the root the job writes to: the value the fragment sent (the shared "Create project in"
+  select; validated, and refused in words for a node run when a node cannot write it), else the
+  host's configured root. It is written at the top level and inside an inline
+  `project_config.params`. Read it through `ctx.project_root_url`; a fragment may send it, a plugin
+  never invents another root. A plugin that persists its params may keep it.
 - **`_identity` is host-owned and becomes `ctx.identity`.** The host stamps who the job runs
   for (`{"user_id", "org_id", "project_id"}`, canonical id strings) under the top-level
   `_identity` key; the worker pops it before `ctx.params` is built and exposes it as
@@ -747,9 +802,10 @@ cloud SDKs.
 the new table selected) and **Open in Dashboard** (built by the host via
 `PLUGIN_API.dashboardUrl`, so it carries this deployment's object service; a plain
 `dashboard_url + '?table='` concatenation works on a laptop and points at the wrong endpoint
-anywhere else). The shared alias widget asks your worker's `GET /project-root` (served by
-`data_source_route_handlers()`) where *this* plugin's `tlc` writes tables before it offers to copy
-data next to a new one — the answer must come from the process that writes the table.
+anywhere else). The shared alias widget takes the root a new table goes to from the host — its configured
+default (`GET /api/deployment/storage`) and the deployment's other locations through
+`PLUGIN_API.data.getLocations()` — and never asks the worker; the value it sends travels as
+`project_root_url` and comes back to your `run_job` as `ctx.project_root_url`.
 
 Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every request must
 carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the

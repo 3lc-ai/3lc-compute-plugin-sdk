@@ -19,6 +19,7 @@ from tlc_plugin_sdk.infrastructure import (
     NodeStateResponse,
     PreflightCheck,
     PreflightResponse,
+    ProjectStorage,
 )
 
 # ── Dataclass unit tests ─────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ class TestCreateNodeRequest:
             "pricing": "spot",
             "compute_spec": " 3lc-compute==1.2 ",
             "wheelhouse": "/srv/wheels",
+            "project_storage": {"project_root_url": " s3://team/projects ", "project_scan_urls": ["s3://ex", ""]},
         })
         assert req.node_id == "n1"
         assert req.node_type == "A100"
@@ -51,6 +53,7 @@ class TestCreateNodeRequest:
         assert req.pricing == "spot"
         assert req.compute_spec == "3lc-compute==1.2"
         assert req.wheelhouse == "/srv/wheels"
+        assert req.project_storage == ProjectStorage("s3://team/projects", ["s3://ex"])
 
     def test_from_dict_minimal(self) -> None:
         req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "node_type": "H100"})
@@ -65,6 +68,7 @@ class TestCreateNodeRequest:
         assert req.compute_spec == ""
         assert req.wheelhouse == ""
         assert req.pricing == ""
+        assert req.project_storage == ProjectStorage()  # an older host sends none
 
     def test_from_dict_gpu_type_compat(self) -> None:
         """The host may still send ``gpu_type`` — from_dict accepts both names."""

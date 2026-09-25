@@ -33,6 +33,32 @@ from tlc_plugin_sdk.contract import HubPlugin
 
 
 @dataclass
+class ProjectStorage:
+    """Where the deployment keeps its projects, as far as a node can reach them.
+
+    ``project_root_url`` is the deployment's project root when a node can write it (a bucket or
+    container URL), else ``""``; ``project_scan_urls`` are its node-reachable scan folders. Both are
+    a snapshot taken when the node is created, and scan folders change over time: treat them as a
+    hint for what a node's storage credential should *at least* cover, never as a boundary to
+    refuse or restrict access by. A provider keeps no root of its own, and a job may carry another.
+    """
+
+    project_root_url: str = ""
+    project_scan_urls: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> ProjectStorage:
+        """Parse the ``project_storage`` object of a create body (anything else is empty)."""
+        if not isinstance(data, dict):
+            return cls()
+        scans = data.get("project_scan_urls")
+        return cls(
+            project_root_url=str(data.get("project_root_url", "") or "").strip(),
+            project_scan_urls=[str(u) for u in scans if str(u).strip()] if isinstance(scans, list) else [],
+        )
+
+
+@dataclass
 class CreateNodeRequest:
     """What the host sends when it asks a provider to create a node.
 
@@ -42,7 +68,8 @@ class CreateNodeRequest:
     unpublished builds can be found — a directory on the controller, or a URL to a flat
     index — for the agent install and for every plugin venv the node builds. A provider that
     can ship a directory to the node does so; one that cannot honours a URL and ignores a
-    directory. Either is ``""`` when the host has none.
+    directory. Either is ``""`` when the host has none. ``project_storage`` is the deployment's
+    node-reachable project storage (:class:`ProjectStorage`).
     """
 
     node_id: str
@@ -57,6 +84,7 @@ class CreateNodeRequest:
     pricing: str = ""
     compute_spec: str = ""
     wheelhouse: str = ""
+    project_storage: ProjectStorage = field(default_factory=ProjectStorage)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CreateNodeRequest:
@@ -74,6 +102,7 @@ class CreateNodeRequest:
             pricing=str(data.get("pricing", "") or ""),
             compute_spec=str(data.get("compute_spec", "") or "").strip(),
             wheelhouse=str(data.get("wheelhouse", "") or "").strip(),
+            project_storage=ProjectStorage.from_dict(data.get("project_storage")),
         )
 
 
