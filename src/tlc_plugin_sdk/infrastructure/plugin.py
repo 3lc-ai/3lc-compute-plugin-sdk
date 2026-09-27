@@ -158,13 +158,15 @@ class InfrastructurePlugin(HubPlugin):
         answers an unexpected exception with this. The default is the exception's own text
         scrubbed of :meth:`secret_values`; override to strip what a cloud SDK's message carries
         (ARNs, request ids, endpoints). The route layer scrubs the result again, so an override
-        need not.
+        need not — and must not truncate or re-encode the text (quote, escape, base64): the SDK
+        scrubs whole secret values first and truncates after, and a cut or re-encoded secret is
+        no longer recognised.
 
         Args:
             exc: The exception.
 
         Returns:
-            One or two sentences; ``""`` falls back to the default.
+            One or two sentences, untruncated; ``""`` falls back to the default.
         """
         return scrub(str(exc).strip() or type(exc).__name__, self.secret_values())
 

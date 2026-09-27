@@ -127,3 +127,25 @@ def test_a_normalising_subclass_sees_an_empty_name_and_gets_the_normalised_defau
     registry = Normalising(list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "")
     assert registry.start(url="VOLUME://vol1/")["name"] == "models"
     assert seen == [""]
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        msg = "no text"
+        raise RuntimeError(msg)
+
+
+def test_a_describer_answering_a_non_str_or_raising_never_strands_the_job() -> None:
+    def failing_store(path: Path, name: str) -> str:
+        msg = "store failed"
+        raise RuntimeError(msg)
+
+    for describer, expected in ((lambda exc: 7, "7"), (lambda exc: _Unprintable(), "store failed")):
+        registry = sb.BundleRegistry(
+            list_objects=lambda u: [("p/a", 1)],
+            open_object=lambda k: io.BytesIO(b"x"),
+            store_bundle=failing_store,
+            describe_error=describer,
+        )
+        status = _wait(registry, registry.start(url="s3://b/p")["bundle_id"])
+        assert (status["state"], status["error"]) == ("failed", expected)

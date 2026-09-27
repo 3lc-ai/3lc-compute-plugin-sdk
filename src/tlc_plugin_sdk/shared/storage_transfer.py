@@ -210,8 +210,10 @@ class TransferRegistry:
             max_files: Refuse a transfer larger than this (the CLI is the tool then).
             notify_change: Notify 3LC discovery after successful writes/deletes, including partial transfers.
             describe_error: ``exception -> sentence`` for a failed transfer's ``error`` and each
-                failure's ``reason`` (default: the exception's text). An infrastructure plugin's
-                routes set it to the plugin's ``describe_error`` when it is unset.
+                failure's ``reason`` (default: the exception's text). The registry itself has no
+                secrets to scrub with: an infrastructure plugin's routes set it to the plugin's
+                ``describe_error`` when it is unset, and scrub the answer of one given here with
+                the plugin's secrets.
         """
         self._list = list_objects
         self._head = head_object
@@ -391,9 +393,10 @@ class TransferRegistry:
             self._finish(transfer, "failed", self._error_text(exc)[:400])
 
     def _error_text(self, exc: Exception) -> str:
+        # Never raises: a describer that fails or answers a non-str must not strand the job.
         if self.describe_error is not None:
             try:
-                text = self.describe_error(exc)
+                text = str(self.describe_error(exc) or "")
             except Exception:
                 text = ""
             if text:

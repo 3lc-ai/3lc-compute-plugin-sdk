@@ -263,3 +263,13 @@ def test_raw_delete_notification_failure_is_one_warning(monkeypatch: pytest.Monk
     warnings = notify_storage_deletes(["s3://b/a/object.3lc.json", "s3://b/c/object.3lc.json"])
     assert len(warnings) == 1
     assert "discovery could not be refreshed" in warnings[0]
+
+
+def test_a_describer_answering_a_non_str_never_strands_the_transfer() -> None:
+    store = _Store(_OBJECTS)
+    store.fail_on.add("s3://b/data/fire/train/1.jpg")
+    registry = _registry(store, workers=2, notify_change=lambda _u, _o: None, describe_error=lambda exc: 403)
+    st = registry.start("s3://b/data/fire", "s3://b/copy", ["train/"], mode="copy")
+    done = _wait(registry, st["transfer_id"])
+    assert done["state"] == "failed"
+    assert done["failures"] == [{"path": "s3://b/data/fire/train/1.jpg", "reason": "403"}]

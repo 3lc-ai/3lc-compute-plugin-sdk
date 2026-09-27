@@ -79,8 +79,9 @@ def _detail(plugin: InfrastructurePlugin, exc: BaseException, extra: Iterable[st
 def describe_unexpected(plugin: InfrastructurePlugin, exc: Exception, secrets: Iterable[str] = ()) -> str:
     """The sentence for an exception the provider did not word: its ``describe_error``, always scrubbed.
 
-    A hook that raises or answers nothing falls back to the exception's own text, and the result is
-    scrubbed of the plugin's secrets and ``secrets`` whatever the hook returned.
+    The exception's own text is scrubbed first (it is the fallback); the hook's answer is coerced
+    to ``str`` and scrubbed of the plugin's secrets and ``secrets`` whatever it returned; a hook
+    that raises or answers nothing falls back to the scrubbed text. Truncation comes last.
 
     Args:
         plugin: The plugin whose hook words the error.
@@ -90,11 +91,30 @@ def describe_unexpected(plugin: InfrastructurePlugin, exc: Exception, secrets: I
     Returns:
         At most 500 characters.
     """
+    values = [*plugin.secret_values(), *secrets]
+    raw = scrub(str(exc).strip() or type(exc).__name__, values)
     try:
-        text = str(plugin.describe_error(exc) or "").strip()
+        text = scrub(str(plugin.describe_error(exc) or "").strip(), values)
     except Exception:
         text = ""
-    return scrub(text or str(exc).strip() or type(exc).__name__, [*plugin.secret_values(), *secrets])[:_DETAIL_MAX]
+    return (text or raw)[:_DETAIL_MAX]
+
+
+class _ScrubbedDescriber:
+    """A registry's own ``describe_error``, its answer coerced to ``str`` and scrubbed of the plugin's secrets."""
+
+    def __init__(self, plugin: InfrastructurePlugin, own: Callable[[Exception], Any]) -> None:
+        self.plugin = plugin
+        self.own = own
+
+    def __call__(self, exc: Exception) -> str:
+        values = self.plugin.secret_values()
+        raw = scrub(str(exc).strip() or type(exc).__name__, values)
+        try:
+            text = scrub(str(self.own(exc) or "").strip(), values)
+        except Exception:
+            text = ""
+        return text or raw
 
 
 def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterable[str] = ()) -> T:
@@ -282,8 +302,12 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
         return describe_unexpected(plugin, exc)
 
     def remember(registries: list[Any], registry: Any) -> None:
-        if getattr(registry, "describe_error", False) is None:
+        own = getattr(registry, "describe_error", False)
+        if own is None:
             registry.describe_error = job_error
+        elif callable(own) and own is not job_error and not isinstance(own, _ScrubbedDescriber):
+            # A describer the provider built the registry with keeps its words, scrubbed like the routes'.
+            registry.describe_error = _ScrubbedDescriber(plugin, own)
         if not any(r is registry for r in registries):
             registries.append(registry)
 

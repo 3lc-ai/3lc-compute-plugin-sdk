@@ -115,8 +115,9 @@ class BundleRegistry:
             max_bytes: Refuse a folder larger than this (a CLI copy is the right tool then).
             max_files: Refuse a folder with more objects than this.
             describe_error: ``exception -> sentence`` for a failed bundle's ``error`` (default: the
-                exception's text). An infrastructure plugin's routes set it to the plugin's
-                ``describe_error`` when it is unset.
+                exception's text). The registry itself has no secrets to scrub with: an
+                infrastructure plugin's routes set it to the plugin's ``describe_error`` when it
+                is unset, and scrub the answer of one given here with the plugin's secrets.
 
         """
         self._list = list_objects
@@ -170,9 +171,10 @@ class BundleRegistry:
     # ── internals ─────────────────────────────────────────────────────────
 
     def _error_text(self, exc: Exception) -> str:
+        # Never raises: a describer that fails or answers a non-str must not strand the job.
         if self.describe_error is not None:
             try:
-                text = self.describe_error(exc)
+                text = str(self.describe_error(exc) or "")
             except Exception:
                 text = ""
             if text:

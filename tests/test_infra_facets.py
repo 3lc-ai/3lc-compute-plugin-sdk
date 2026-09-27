@@ -499,7 +499,51 @@ def test_a_registry_built_with_its_own_describer_keeps_it() -> None:
 
     with PluginHarness(Own(), plugin_id="fake") as h:
         h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"})
-    assert registry.describe_error is mine
+        h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"})
+    describer = registry.describe_error
+    assert getattr(describer, "own", None) is mine, "kept, wrapped once"
+    assert describer is not None and describer(RuntimeError("x")) == "mine"
+
+
+def test_a_registry_describer_of_its_own_is_scrubbed_and_coerced(tmp_path: Path) -> None:
+    class Secretive(_DescribingFake):
+        def secret_values(self) -> list[str]:
+            return ["hunter2"]
+
+        def bundle_registry(self, url: str) -> Any:
+            registry = super().bundle_registry(url)
+            if registry.describe_error is None:
+                registry.describe_error = lambda exc: f"PutObject with key hunter2 failed: {exc}"
+            return registry
+
+    with PluginHarness(Secretive(), plugin_id="fake", config_root=tmp_path) as h:
+        bid = h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}).json()["bundle_id"]
+        bundle = _wait(h, f"/infra/storage/bundle/{bid}")
+    assert bundle["state"] == "failed"
+    assert "hunter2" not in bundle["error"] and bundle["error"].startswith("PutObject with key *** failed")
+
+
+def test_a_non_str_describe_error_answer_is_coerced() -> None:
+    class Numeric(_Raising):
+        def describe_error(self, exc: Exception) -> Any:
+            return 404
+
+    plugin = Numeric()
+    plugin.exc = RuntimeError("hunter2 boom")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        assert h.get("/infra/nodes/x").json()["detail"] == "404"
+
+
+def test_a_described_error_is_scrubbed_before_it_is_truncated() -> None:
+    class Long(_Raising):
+        def describe_error(self, exc: Exception) -> str:
+            return "x" * 495 + " hunter2 tail"
+
+    plugin = Long()
+    plugin.exc = RuntimeError("anything")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        detail = h.get("/infra/nodes/x").json()["detail"]
+    assert len(detail) == 500 and "hunt" not in detail
 
 
 # ── Legacy owner-credentials facet ───────────────────────────────────────────
