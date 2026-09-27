@@ -14,6 +14,7 @@ from litestar.exceptions import HTTPException
 from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.infrastructure import (
     CapabilitiesResponse,
+    Conflict,
     CreateNodeRequest,
     CreateNodeResponse,
     CreateStorageRequest,
@@ -309,6 +310,7 @@ class _Raising(InfrastructurePlugin):
         (ProviderError("upstream said no"), 502),
         (InvalidRequest("bad id"), 400),
         (NotConfigured("no key"), 409),
+        (Conflict("bucket not empty"), 409),
         (NotFound("no such node"), 404),
         (NotSupported("nope"), 501),
         (ValueError("not a region"), 400),
@@ -359,6 +361,15 @@ def _plain(exc: Exception) -> str:
 class _Describing(_Raising):
     def describe_error(self, exc: Exception) -> str:
         return _plain(exc)
+
+
+def test_a_conflict_answers_409_with_its_sentence() -> None:
+    plugin = _Raising()
+    plugin.exc = Conflict("The bucket is not empty. Delete its objects first.")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        r = h.get("/infra/nodes/x")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "The bucket is not empty. Delete its objects first."
 
 
 def test_describe_error_words_an_unexpected_exception_and_is_still_scrubbed() -> None:

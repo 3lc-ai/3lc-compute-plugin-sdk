@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-__all__ = ["InvalidRequest", "NotConfigured", "NotFound", "NotSupported", "ProviderError", "scrub"]
+__all__ = ["Conflict", "InvalidRequest", "NotConfigured", "NotFound", "NotSupported", "ProviderError", "scrub"]
 
 #: A value shorter than this is not scrubbed: no key or token is that short, and replacing a
 #: one-letter "secret" everywhere would mangle every word of the sentence.
@@ -54,6 +54,12 @@ class InvalidRequest(ProviderError):
 
 class NotConfigured(ProviderError):
     """No key yet, no size configured, a corrupt settings file (HTTP 409)."""
+
+    status = 409
+
+
+class Conflict(ProviderError):
+    """The request clashes with what is there: a bucket that still holds data, keys that did not work (HTTP 409)."""
 
     status = 409
 
