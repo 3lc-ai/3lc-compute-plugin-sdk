@@ -799,11 +799,12 @@ class StorageItem:
 
 @dataclass
 class Region:
-    """A place storage can be created in."""
+    """A place storage can be created in. ``extra`` is emit-only passthrough (a ``country``, for example)."""
 
     id: str
     name: str = ""
     location: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Any) -> Region:
@@ -812,8 +813,9 @@ class Region:
         return cls(id=_str(d.get("id")), name=_str(d.get("name")), location=_str(d.get("location")))
 
     def to_dict(self) -> dict[str, Any]:
-        """``id`` and ``name`` always; ``location`` when set."""
-        d: dict[str, Any] = {"id": self.id, "name": self.name}
+        """``extra`` first; ``id`` and ``name`` always; ``location`` when set."""
+        d: dict[str, Any] = dict(self.extra)
+        d.update({"id": self.id, "name": self.name})
         if self.location:
             d["location"] = self.location
         return d
@@ -825,7 +827,8 @@ class StorageListing:
 
     ``to_dict`` flattens: the :class:`StorageCapabilities` keys at the top level, then
     ``storage`` and ``regions``, then ``account`` and ``region`` when set — the shape the host
-    splits into per-provider meta and items.
+    splits into per-provider meta and items. ``extra`` is emit-only passthrough, merged first (an
+    ``account`` answered even when empty, the ``subscription`` a discover listed).
     """
 
     capabilities: StorageCapabilities
@@ -833,6 +836,7 @@ class StorageListing:
     regions: list[Region] = field(default_factory=list)
     account: str = ""
     region: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> StorageListing:
@@ -848,8 +852,9 @@ class StorageListing:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """The flattened answer."""
-        d = self.capabilities.to_dict()
+        """The flattened answer; ``extra`` first, typed keys over it."""
+        d: dict[str, Any] = dict(self.extra)
+        d.update(self.capabilities.to_dict())
         d["storage"] = [i.to_dict() for i in self.storage]
         d["regions"] = [r.to_dict() for r in self.regions]
         if self.account:
@@ -938,7 +943,9 @@ class PresignRequest:
 class PresignResponse:
     """Presigned URLs for the browser.
 
-    The item dicts are browser-facing and provider-shaped; only the envelope is typed.
+    The item dicts are browser-facing and provider-shaped; only the envelope is typed. ``extra`` is
+    emit-only passthrough for the keys a provider's answer adds (``bucket``, ``account``, ``volume``,
+    ``cors``); a ``None`` value in it is emitted as ``null``.
     """
 
     expires_s: int = 0
@@ -946,6 +953,7 @@ class PresignResponse:
     downloads: list[dict[str, Any]] = field(default_factory=list)
     refused: list[dict[str, Any]] = field(default_factory=list)
     region: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> PresignResponse:
@@ -959,13 +967,14 @@ class PresignResponse:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``expires_s``, ``uploads``, ``downloads`` and ``refused`` always; ``region`` when set."""
-        d: dict[str, Any] = {
+        """``extra`` first; ``expires_s``, ``uploads``, ``downloads`` and ``refused`` always; ``region`` when set."""
+        d: dict[str, Any] = dict(self.extra)
+        d.update({
             "expires_s": self.expires_s,
             "uploads": [dict(u) for u in self.uploads],
             "downloads": [dict(u) for u in self.downloads],
             "refused": [dict(r) for r in self.refused],
-        }
+        })
         if self.region:
             d["region"] = self.region
         return d

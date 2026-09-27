@@ -289,6 +289,30 @@ def test_extra_is_emit_only_and_typed_keys_win() -> None:
     assert CapabilitiesResponse.from_dict(d).extra == {}
 
 
+def test_presign_extra_carries_provider_keys_and_an_explicit_null() -> None:
+    presign = PresignResponse(60, extra={"bucket": "b", "account": "acct", "volume": "v", "cors": None, "expires_s": 1})
+    d = presign.to_dict()
+    assert d["bucket"] == "b" and d["account"] == "acct" and d["volume"] == "v"
+    assert "cors" in d and d["cors"] is None, "an explicit None in extra is emitted as null"
+    assert d["expires_s"] == 60, "typed keys win"
+    assert PresignResponse.from_dict(d).extra == {}
+
+
+def test_region_extra_carries_a_country() -> None:
+    d = Region("US-NC-1", "US-NC-1", extra={"country": "US", "location": "", "id": "spoof"}).to_dict()
+    assert d == {"id": "US-NC-1", "name": "US-NC-1", "country": "US", "location": ""}
+    assert Region.from_dict(d).extra == {}
+
+
+def test_listing_extra_answers_an_empty_account_and_a_subscription() -> None:
+    listing = StorageListing(_CAPS, extra={"account": "", "subscription": "sub-1", "kind": "spoof"})
+    d = listing.to_dict()
+    assert d["account"] == "" and d["subscription"] == "sub-1"
+    assert d["kind"] == "bucket", "typed keys win"
+    assert StorageListing(_CAPS, account="acct", extra={"account": ""}).to_dict()["account"] == "acct"
+    assert StorageListing.from_dict(d).extra == {}
+
+
 def test_unknown_keys_and_bad_values_never_raise() -> None:
     state = NodeStateResponse.from_dict({"state": "weird", "detail": None, "bootstrap_failed": "no", "extra": 1})
     assert state.state == "unknown"
