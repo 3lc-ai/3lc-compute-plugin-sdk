@@ -15,7 +15,7 @@ opaque 500: the host writes the sentence on the node record.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, TypeVar
 
 from litestar import delete as http_delete
@@ -162,17 +162,34 @@ def _split_legacy(
     return body, credentials, provider_configs
 
 
-def _secret_strings(plugin: InfrastructurePlugin, credentials: dict[str, Any] | None) -> list[str]:
-    """The secret-bearing values of request credentials (a region or a role ARN stays readable)."""
-    if not credentials:
-        return []
-    descriptor = None
-    if isinstance(plugin, LegacyOwnerCredentialsFacet):
-        try:
-            descriptor = plugin.credential_descriptor()
-        except Exception:
+class _CredentialSecrets:
+    """The secret-bearing values of request credentials, worked out only when an error is scrubbed.
+
+    Iterable any number of times; ``credential_descriptor()`` is read on the first iteration only,
+    so a call that succeeds never loads it.
+    """
+
+    def __init__(self, plugin: InfrastructurePlugin, credentials: dict[str, Any] | None, *also: str) -> None:
+        self._plugin = plugin
+        self._credentials = credentials
+        self._also = [a for a in also if a]
+        self._values: list[str] | None = None
+
+    def __iter__(self) -> Iterator[str]:
+        if self._values is None:
             descriptor = None
-    return secret_credential_values(credentials, descriptor)
+            if self._credentials and isinstance(self._plugin, LegacyOwnerCredentialsFacet):
+                try:
+                    descriptor = self._plugin.credential_descriptor()
+                except Exception:
+                    descriptor = None
+            self._values = [*self._also, *secret_credential_values(self._credentials, descriptor)]
+        return iter(self._values)
+
+
+def _secret_strings(plugin: InfrastructurePlugin, credentials: dict[str, Any] | None) -> _CredentialSecrets:
+    """The secret-bearing values of request credentials (a region or a role ARN stays readable), lazily."""
+    return _CredentialSecrets(plugin, credentials)
 
 
 # ── Core ───────────────────────────────────────────────────────────────────────
@@ -220,7 +237,7 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             with request_credentials(credentials, provider_configs, owner=req.owner):
                 return plugin.create_node(req).to_dict()
 
-        return answer(plugin, run, secrets=[req.token, *_secret_strings(plugin, credentials)])
+        return answer(plugin, run, secrets=_CredentialSecrets(plugin, credentials, req.token))
 
     @http_get("/infra/nodes/{provider_id:str}", sync_to_thread=True)
     def _node_state(provider_id: str, diagnostics: bool = False) -> dict[str, Any]:

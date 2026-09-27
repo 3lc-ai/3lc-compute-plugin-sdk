@@ -99,30 +99,47 @@ def request_credentials(
         _CREDENTIALS.reset(credentials_token)
 
 
-#: Key-name fragments that mark a credential value as secret when the descriptor does not say.
-_SECRET_KEY_PARTS = ("secret", "token", "api_key", "password", "account_key", "private_key", "access_key")
+#: Credential keys whose values stay readable in an error when the descriptor does not say otherwise:
+#: identifiers and places, never keys. Every other key's value is scrubbed.
+_READABLE_KEYS = frozenset((
+    "region",
+    "location",
+    "role_arn",
+    "start_url",
+    "tenant_id",
+    "client_id",
+    "subscription_id",
+    "account",
+    "resource_group",
+))
 
 
-def _secret_keys(descriptor: OwnerCredentialsDescriptor | None) -> set[str]:
+def _marked_keys(descriptor: OwnerCredentialsDescriptor | None) -> tuple[set[str], set[str]]:
+    """``(secret, readable)``: the keys the descriptor explicitly marks ``secret`` true or false."""
+    secret: set[str] = set()
+    readable: set[str] = set()
     if descriptor is None:
-        return set()
-    keys = {f.key for f in descriptor.workspace_credentials if f.secret}
-    if descriptor.login is not None:
-        keys |= {str(f.get("key")) for f in descriptor.login.fields if f.get("secret")}
-    if descriptor.role is not None and descriptor.role.field.get("secret"):
-        keys.add(str(descriptor.role.field.get("key")))
-    return keys
+        return secret, readable
+    for f in descriptor.workspace_credentials:
+        (secret if f.secret else readable).add(f.key)
+    marked_fields = list(descriptor.login.fields) if descriptor.login is not None else []
+    if descriptor.role is not None:
+        marked_fields.append(descriptor.role.field)
+    for spec in marked_fields:
+        if "secret" in spec and spec.get("key"):
+            (secret if spec["secret"] else readable).add(str(spec["key"]))
+    return secret, readable
 
 
 def secret_credential_values(
     credentials: dict[str, Any] | None, descriptor: OwnerCredentialsDescriptor | None = None
 ) -> list[str]:
-    """The values of ``credentials`` an error message must not echo: the secret-bearing ones only.
+    """The values of ``credentials`` an error message must not echo — every string value but the readable ones.
 
-    A key is secret when the descriptor marks its field ``secret``, or when its name says so
-    (``*secret*``, ``*token*``, ``*api_key*``, ``*password*``, ``*account_key*``, ``*private_key*``,
-    ``*access_key*`` — ``aws_access_key_id`` included). A region, a role ARN or an account id stays
-    readable in the sentence.
+    Fail-closed: a value is scrubbed unless its key is one the descriptor explicitly marks
+    non-secret (``secret: False``) or is on the readable allowlist (``region``, ``location``,
+    ``role_arn``, ``start_url``, ``tenant_id``, ``client_id``, ``subscription_id``, ``account``,
+    ``resource_group``). A key the descriptor marks ``secret: True`` is always scrubbed.
 
     Args:
         credentials: The request's ``credentials`` object, or ``None``.
@@ -135,11 +152,11 @@ def secret_credential_values(
     """
     if not credentials:
         return []
-    marked = _secret_keys(descriptor)
+    secret, readable = _marked_keys(descriptor)
     return [
         v
         for k, v in credentials.items()
-        if isinstance(v, str) and v and (k in marked or any(part in k.lower() for part in _SECRET_KEY_PARTS))
+        if isinstance(v, str) and v and (k in secret or not (k in readable or k in _READABLE_KEYS))
     ]
 
 
@@ -159,8 +176,8 @@ def strip_request_credentials(
 
     The ``credentials`` object may sit top-level or under ``workspace``. The one with a non-empty
     value wins, so an empty top-level object never hides a filled ``workspace.credentials``; two
-    filled objects that disagree are refused. When neither has a value, the empty object is
-    still returned (``{}``, not ``None``): the request meant "use my account", and a provider
+    filled objects that disagree are refused. When neither has a value, the all-blank object is
+    still returned as given (not ``None``): the request meant "use my account", and a provider
     must be able to refuse it rather than fall back to its own keys.
 
     Args:

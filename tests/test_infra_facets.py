@@ -599,10 +599,68 @@ def test_only_secret_bearing_request_credentials_are_scrubbed() -> None:
     )
 
 
-def test_credential_secrets_by_name_when_the_descriptor_is_unreadable() -> None:
+def test_credential_scrub_fails_closed_without_a_descriptor() -> None:
     creds = {"aws_access_key_id": "AKIA1234", "api_key": "rp-key", "region": "eu-west-1", "account_key": "ak=="}
     assert legacy.secret_credential_values(creds) == ["AKIA1234", "rp-key", "ak=="]
     assert legacy.secret_credential_values(None) == []
+
+
+@pytest.mark.parametrize("key", ["sas", "connection_string", "credentials_json", "key", "passphrase", "Region"])
+def test_an_unknown_credential_key_is_scrubbed(key: str) -> None:
+    assert legacy.secret_credential_values({key: "some-value"}) == ["some-value"]
+
+
+def test_readable_credential_keys_and_descriptor_marks() -> None:
+    readable = {
+        k: f"v-{k}"
+        for k in (
+            "region",
+            "location",
+            "role_arn",
+            "start_url",
+            "tenant_id",
+            "client_id",
+            "subscription_id",
+            "account",
+            "resource_group",
+        )
+    }
+    assert legacy.secret_credential_values(readable) == []
+    descriptor = OwnerCredentialsDescriptor(
+        workspace_credentials=[
+            SettingsField(key="region", label="Region", secret=True),
+            SettingsField(key="profile", label="Profile"),
+        ],
+        login=LoginDescriptor(kind="k", label="l", fields=[{"key": "org", "secret": False}, {"key": "hint"}]),
+    )
+    creds = {"region": "r-1", "profile": "p-1", "org": "o-1", "hint": "h-1"}
+    assert legacy.secret_credential_values(creds, descriptor) == ["r-1", "h-1"], "marked secret wins; unmarked scrubs"
+
+
+def test_the_credential_descriptor_is_read_only_when_an_error_is_scrubbed() -> None:
+    reads: list[int] = []
+
+    class Counting(_LegacyEchoing):
+        def credential_descriptor(self) -> OwnerCredentialsDescriptor:
+            reads.append(1)
+            return super().credential_descriptor()
+
+        def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
+            creds = legacy.current_request_credentials() or {}
+            if creds.get("fail"):
+                msg = f"refused {creds['access']} in {creds['region']}"
+                raise RuntimeError(msg)
+            return CreateNodeResponse(provider_id="p", agent_url="http://x")
+
+    body = {"node_id": "n", "node_type": "t", "token": "tok"}
+    with PluginHarness(Counting(), plugin_id="legacy") as h:
+        ok = {**body, "credentials": {"access": "AKIDVALUE", "region": "eu-1"}}
+        assert h.post("/infra/nodes", json_body=ok).status_code == 201
+        assert reads == [], "a call that succeeds never reads the descriptor"
+        bad = {**body, "credentials": {"access": "AKIDVALUE", "region": "eu-1", "fail": "yes"}}
+        r = h.post("/infra/nodes", json_body=bad)
+    assert r.json()["detail"] == "refused *** in eu-1"
+    assert reads == [1]
 
 
 def test_legacy_routes_are_mounted_only_for_overridden_methods() -> None:
