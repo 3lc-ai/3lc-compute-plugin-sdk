@@ -15,13 +15,24 @@ from tlc_plugin_sdk.infrastructure import (
     CreateNodeRequest,
     CreateNodeResponse,
     InfrastructurePlugin,
+    LegacyOwnerCredentialsFacet,
+    LoginDescriptor,
     NodeStateResponse,
     ObjectListing,
+    OwnerCredentialsDescriptor,
+    SettingsField,
     StorageCapabilities,
     StorageFacet,
     StorageListing,
 )
-from tlc_plugin_sdk.infrastructure.testing import GROUPS, FakeProvider, assert_conformant, check_provider, main
+from tlc_plugin_sdk.infrastructure.testing import (
+    GROUPS,
+    FakeProvider,
+    _descriptor_keys,
+    assert_conformant,
+    check_provider,
+    main,
+)
 
 
 def test_the_reference_provider_is_conformant_with_everything_on(tmp_path: Path) -> None:
@@ -167,3 +178,41 @@ def test_the_cli_runs_a_plugin_from_its_manifest(tmp_path: Path, capsys: pytest.
     assert out.startswith("facets: storage, catalog, workspaces")
     assert "ok   lifecycle: POST /infra/nodes answers 2xx" in out
     assert "routes:" not in out
+
+
+class _LegacyFake(FakeProvider, LegacyOwnerCredentialsFacet):
+    """The reference provider with the legacy facet, describing its credentials the way aws does."""
+
+    descriptor = OwnerCredentialsDescriptor(
+        workspace_credentials=[SettingsField(key="aws_access_key_id", label="Access key id", secret=True)],
+        login=LoginDescriptor(kind="sso", label="Sign in", credential_keys=["aws_session_token", "region"]),
+    )
+
+    def credential_descriptor(self) -> OwnerCredentialsDescriptor:
+        return self.descriptor
+
+    def terminate_with_credentials(
+        self, provider_id: str, *, credentials: dict[str, Any], owner: str = ""
+    ) -> NodeStateResponse:
+        return NodeStateResponse(state="terminated")
+
+    def discover_storage(self, *, credentials: dict[str, Any], owner: str = "") -> StorageListing:
+        return StorageListing(capabilities=self.storage_capabilities())
+
+
+def test_legacy_reads_the_descriptor_not_a_top_level_credential_keys(tmp_path: Path) -> None:
+    report = check_provider(_LegacyFake(), plugin_id="fake", config_root=tmp_path)
+    assert report.ok, report.text()
+    legacy = [c for c in report.checks if c.name.startswith("legacy:")]
+    assert len(legacy) == 3
+    assert _descriptor_keys(_LegacyFake.descriptor) == ["aws_access_key_id", "aws_session_token", "region"]
+
+
+def test_legacy_flags_a_descriptor_that_names_no_keys(tmp_path: Path) -> None:
+    class Empty(_LegacyFake):
+        descriptor = OwnerCredentialsDescriptor()
+
+    report = check_provider(Empty(), plugin_id="fake", config_root=tmp_path)
+    assert [c.name for c in report.failures()] == [
+        "legacy: credential_descriptor() names the keys a request's credentials carry"
+    ]
