@@ -140,51 +140,10 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 **Other keys the host reads** (all optional, read without importing the plugin):
 
 - top-level: `kind = "compute"` (default) or `"infrastructure"`. An **infrastructure
-  plugin** provisions nodes instead of computing. It subclasses `InfrastructurePlugin`
-  (`tlc_plugin_sdk.infrastructure`) and implements the typed `capabilities` / `create_node` /
-  `node_state` / `delete_node` methods, plus the optional `preflight(node_type, datacenter)` —
-  everything the provider can know *before* a node is requested (funds, stock, quotas,
-  permissions), so a payment problem is a dialog and not a run of dead nodes. Give the
-  provider's own words in full in each check's `detail`; the Hub shows them whole. The default
-  `get_route_handlers()` mounts the five `/infra/*` routes the host's infra manager calls
-  through the worker proxy. Capabilities also say what the provider makes: `flavors`
-  (`["gpu"]`, or `["gpu", "workspace"]` for a provider that hosts permanent deployment nodes)
-  and, through `extra`, `pricing` (`["on_demand"]`, or `["on_demand", "spot"]` when
-  interruptible capacity is offered). Every create request carries `flavor` and `pricing`, and
-  the host refuses a request for anything the plugin has not declared, so a plugin never has to
-  guess a default. An infrastructure plugin keeps no project root and reports none: the root a job
-  writes to is the host's, carried in the run body (see `ctx.project_root_url`), and the host
-  marks which listed bucket holds it. Where a provider needs the deployment's storage, the host
-  passes it: `CreateNodeRequest.project_storage` (the node-reachable root and scan folders when
-  the node is created — a hint for what the node's storage credential should at least cover,
-  not a boundary: scan folders change over time), `fallback_url` on `GET /infra/storage` (the root's bucket,
-  for credentials that may not list buckets). (A host still reads a `storage: {"project_root_url": …}`
-  entry in `extra` from an older provider, as a stand-in for a node run from a host whose own
-  root is its disk; don't add one.) A created node is reached by its `agent_url` alone: the host
-  talks to the node agent and reaches the node's workers through the agent's proxy, so a provider
-  exposes `agent_port` plus the request's `ports` (the browser-facing app ports, a notebook
-  server for example) and nothing else — worker ports are loopback-only on the node. Which
-  account the plugin acts on comes from the request's
-  Connection — see [Connections](#connections-infrastructure-plugins). At most one
-  infrastructure plugin is active on a host at a time.
-
-  **Provisional: provider sign-in.** A provider that can sign a person in instead of taking
-  pasted keys may declare `workspace_login` in its capabilities (`{kind, label, help, fields:
-  [{key, label, placeholder, remember}], credential_keys}`) and serve the device flow as
-  `POST /infra/login` (start: code + link), `GET /infra/login/{id}` (`{state:
-  pending|authorized|expired|error, accounts?}`) and `POST /infra/login/{id}/credentials`
-  (`{account_id, role_name}` → temporary credentials); the host forwards these as
-  `/api/infra/login/<plugin>/…`, the Hub renders the panel and hands the credentials to the
-  create call exactly like pasted keys. A provider can instead let a person *grant a role*:
-  declare `workspace_role` (`{kind, label, help, setup, field: {key, label, placeholder}}`) and
-  serve `GET /infra/role-setup?owner=` → `{host_account_id, external_id, role_name,
-  quick_create_url, trust_policy, template}`, forwarded as `/api/infra/role-setup/<plugin>` for
-  the signed-in owner; derive the external id from the owner so a role is bound to one person,
-  and re-assume the role for deletion (the host sends `owner` along). Temporary credentials must
-  never be seeded onto the deployment — it runs its nodes by its own instance role. This
-  sign-in surface is provider-shaped and **not part of the typed `InfrastructurePlugin`
-  contract**: it stays open, and may change without notice, until the Hub's credentials
-  handling is settled (credentials become references a plugin resolves through the host).
+  plugin** provisions nodes instead of computing: it subclasses `InfrastructurePlugin`
+  (`tlc_plugin_sdk.infrastructure`) and answers the typed provider contract — see
+  [Infrastructure plugins](#infrastructure-plugins). At most one infrastructure plugin is active
+  on a host at a time.
 - `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
   plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
   (pin the interpreter the plugin's venv is built with).
@@ -585,13 +544,169 @@ real example.
 
 ---
 
-## Connections (infrastructure plugins)
+## Infrastructure plugins
+
+An infrastructure plugin (`kind = "infrastructure"`) provisions nodes instead of computing. The
+host owns the node registry, the lifecycle state machine, heartbeats, idle teardown and job
+dispatch; you own three things: create a node, say what state it is in, delete it. The host's
+InfraManager calls your plugin through the worker proxy on the `/infra/*` routes the SDK mounts
+for you.
+
+### What a provider is — the five-method minimum
+
+```python
+from dataclasses import dataclass, field
+
+from tlc_plugin_sdk.infrastructure import (
+    CapabilitiesResponse,
+    CreateNodeRequest,
+    CreateNodeResponse,
+    InfrastructurePlugin,
+    NodeStateResponse,
+    PluginSettings,
+    secret,
+)
+
+
+@dataclass
+class MySettings:
+    id: str = "default"
+    created: str = ""
+    last_run: str | None = None
+    api_key: str = secret(label="My API key", href="https://…", help="Where to find it")
+    node_types: list[str] = field(default_factory=lambda: ["gpu-small"])
+
+
+class MyProvider(InfrastructurePlugin):
+    settings = PluginSettings(MySettings, "myprovider")  # GET/POST /settings appear; nothing to write
+
+    def get_ui_fragment(self) -> str: ...
+
+    def capabilities(self) -> CapabilitiesResponse:
+        s = self.settings.load()
+        return CapabilitiesResponse(provider="myprovider", node_types=s.node_types, **self.settings.readiness(s))
+
+    def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse: ...
+    def node_state(self, provider_id: str) -> NodeStateResponse: ...
+    def delete_node(self, provider_id: str) -> NodeStateResponse: ...
+```
+
+`get_ui_fragment` is the settings fragment; the four abstract methods are the contract. Optional
+overrides with safe defaults: `preflight(node_type, datacenter)` (everything the provider can
+know *before* a node is requested — funds, stock, quota, permissions — so a payment problem is a
+dialog and not a run of dead nodes; give the provider's own words in full in each check's
+`detail`), `node_diagnostics(provider_id)` (the state plus the `bootstrap_*` startup milestones,
+read from the provider's console or boot log; served on `GET /infra/nodes/{id}?diagnostics=true`),
+`secret_values()` (every value an error message must never echo; the settings layer's secrets by
+default) and `settings_view(settings)` (what `/settings` answers; add computed keys here).
+
+A created node is reached by its `agent_url` alone: the host talks to the node agent and reaches
+the node's workers through the agent's proxy, so a provider exposes `agent_port` plus the
+request's `ports` (the browser-facing app ports, a notebook server for example) and nothing else —
+worker ports are loopback-only on the node. A provider keeps no project root and reports none:
+the root a job writes to is the host's, carried in the run body (`ctx.project_root_url`). Where a
+provider needs the deployment's storage, the host passes it — `CreateNodeRequest.project_storage`
+(the node-reachable root and scan folders when the node is created: a hint for what the node's
+storage credential should at least cover, not a boundary) and `fallback_url` on
+`GET /infra/storage` (the root's bucket, for credentials that may not list buckets).
+
+### The wire, typed
+
+Every message is a dataclass in `tlc_plugin_sdk.infrastructure`: read the host's fields, answer
+with the dataclass, the SDK handles JSON. `from_dict` drops unknown keys and defaults missing
+ones, so an older or newer host never makes a provider raise; `to_dict` omits an optional key
+when it is unset, so a reader's `"hourly_rate" in answer` keeps its meaning. The aliases the
+wire carries (`node_type`/`gpu_type` on a create body and a preflight query,
+`node_types`/`gpu_types` on capabilities) are handled by the SDK on both sides — never touch
+them.
+
+| Route | Request | Answer |
+|---|---|---|
+| `GET /infra/capabilities` | — | `CapabilitiesResponse`: `provider`, `node_types`, `flavors` (`["gpu"]`, or `["gpu", "workspace"]`), `pricing` (`["on_demand", "spot"]`; the host assumes on-demand when absent), `ready`, `missing`, `missing_fields` (what to ask a person for), `node_type_label`, `region`, `workspace_fields`; `storage` and `facets` are filled by the SDK from your class's facets — an author-set value of either is overwritten; `extra` passes provider-private keys through to your own fragment |
+| `GET /infra/preflight?node_type=&datacenter=` | — | `PreflightResponse`: `ok`, `checks[]` (`name`, `ok`, `level`, `detail`), `summary` |
+| `POST /infra/nodes` | `CreateNodeRequest`: `node_id`, `node_type`, `token`, `env`, `agent_port`, `ports`, `idle_ttl_s`, `flavor`, `owner`, `pricing` (`""` = your configured default), `storage_id`, `compute_spec`, `wheelhouse`, `project_storage`, `workspace` (a `WorkspaceRequest`; empty for a GPU node) | `CreateNodeResponse`: `provider_id`, `agent_url` (a GPU node) or `services` (a workspace: `object_service_url`, `compute_service_url`), `hourly_rate`, `pricing`, `managed_by` (`"owner"` when the node lives in the requester's own account), `token`, `detail`. The SDK answers 201; the host accepts 200 and 201 |
+| `GET /infra/nodes/{id}` | `?diagnostics=true` for `node_diagnostics` | `NodeStateResponse`: `state` (`pending`, `running`, `exited`, `terminated`, `gone`, `unknown`), `detail`, and with diagnostics `bootstrap_history`, `bootstrap_detail`, `bootstrap_failed` (`None` when the console could not be read) |
+| `DELETE /infra/nodes/{id}` | — | `NodeStateResponse`; idempotent: a repeated delete answers `terminated` or `gone` |
+
+The host refuses a request for any `flavor` or `pricing` the capabilities did not declare, so a
+plugin never guesses a default. Every create request carries `flavor` and `pricing`.
+
+### Facets — opt in by subclassing
+
+A facet is one more base class next to `InfrastructurePlugin`. The SDK mounts the facet's routes
+and lists its id in `capabilities.facets`; the Hub reads that list to know what to show. No flag,
+no manifest key:
+
+```python
+class MyProvider(InfrastructurePlugin, StorageFacet, CatalogFacet): ...
+```
+
+Each facet has a few abstract methods (the smallest set you must write) and defaults that raise
+`NotSupported` (HTTP 501) for the rest.
+
+**`StorageFacet`** (`facets: ["storage"]`) — buckets, containers or volumes the provider creates and
+the Data page fills and browses. Abstract: `storage_capabilities()` (a `StorageCapabilities`:
+`kind`, `label` and the flags `creatable`, `upload`, `browse`, `download`, `bundle`, `delete`,
+`transfer`, `rename`, plus `default_id` and `upload_hint`; the SDK puts it under
+`capabilities.storage` and the Hub shows exactly what the flags allow) and
+`list_storage(fallback_url=)` (a `StorageListing`: the same header, the `StorageItem`s and the
+`Region`s a new one can be created in). Optional: `create_storage(CreateStorageRequest) ->
+StorageItem`, `delete_storage(id) -> StorageDeleted`, `presign(PresignRequest) ->
+PresignResponse` (upload and download URLs for the browser), `list_objects(url, next_token=) ->
+ObjectListing` (one level of a folder), `delete_objects(DeleteObjectsRequest) -> dict` (the
+answer is your own counts — `deleted`, `count`, `bytes`, `failures` — and is not typed: the Data
+page only counts). Transfers and folder downloads come for free: return a
+`TransferRegistry` from `transfer_registry(url)` and a `BundleRegistry` from
+`bundle_registry(url)` (`tlc_plugin_sdk.shared.storage_transfer` / `storage_bundle`, each built
+from three or four calls that speak your client) and the SDK serves
+`POST/GET/DELETE /infra/storage/transfer[/{id}]` and `…/bundle[/{id}]`, validates the ids,
+answers a dry run with the plan's counts and refuses a transfer whose source and destination
+map to different registries. Cache the registry per storage (a volume, a bucket) — status and
+cancel search every registry you handed out. A flag that is `True` needs its method
+overridden; the conformance kit checks the two agree.
+
+**`CatalogFacet`** (`"catalog"`) — live offerings for the pickers. Abstract:
+`gpu_catalog(node_type=, region=) -> GpuCatalog` (`gpus` rows for the catalogue table, an
+optional `placement`, an `error` sentence instead of an exception when the lookup failed).
+Optional: `cpu_catalog(region=) -> CpuCatalog` (workspace sizes), `datacenters(node_type=) ->
+Datacenters` (sites with stock, and the placement in force).
+
+**`WorkspaceFacet`** (`"workspaces"`) — the provider creates `flavor == "workspace"` nodes (a
+permanent CPU host running the owner's own Object Service and compute service) and can list the
+ones it runs. Abstract: `list_workspaces(owner=) -> WorkspaceListing` (every instance the account
+runs, tracked by the host or not — the host reconciles orphans against it). A workspace is
+created through the core `create_node` (the request's `flavor` and `workspace` say so) and
+answered with `services` and `managed_by`. You still list `"workspace"` in
+`capabilities().flavors` — the host gates on `flavors`; the kit asserts the two agree.
+`capabilities.lists_workspaces` reads `true` for a provider with this facet.
+
+**`LegacyOwnerCredentialsFacet`** (`"legacy-owner-credentials"`) — **legacy**: request-carried
+owner credentials, superseded by Connections and kept for the demo and hosted flows (a
+visitor's workspace in their own account, a sign-in, a role grant). Deliberately dict-typed:
+these steps are provider-shaped and may change without notice. Abstract:
+`credential_descriptor() -> OwnerCredentialsDescriptor` (merged into capabilities as
+`credential_keys` — what a request's `credentials` must carry — plus `workspace_credentials`,
+`workspace_login` and `workspace_role`, each only when set),
+`terminate_with_credentials(provider_id, credentials=, owner=)`
+(`POST /infra/nodes/{id}/terminate {credentials, owner}`: a node in another account) and
+`discover_storage(credentials=, owner=)` (`POST /infra/storage/discover`). The sign-in and
+role-grant routes are mounted only when you override their method, so a provider never serves a
+501 it did not write: `login_start(body, owner=)` → `POST /infra/login` (a code and a link),
+`login_poll(login_id, owner=)` → `GET /infra/login/{id}` (`{state: pending|authorized|expired|error,
+accounts?}`), `login_credentials(login_id, body, owner=)` → `POST /infra/login/{id}/credentials`
+(`{account_id, role_name}` → temporary credentials), `role_setup(owner=, bucket_url=)` →
+`GET /infra/role-setup` (`{host_account_id, external_id, role_name, quick_create_url, …}`). The
+host forwards these as `/api/infra/login/<plugin>/…` and `/api/infra/role-setup/<plugin>`;
+derive the external id from the owner so a role is bound to one person. Temporary credentials
+must never be seeded onto the deployment — it runs its nodes by its own instance role.
+
+### Identity: Connections first
 
 A **Connection** names the external account a request acts on — an AWS account, a RunPod team —
 without the plugin holding credentials for it. The host sends the Connection's non-secret
 *binding* (`{id, provider, kind, metadata}`) in the host-owned `x-3lc-connection` header; the
-worker app resolves it before your route handler runs and exposes the result for that one
-request:
+worker app resolves it before your method runs and exposes the result for that one request,
+inside any core or facet method:
 
 ```python
 from tlc_plugin_sdk import connections
@@ -617,13 +732,137 @@ credential = connections.current_credential()  # Ambient | AwsSession | None
   with a sentence a person can act on. Resolution runs in a worker thread, so it may call the
   provider.
 - A malformed or repeated header answers **400**; a binding the plugin cannot resolve answers
-  **424** with the resolver's reason. Neither reaches your handler.
+  **424** with the resolver's reason. Neither reaches your method.
 
-Resolved credentials live for the request only; don't cache them in settings or on disk.
-Precedence inside a plugin should be: credentials the request itself carries (a person's own
-keys or sign-in), then the Connection, then — only when the request names no Connection — the
-plugin's legacy settings. The header is host-owned: a host strips any copy a caller sends, so a
-fragment can never choose the identity.
+Resolved credentials live for the request only; don't cache them in settings or on disk. The
+header is host-owned: a host strips any copy a caller sends, so a fragment can never choose the
+identity.
+
+**The legacy request-credential context.** The demo and hosted flows put a `credentials` object
+(top-level or under `workspace`) and `workspace.provider_configs` on `POST /infra/nodes` and
+`POST /infra/storage`. These are never fields of `CreateNodeRequest` or `CreateStorageRequest`:
+the SDK strips them from the body and, for a plugin with `LegacyOwnerCredentialsFacet`, exposes
+them for the duration of the call through `tlc_plugin_sdk.infrastructure.legacy` —
+`current_request_credentials()` (`dict | None`) and `current_provider_configs()`
+(`{plugin_id: {...}}`) — the same pattern as `connections`. A plugin **without** that facet is
+sent **400** (*"This provider takes no request credentials; act through a Connection
+instead."*) before its method runs: a silently dropped `credentials` object would create the
+resource in the host's own account.
+
+Precedence inside a provider: request-carried legacy credentials (the legacy context) → the
+Connection (`current_credential()`; `Ambient` never falls back to saved keys) → the plugin's
+own settings, only when the request names no Connection.
+
+### Settings from a dataclass
+
+`PluginSettings(MySettings, "myprovider")` on the class turns one dataclass into the whole
+settings surface: `load()`, `save(update)`, `redacted(settings)`, `secret_values(settings)`,
+`missing_fields(settings)`, `readiness(settings)` and `field_view()`, plus `GET /settings` and
+`POST /settings` mounted by the SDK. The dataclass carries the store's envelope (`id`, `created`,
+`last_run`) and, per field, optional metadata:
+
+- `secret(label=, help=, href=, placeholder=, required=True)` — a secret string, default `""`:
+  the fragment sees `<name>_set: bool`, never the value; `""` on save keeps it, `"-"` clears it.
+- `option(default, label=, help=, href=, placeholder=, required=, validate=, clearable=, coerce=)`
+  — a described non-secret setting. `coerce` runs on the incoming value first (a fallback, a
+  parse); `validate` is then called with it and its return is stored — raise `ValueError` with a
+  sentence and the route answers 400; an empty value keeps the current one unless
+  `clearable=True`. A field with a `label` is a prompt: `missing_fields()` lists it while its
+  value is empty and `readiness()` turns that into the `missing_fields` / `missing` / `ready`
+  keyword arguments of `CapabilitiesResponse`.
+- A plain `field()` or default: merged by annotation, never prompted. `int` (a failed conversion
+  keeps the current value), `bool` (`1/true/yes/on`), `float`, `list[str]` (stripped, empties
+  dropped), `dict[str, str]`, `list[<dataclass>]` (each row from its known fields; unknown keys
+  dropped, missing keys defaulted — a row saved before a field existed still loads), `str`.
+
+Keys that are not fields, and `id`/`created`/`last_run`, are ignored on save. After the merge a
+`normalise(self)` method on the dataclass runs when it has one (cross-field rules). The
+redacted view the fragment reads is `id`, every non-secret field by name, every secret as
+`<name>_set`, and a `dict[str, str]` named `env` or `*_env` as `<name>_keys` (sorted) — nested
+rows follow the same rules. Override `settings_view(settings)` to add computed keys (an
+effective placement, a derived URL, per-row problems). A settings file that exists but does not
+parse is `SettingsUnreadable` → 409 with *"fix or delete it"*, before any merge; it is never read
+as defaults.
+
+`secret()` and `option()` return dataclass fields, like `dataclasses.field`; a repo that lints
+with ruff lists them under `[tool.ruff.lint.flake8-bugbear] extend-immutable-calls`.
+
+A provider that keeps hand-rolled `/settings` routes leaves `settings = None`: the SDK mounts
+nothing, and the conformance kit flags a plugin that has both.
+
+### Errors people can read
+
+Raise with the provider's own sentence and let the SDK answer; never let a 500 through — the
+host writes the sentence on the node record, and *"Internal Server Error"* tells nobody
+anything. `tlc_plugin_sdk.infrastructure.errors`:
+
+| Raised in a method | HTTP | When |
+|---|---|---|
+| `InvalidRequest` | 400 | a bad id, url, mode or name; a half credential pair |
+| `NotFound` | 404 | no such node, storage, transfer or bundle |
+| `NotConfigured` | 409 | no key yet, no size configured |
+| `NotSupported` | 501 | a facet method left at its default |
+| `ProviderError` | 502 | the provider answered something a person must read |
+| `SettingsUnreadable` | 409 | the settings file does not parse |
+| `ValueError` (a validator's, the transfer engine's `TransferError`), `TypeError` | 400 | a value that cannot be used |
+| `connections.CredentialUnavailable` | 424 | the Connection could not be resolved |
+| `NotImplementedError` | 501 | |
+| a litestar `HTTPException` | as raised | |
+| anything else | 502 | the exception's message, never an opaque 500 |
+
+Every body is `{"detail": "<sentence>"}`, scrubbed of `secret_values()` and of the request's
+token and credentials.
+
+### Testing
+
+`PluginHarness` runs your plugin's app in-process for one call at a time
+(`python -m tlc_plugin_sdk.harness src/my_provider GET /infra/capabilities`). The conformance
+kit drives the whole contract and reports every check by group:
+
+```python
+from tlc_plugin_sdk.infrastructure.testing import assert_conformant
+
+
+def test_conformance(tmp_path):
+    with patch_provider_seams():  # your repo's fake for boto3 / runpod / az clients
+        assert_conformant(MyProvider(), plugin_id="myprovider", config_root=tmp_path)
+```
+
+By default the kit runs the shape, preflight, errors, settings, routes, catalog-envelope and
+workspaces-envelope checks — no cloud credentials, no seam patched; `create_nodes=True` adds the
+node lifecycle (create, state, diagnostics, delete twice, a `credentials` object refused) and
+`live_storage=True` the object listing and a transfer dry-run against the first listed storage.
+`skip=("routes",)` leaves a group out; `headers=` sends an `x-3lc-connection` binding on every
+call. The CLI is `python -m tlc_plugin_sdk.infrastructure.testing src/my_provider [--config-root
+DIR] [--create-nodes] [--live-storage] [--node-type T] [--skip GROUP]`. `FakeProvider` in the same
+module implements every facet in memory and is the reference implementation to read next to
+this chapter.
+
+### Your own routes and fragment
+
+Anything the contract does not cover stays provider-private, reached only from your own
+fragment through `PLUGIN_API`: an auth flow (`/auth/*`), a machine check (`/machines/check`), a
+region picker. Append them to the SDK's handlers:
+
+```python
+def get_route_handlers(self) -> list[Any]:
+    return [*super().get_route_handlers(), *my_private_routes()]
+```
+
+The reserved worker paths (`/health`, `/ui`, `/compute`, `/busy`, `/reclaim`, `/jobs/*`) are never
+mounted for a plugin, and a second handler on a path the SDK mounts (a hand-rolled `/settings`
+next to `settings = PluginSettings(...)`) stops the app from building — the kit names it.
+Catalog rows are drawn with `TlcCatalog` (see *Listing what a provider offers* below).
+
+### Checklist for a new provider
+
+1. Manifest: `kind = "infrastructure"`, `[runtime] entrypoint = "my_provider:MyProvider"`.
+2. Class bases: `InfrastructurePlugin` plus the facets you serve.
+3. `settings = PluginSettings(MySettings, "<plugin id>")` with `secret()`/`option()` metadata.
+4. The four core methods answer the dataclasses; `capabilities()` uses `settings.readiness()`.
+5. Credentials from `connections.current_credential()`, never from a request field.
+6. Errors raised with the provider's sentence (`ProviderError` and friends).
+7. `assert_conformant(...)` green in CI; `--create-nodes` green against your patched seam.
 
 ## Long-Running Jobs (`run_job(ctx)`)
 

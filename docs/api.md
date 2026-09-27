@@ -41,6 +41,34 @@ and the `TlcData` helper — is declared in `plugin-api.d.ts`.
 .. js:automodule:: plugin-api.d
 ```
 
+## Infrastructure plugins
+
+The typed provider contract: the base, the facets a provider opts into, the wire dataclasses,
+the error family, the legacy request-credential context, and the conformance kit.
+
+```{eval-rst}
+.. automodule:: tlc_plugin_sdk.infrastructure.plugin
+   :members:
+
+.. automodule:: tlc_plugin_sdk.infrastructure.facets
+   :members:
+
+.. automodule:: tlc_plugin_sdk.infrastructure.types
+   :members:
+
+.. automodule:: tlc_plugin_sdk.infrastructure.errors
+   :members:
+
+.. automodule:: tlc_plugin_sdk.infrastructure.legacy
+   :members:
+
+.. automodule:: tlc_plugin_sdk.infrastructure.testing
+   :members:
+
+.. automodule:: tlc_plugin_sdk.harness
+   :members:
+```
+
 ## The worker
 
 ```{eval-rst}
@@ -77,6 +105,9 @@ the service.
    :members:
 
 .. automodule:: tlc_plugin_sdk.shared.naming
+   :members:
+
+.. automodule:: tlc_plugin_sdk.shared.settings
    :members:
 
 .. automodule:: tlc_plugin_sdk.shared.url_utils
