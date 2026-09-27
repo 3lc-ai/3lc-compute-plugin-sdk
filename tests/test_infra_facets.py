@@ -29,6 +29,7 @@ from tlc_plugin_sdk.infrastructure import (
     NotSupported,
     OwnerCredentialsDescriptor,
     ProviderError,
+    SettingsField,
     StorageCapabilities,
     StorageFacet,
     StorageItem,
@@ -558,6 +559,50 @@ class _LegacyWithLogin(_Legacy):
 
     def role_setup(self, *, owner: str = "", bucket_url: str = "") -> dict[str, Any]:
         return {"external_id": owner}
+
+
+class _LegacyEchoing(_Legacy):
+    """Echoes every credential value in its error, the way a cloud SDK's message names a region or a role."""
+
+    def credential_descriptor(self) -> OwnerCredentialsDescriptor:
+        return OwnerCredentialsDescriptor(
+            workspace_credentials=[
+                SettingsField(key="access", label="Access id", secret=True),
+                SettingsField(key="region", label="Region"),
+            ],
+            login=LoginDescriptor(kind="k", label="Sign in", fields=[{"key": "pin", "secret": True}]),
+        )
+
+    def terminate_with_credentials(
+        self, provider_id: str, *, credentials: dict[str, Any], owner: str = ""
+    ) -> NodeStateResponse:
+        msg = " ".join(f"{k}={v}" for k, v in credentials.items())
+        raise RuntimeError(msg)
+
+
+def test_only_secret_bearing_request_credentials_are_scrubbed() -> None:
+    creds = {
+        "access": "AKIDENTIFIER",
+        "region": "us-east-1",
+        "role_arn": "arn:aws:iam::1:role/r",
+        "pin": "123456",
+        "client_secret": "cs-value",
+        "aws_session_token": "tok-value",
+        "subscription_id": "sub-1",
+    }
+    with PluginHarness(_LegacyEchoing(), plugin_id="legacy") as h:
+        r = h.post("/infra/nodes/p/terminate", json_body={"credentials": creds})
+    assert r.status_code == 502
+    assert r.json()["detail"] == (
+        "access=*** region=us-east-1 role_arn=arn:aws:iam::1:role/r pin=*** client_secret=*** "
+        "aws_session_token=*** subscription_id=sub-1"
+    )
+
+
+def test_credential_secrets_by_name_when_the_descriptor_is_unreadable() -> None:
+    creds = {"aws_access_key_id": "AKIA1234", "api_key": "rp-key", "region": "eu-west-1", "account_key": "ak=="}
+    assert legacy.secret_credential_values(creds) == ["AKIA1234", "rp-key", "ak=="]
+    assert legacy.secret_credential_values(None) == []
 
 
 def test_legacy_routes_are_mounted_only_for_overridden_methods() -> None:

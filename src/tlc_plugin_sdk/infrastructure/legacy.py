@@ -28,9 +28,12 @@ from __future__ import annotations
 import contextvars
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tlc_plugin_sdk.infrastructure.errors import InvalidRequest
+
+if TYPE_CHECKING:
+    from tlc_plugin_sdk.infrastructure.types import OwnerCredentialsDescriptor
 
 __all__ = [
     "current_provider_configs",
@@ -38,6 +41,7 @@ __all__ = [
     "current_request_owner",
     "has_values",
     "request_credentials",
+    "secret_credential_values",
     "strip_request_credentials",
 ]
 
@@ -93,6 +97,50 @@ def request_credentials(
         _OWNER.reset(owner_token)
         _PROVIDER_CONFIGS.reset(configs_token)
         _CREDENTIALS.reset(credentials_token)
+
+
+#: Key-name fragments that mark a credential value as secret when the descriptor does not say.
+_SECRET_KEY_PARTS = ("secret", "token", "api_key", "password", "account_key", "private_key", "access_key")
+
+
+def _secret_keys(descriptor: OwnerCredentialsDescriptor | None) -> set[str]:
+    if descriptor is None:
+        return set()
+    keys = {f.key for f in descriptor.workspace_credentials if f.secret}
+    if descriptor.login is not None:
+        keys |= {str(f.get("key")) for f in descriptor.login.fields if f.get("secret")}
+    if descriptor.role is not None and descriptor.role.field.get("secret"):
+        keys.add(str(descriptor.role.field.get("key")))
+    return keys
+
+
+def secret_credential_values(
+    credentials: dict[str, Any] | None, descriptor: OwnerCredentialsDescriptor | None = None
+) -> list[str]:
+    """The values of ``credentials`` an error message must not echo: the secret-bearing ones only.
+
+    A key is secret when the descriptor marks its field ``secret``, or when its name says so
+    (``*secret*``, ``*token*``, ``*api_key*``, ``*password*``, ``*account_key*``, ``*private_key*``,
+    ``*access_key*`` — ``aws_access_key_id`` included). A region, a role ARN or an account id stays
+    readable in the sentence.
+
+    Args:
+        credentials: The request's ``credentials`` object, or ``None``.
+        descriptor: The provider's
+            :meth:`~tlc_plugin_sdk.infrastructure.LegacyOwnerCredentialsFacet.credential_descriptor`,
+            when it could be read.
+
+    Returns:
+        The non-empty string values of the secret keys.
+    """
+    if not credentials:
+        return []
+    marked = _secret_keys(descriptor)
+    return [
+        v
+        for k, v in credentials.items()
+        if isinstance(v, str) and v and (k in marked or any(part in k.lower() for part in _SECRET_KEY_PARTS))
+    ]
 
 
 def has_values(credentials: Any) -> bool:

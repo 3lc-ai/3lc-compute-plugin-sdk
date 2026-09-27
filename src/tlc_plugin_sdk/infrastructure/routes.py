@@ -31,7 +31,11 @@ from tlc_plugin_sdk.infrastructure.facets import (
     StorageFacet,
     WorkspaceFacet,
 )
-from tlc_plugin_sdk.infrastructure.legacy import request_credentials, strip_request_credentials
+from tlc_plugin_sdk.infrastructure.legacy import (
+    request_credentials,
+    secret_credential_values,
+    strip_request_credentials,
+)
 from tlc_plugin_sdk.infrastructure.plugin import InfrastructurePlugin
 from tlc_plugin_sdk.infrastructure.types import (
     BundleRequest,
@@ -158,10 +162,17 @@ def _split_legacy(
     return body, credentials, provider_configs
 
 
-def _secret_strings(credentials: dict[str, Any] | None) -> list[str]:
+def _secret_strings(plugin: InfrastructurePlugin, credentials: dict[str, Any] | None) -> list[str]:
+    """The secret-bearing values of request credentials (a region or a role ARN stays readable)."""
     if not credentials:
         return []
-    return [v for v in credentials.values() if isinstance(v, str) and v]
+    descriptor = None
+    if isinstance(plugin, LegacyOwnerCredentialsFacet):
+        try:
+            descriptor = plugin.credential_descriptor()
+        except Exception:
+            descriptor = None
+    return secret_credential_values(credentials, descriptor)
 
 
 # ── Core ───────────────────────────────────────────────────────────────────────
@@ -209,7 +220,7 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             with request_credentials(credentials, provider_configs, owner=req.owner):
                 return plugin.create_node(req).to_dict()
 
-        return answer(plugin, run, secrets=[req.token, *_secret_strings(credentials)])
+        return answer(plugin, run, secrets=[req.token, *_secret_strings(plugin, credentials)])
 
     @http_get("/infra/nodes/{provider_id:str}", sync_to_thread=True)
     def _node_state(provider_id: str, diagnostics: bool = False) -> dict[str, Any]:
@@ -275,7 +286,7 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             with request_credentials(credentials, provider_configs, owner=req.owner):
                 return facet.create_storage(req).to_dict()
 
-        return answer(plugin, run, secrets=_secret_strings(credentials))
+        return answer(plugin, run, secrets=_secret_strings(plugin, credentials))
 
     @http_delete("/infra/storage/{storage_id:str}", status_code=200, sync_to_thread=True)
     def _delete_storage(storage_id: str) -> dict[str, Any]:
@@ -512,7 +523,7 @@ def legacy_handlers(plugin: InfrastructurePlugin) -> list[Any]:
                 raise InvalidRequest(msg)
             return facet.terminate_with_credentials(provider_id, credentials=credentials, owner=owner).to_dict()
 
-        return answer(plugin, run, secrets=_secret_strings(credentials))
+        return answer(plugin, run, secrets=_secret_strings(plugin, credentials))
 
     @http_post("/infra/storage/discover", sync_to_thread=True)
     def _discover_storage(data: dict[str, Any]) -> dict[str, Any]:
@@ -524,7 +535,7 @@ def legacy_handlers(plugin: InfrastructurePlugin) -> list[Any]:
                 raise InvalidRequest(msg)
             return facet.discover_storage(credentials=credentials, owner=owner).to_dict()
 
-        return answer(plugin, run, secrets=_secret_strings(credentials))
+        return answer(plugin, run, secrets=_secret_strings(plugin, credentials))
 
     handlers: list[Any] = [_terminate_with_credentials, _discover_storage]
 
