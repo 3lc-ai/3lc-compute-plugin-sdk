@@ -147,7 +147,7 @@ def test_credentials_on_create_are_refused_without_the_legacy_facet(fake: Plugin
     r = fake.post("/infra/storage", json_body={"name": "b", "credentials": {"api_key": "k"}})
     assert r.status_code == 400
     empty = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": {"k": ""}}
-    assert fake.post("/infra/nodes", json_body=empty).status_code == 201, "an empty credentials object is absent"
+    assert fake.post("/infra/nodes", json_body=empty).status_code == 400, "an empty object still meant 'my account'"
     malformed = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": "x"}
     r = fake.post("/infra/nodes", json_body=malformed)
     assert r.status_code == 400, "a malformed credentials value is refused for every provider"
@@ -614,6 +614,19 @@ def test_legacy_routes_are_mounted_only_for_overridden_methods() -> None:
     assert ("POST", "/infra/login") in more
     assert ("GET", "/infra/role-setup") in more
     assert ("GET", "/infra/login/{login_id:str}") not in more, "login_poll was not overridden"
+
+
+def test_an_empty_top_level_credentials_object_does_not_hide_the_workspace_one() -> None:
+    plugin = _Legacy()
+    base = {"node_id": "n", "node_type": "t", "token": "tok"}
+    with PluginHarness(plugin, plugin_id="legacy") as h:
+        body = {**base, "credentials": {}, "workspace": {"credentials": {"api_key": "k"}}}
+        assert h.post("/infra/nodes", json_body=body).status_code == 201
+        assert h.post("/infra/nodes", json_body={**base, "credentials": {}}).status_code == 201
+        clash = {**base, "credentials": {"api_key": "a"}, "workspace": {"credentials": {"api_key": "b"}}}
+        r = h.post("/infra/nodes", json_body=clash)
+        assert r.status_code == 400 and "two different credentials" in r.json()["detail"]
+    assert [creds for creds, _ in plugin.seen] == [{"api_key": "k"}, {}]
 
 
 def test_legacy_credentials_reach_the_plugin_through_the_context_and_never_the_request() -> None:

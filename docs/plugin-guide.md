@@ -758,9 +758,11 @@ the SDK strips them from the body and, for a plugin with `LegacyOwnerCredentials
 them for the duration of the call through `tlc_plugin_sdk.infrastructure.legacy` —
 `current_request_credentials()` (`dict | None`), `current_provider_configs()`
 (`{plugin_id: {...}}`) and `current_request_owner()` (the caller the host acts for; also the
-request's `owner` field) — the same pattern as `connections`. A `credentials` object with no
-non-empty value counts as absent (as the host counts it), so an empty top-level object never
-hides a filled `workspace.credentials`; two filled objects that disagree are 400. A plugin
+request's `owner` field) — the same pattern as `connections`. The `credentials` object with a
+non-empty value wins, so an empty top-level object never hides a filled `workspace.credentials`;
+two filled objects that disagree are 400. An empty object alone still reaches you as `{}` (not
+`None`): the request meant "use my account", so refuse it rather than fall back to your own
+keys. A plugin
 **without** that facet is sent **400** (*"This provider takes no request credentials; act
 through a Connection instead."*) before its method runs, and a `credentials` that is not an
 object is 400 for every plugin: a silently dropped `credentials` object would create the

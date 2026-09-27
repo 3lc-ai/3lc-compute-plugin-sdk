@@ -96,10 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `credential_descriptor()` marks its field `secret` or its key name says so (`secret`, `token`,
   `api_key`, `password`, `account_key`, `private_key`, `access_key`); a region, a role ARN or an
   account id stays readable. Settings secrets are scrubbed as before.
-- **An empty request `credentials` object counts as absent.** One with no non-empty value no
-  longer hides a filled `workspace.credentials` (the host's rule); two filled objects that differ
-  answer 400, and a provider without the legacy facet no longer refuses a request that carries
-  only an empty one.
+- **An empty request `credentials` object no longer hides a filled one.** The object with a
+  non-empty value wins, top-level or under `workspace`; two filled objects that differ answer 400.
+  An empty object alone is still passed on as `{}`, so a provider can refuse a "use my account"
+  request that carries no key instead of falling back to its own.
 - **The conformance kit's legacy group reads `credential_descriptor()`** instead of demanding a
   top-level `credential_keys` in capabilities: the descriptor must name a key (top-level, an
   entered field, the sign-in's or the role's) and every key it emits must be on the capabilities

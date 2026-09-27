@@ -373,11 +373,13 @@ def test_strip_request_credentials_finds_them_top_level_or_under_workspace() -> 
             {"credentials": {"api_key": "k", "region": ""}, "workspace": {"credentials": {"api_key": "k"}}},
             {"api_key": "k", "region": ""},
         ),
-        ({"credentials": {}, "workspace": {"credentials": {"region": ""}}}, None),
-        ({"credentials": {}}, None),
+        ({"credentials": {}, "workspace": {"credentials": {"region": ""}}}, {}),
+        ({"credentials": {"api_key": ""}}, {"api_key": ""}),
+        ({"workspace": {"credentials": {}}}, {}),
+        ({"node_id": "n"}, None),
     ],
 )
-def test_an_empty_credentials_object_is_absent_and_never_hides_a_filled_one(
+def test_an_empty_credentials_object_never_hides_a_filled_one_but_is_still_seen(
     body: dict[str, Any], found: dict[str, Any] | None
 ) -> None:
     _, creds, _ = strip_request_credentials(body)
