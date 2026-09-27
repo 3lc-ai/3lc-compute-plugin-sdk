@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
 
     from tlc_plugin_sdk.contract import HubPlugin
 
-__all__ = ["HarnessResponse", "Manifest", "PluginHarness", "read_manifest"]
+__all__ = ["HarnessResponse", "Manifest", "PluginHarness", "forward_for", "read_manifest"]
 
 
 @dataclass(frozen=True)
@@ -267,15 +268,17 @@ class PluginHarness:
         json_body: Any = None,
         params: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
+        content: bytes | None = None,
     ) -> HarnessResponse:
         """Send one request to the plugin's app.
 
         Args:
             method: The HTTP method.
-            path: The plugin-relative path, e.g. ``/infra/capabilities``.
+            path: The plugin-relative path, e.g. ``/infra/capabilities`` (a query string is kept).
             json_body: A JSON-serializable body, or ``None`` for none.
             params: Query parameters.
             headers: Request headers, sent as given (the harness adds none).
+            content: A raw body, sent as given (instead of ``json_body``).
 
         Returns:
             The plugin's response.
@@ -290,6 +293,7 @@ class PluginHarness:
             method.upper(),
             "/" + path.lstrip("/"),
             json=json_body,
+            content=content,
             params=params,
             headers=headers,
         )
@@ -322,6 +326,44 @@ class PluginHarness:
             The plugin's response.
         """
         return self.call("POST", path, **kwargs)
+
+
+Forward = Callable[..., Awaitable[tuple[int, dict[str, str], bytes]]]
+
+
+def forward_for(harness: PluginHarness) -> Forward:
+    """A host-shaped ``forward`` that calls the harnessed plugin instead of a worker.
+
+    A host test plugs the result in where the host's worker transport goes: it is
+    ``async def forward(spec, method, path, *, headers=None, content=None, timeout=None)`` and
+    returns ``(status, headers, body)`` — the harness is called in a thread, ``spec`` is ignored
+    (the harness holds one plugin), and ``path`` keeps any query string.
+
+    Args:
+        harness: An entered harness.
+
+    Returns:
+        The forwarder.
+    """
+
+    async def forward(
+        spec: Any,
+        method: str,
+        path: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        content: bytes | None = None,
+        timeout: float | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del spec, timeout
+        import asyncio
+
+        response = await asyncio.to_thread(
+            harness.call, method, path, headers=dict(headers) if headers else None, content=content
+        )
+        return response.status_code, response.headers, response.content
+
+    return forward
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -8,6 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Facets: an infrastructure plugin opts into a surface by subclassing.** `StorageFacet`,
+  `CatalogFacet`, `WorkspaceFacet` and the legacy `LegacyOwnerCredentialsFacet` are mixins next
+  to `InfrastructurePlugin`; the base mounts each facet's routes and lists its id in the new
+  `capabilities.facets` key (always emitted; `lists_workspaces` reads true for a provider with the
+  workspaces facet). Storage transfers and bundles are served by the SDK over the registries the
+  plugin returns from `transfer_registry(url)` / `bundle_registry(url)`, with transfer and bundle
+  ids validated centrally; the legacy facet's sign-in and role-setup routes are mounted only when
+  the plugin overrides the method. Request-carried legacy `credentials` / `provider_configs` reach
+  a legacy-facet plugin through `tlc_plugin_sdk.infrastructure.legacy` (a request context, never a
+  request field) together with the request's `owner` (`current_request_owner()`; also
+  `CreateNodeRequest.owner` / `CreateStorageRequest.owner`); a plugin without that facet answers
+  such a request 400, and a `credentials` that is not an object is 400 for every plugin.
+- **The whole infrastructure wire is typed.** `tlc_plugin_sdk.infrastructure` is a package (same
+  import path) whose dataclasses all carry `from_dict`/`to_dict`: `CreateNodeRequest` gains
+  `storage_id` and a typed `workspace` (`WorkspaceRequest`) and a `to_dict`; `CreateNodeResponse`
+  gains `services` and `managed_by` (and `agent_url` is optional: a workspace answers services);
+  `NodeStateResponse` gains the `bootstrap_history` / `bootstrap_detail` / `bootstrap_failed`
+  diagnostics and `NodeProviderState` the `pending` and `exited` states; `CapabilitiesResponse`
+  gains `missing_fields`, `pricing`, `node_type_label`, `region`, `workspace_fields`, `storage`,
+  `facets`, `lists_workspaces` and a `facets_reported` flag for hosts. New: `SettingsField`,
+  `StorageCapabilities`, `StorageItem`, `Region`, `StorageListing`, `CreateStorageRequest`,
+  `StorageDeleted`, `PresignRequest`, `PresignResponse`, `ObjectListing`, `DeleteObjectsRequest`,
+  `TransferRequest`, `BundleRequest`, `GpuCatalog`, `CpuCatalog`, `Datacenters`,
+  `WorkspaceInstance`, `WorkspaceListing`, `LoginDescriptor`, `RoleDescriptor`,
+  `OwnerCredentialsDescriptor`, and `preflight_query()` for hosts. Optional keys are omitted when
+  unset and the `gpu_type` / `gpu_types` aliases are kept on both sides. `InfrastructurePlugin`
+  gains `node_diagnostics` (`GET /infra/nodes/{id}?diagnostics=true`), `secret_values`,
+  `settings_view` and `implemented_facets`.
+- **Errors people can read.** `tlc_plugin_sdk.infrastructure.errors`: `ProviderError` (502) and
+  `InvalidRequest` (400), `NotFound` (404), `NotConfigured` (409), `NotSupported` (501). The route
+  layer maps these, a validator's `ValueError`, `SettingsUnreadable` (409),
+  `CredentialUnavailable` (424) and any other exception (502) to `{"detail": "<sentence>"}`,
+  scrubbed of the plugin's secrets and the request's token and credentials — never an opaque 500.
+- **`tlc_plugin_sdk.shared.settings`: a plugin's settings from one dataclass.**
+  `PluginSettings(cls, plugin_id)` gives `load`, `save` (the merge rules every provider hand-rolled:
+  secrets keep on `""` and clear on `"-"`, fields merged by annotation, `validate=`/`coerce=`/
+  `clearable=` per field, a `normalise()` hook), `redacted`, `secret_values`, `missing_fields`,
+  `readiness` and `field_view`; `secret()` and `option()` carry the prompt and merge metadata.
+  Nested dataclass rows are re-hydrated on load, tolerating rows that predate a field. An
+  infrastructure plugin that sets `settings = PluginSettings(...)` gets `GET/POST /settings`.
+- **`tlc_plugin_sdk.infrastructure.testing`: the conformance kit.** `check_provider` /
+  `assert_conformant` drive a provider through its routes in-process and report every check by
+  group; the default run needs no cloud and no patched seam, `create_nodes=True` adds the node
+  lifecycle and `live_storage=True` the object listing and a transfer dry-run. Also a CLI
+  (`python -m tlc_plugin_sdk.infrastructure.testing <plugin_dir>`). `FakeProvider` implements every
+  facet in memory as the reference implementation.
+- `tlc_plugin_sdk.harness.forward_for(harness)`: a host-shaped `forward(spec, method, path, ...)`
+  over a harnessed plugin, so a host test can run its manager against real SDK routes;
+  `PluginHarness.call` takes a raw `content=` body.
+- Golden wire fixtures under `tests/fixtures/wire/`, recorded from the runpod, aws and azure route
+  code: each parses with `from_dict` and re-emits with the recorded key set.
+- The plugin guide's *Infrastructure plugins* chapter: the five-method minimum, the typed wire,
+  the facets, identity (Connections first, the legacy context), settings from a dataclass,
+  errors, testing, private routes and a checklist.
 - **`CreateNodeRequest.project_storage`** (`ProjectStorage`: `project_root_url`, `project_scan_urls`): the
   deployment's node-reachable project storage the host sends on create, for a provider that scopes a
   node's storage credential. Empty from an older host.
