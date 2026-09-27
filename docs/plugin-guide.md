@@ -160,7 +160,11 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   not a boundary: scan folders change over time), `fallback_url` on `GET /infra/storage` (the root's bucket,
   for credentials that may not list buckets). (A host still reads a `storage: {"project_root_url": …}`
   entry in `extra` from an older provider, as a stand-in for a node run from a host whose own
-  root is its disk; don't add one.) Which account the plugin acts on comes from the request's
+  root is its disk; don't add one.) A created node is reached by its `agent_url` alone: the host
+  talks to the node agent and reaches the node's workers through the agent's proxy, so a provider
+  exposes `agent_port` plus the request's `ports` (the browser-facing app ports, a notebook
+  server for example) and nothing else — worker ports are loopback-only on the node. Which
+  account the plugin acts on comes from the request's
   Connection — see [Connections](#connections-infrastructure-plugins). At most one
   infrastructure plugin is active on a host at a time.
 
@@ -808,7 +812,9 @@ default (`GET /api/deployment/storage`) and the deployment's other locations thr
 `project_root_url` and comes back to your `run_job` as `ctx.project_root_url`.
 
 Remote TCP workers run token-guarded (`--token` / `TLC_WORKER_TOKEN`: every request must
-carry `Authorization: Bearer <token>`) and may emit `{"event": "ping"}` keepalives on the
+carry `Authorization: Bearer <token>`; on a provisioned node the agent mints a token per
+worker, binds the worker to loopback and proxies the host's traffic to it) and may emit
+`{"event": "ping"}` keepalives on the
 job stream (`TLC_WORKER_STREAM_KEEPALIVE_S`) so provider proxies don't kill quiet
 streams; a host that enables keepalives filters the pings before events reach any
 consumer. Neither affects a local Unix-socket worker. Every worker also answers `GET /busy`

@@ -33,7 +33,7 @@ class TestCreateNodeRequest:
             "token": "tok",
             "env": {"K": "V"},
             "agent_port": 9900,
-            "ports": [8801, 8802],
+            "ports": [8888],
             "idle_ttl_s": 600,
             "flavor": "gpu",
             "owner": "user@x",
@@ -47,7 +47,7 @@ class TestCreateNodeRequest:
         assert req.token == "tok"
         assert req.env == {"K": "V"}
         assert req.agent_port == 9900
-        assert req.ports == [8801, 8802]
+        assert req.ports == [8888]
         assert req.idle_ttl_s == 600.0
         assert req.owner == "user@x"
         assert req.pricing == "spot"
@@ -101,16 +101,16 @@ class TestCreateNodeRequest:
 
 class TestCreateNodeResponse:
     def test_to_dict_minimal(self) -> None:
-        resp = CreateNodeResponse(provider_id="p1", agent_url="http://x:8800", worker_url_template="http://x:{port}")
+        resp = CreateNodeResponse(provider_id="p1", agent_url="http://x:8800")
         d = resp.to_dict()
-        assert d == {"provider_id": "p1", "agent_url": "http://x:8800", "worker_url_template": "http://x:{port}"}
+        assert d == {"provider_id": "p1", "agent_url": "http://x:8800"}
         assert "token" not in d
         assert "pricing" not in d
         assert "hourly_rate" not in d
 
     def test_to_dict_hourly_rate(self) -> None:
         """A quote is emitted as a number; zero is a real quote, ``None`` is no quote."""
-        base = {"provider_id": "p1", "agent_url": "http://x:8800", "worker_url_template": "http://x:{port}"}
+        base = {"provider_id": "p1", "agent_url": "http://x:8800"}
         assert CreateNodeResponse(**base, hourly_rate=1.21).to_dict()["hourly_rate"] == 1.21
         assert CreateNodeResponse(**base, hourly_rate=0).to_dict()["hourly_rate"] == 0.0
         assert "hourly_rate" not in CreateNodeResponse(**base, hourly_rate=None).to_dict()
@@ -119,7 +119,6 @@ class TestCreateNodeResponse:
         resp = CreateNodeResponse(
             provider_id="p1",
             agent_url="http://x:8800",
-            worker_url_template="http://x:{port}",
             token="tok",
             pricing="spot",
             detail="ok",
@@ -214,7 +213,6 @@ class _StubProvider(InfrastructurePlugin):
         return CreateNodeResponse(
             provider_id=f"stub-{request.node_type}",
             agent_url=f"http://stub:{request.agent_port}",
-            worker_url_template="http://stub:{port}",
         )
 
     def node_state(self, provider_id: str) -> NodeStateResponse:
