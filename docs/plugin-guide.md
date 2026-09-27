@@ -620,14 +620,14 @@ wire carries (`node_type`/`gpu_type` on a create body and a preflight query,
 `node_types`/`gpu_types` on capabilities) are handled by the SDK on both sides — never touch
 them. Where an answer carries provider keys the dataclass has no field for, set its `extra`
 (`CapabilitiesResponse`, `StorageItem`, `WorkspaceInstance`, `PresignResponse`, `Region`,
-`StorageListing`): it is emit-only — merged into `to_dict` first, a typed key always wins over it,
+`StorageListing`): it is emit-only — merged into `to_dict` first, a typed key that is set wins over it,
 an explicit `None` in it is emitted as `null`, and `from_dict` leaves it empty.
 
 | Route | Request | Answer |
 |---|---|---|
 | `GET /infra/capabilities` | — | `CapabilitiesResponse`: `provider`, `node_types`, `flavors` (`["gpu"]`, or `["gpu", "workspace"]`), `pricing` (`["on_demand", "spot"]`; the host assumes on-demand when absent), `ready`, `missing`, `missing_fields` (what to ask a person for), `node_type_label`, `region`, `workspace_fields`; `storage` and `facets` are filled by the SDK from your class's facets — an author-set value of either is overwritten; `extra` passes provider-private keys through to your own fragment |
 | `GET /infra/preflight?node_type=&datacenter=` | — | `PreflightResponse`: `ok`, `checks[]` (`name`, `ok`, `level`, `detail`), `summary` |
-| `POST /infra/nodes` | `CreateNodeRequest`: `node_id`, `node_type`, `token`, `env`, `agent_port`, `ports`, `idle_ttl_s` (`0` or less = never turn off on idle; only a missing value reads as 1800), `flavor`, `owner`, `pricing` (`""` = your configured default), `storage_id`, `compute_spec`, `wheelhouse`, `project_storage`, `workspace` (a `WorkspaceRequest`; empty for a GPU node) | `CreateNodeResponse`: `provider_id`, `agent_url` (a GPU node) or `services` (a workspace: `object_service_url`, `compute_service_url`), `hourly_rate`, `pricing`, `managed_by` (`"owner"` when the node lives in the requester's own account), `token`, `detail`. The SDK answers 201; the host accepts 200 and 201 |
+| `POST /infra/nodes` | `CreateNodeRequest`: `node_id`, `node_type`, `token`, `env`, `agent_port`, `ports`, `idle_ttl_s` (`0` or less = never turn off on idle; only a finite number is read — a missing or unreadable value, or `inf`, is 1800), `flavor`, `owner`, `pricing` (`""` = your configured default), `storage_id`, `compute_spec`, `wheelhouse`, `project_storage`, `workspace` (a `WorkspaceRequest`; empty for a GPU node) | `CreateNodeResponse`: `provider_id`, `agent_url` (a GPU node) or `services` (a workspace: `object_service_url`, `compute_service_url`), `hourly_rate`, `pricing`, `managed_by` (`"owner"` when the node lives in the requester's own account), `token`, `detail`. The SDK answers 201; the host accepts 200 and 201 |
 | `GET /infra/nodes/{id}` | `?diagnostics=true` for `node_diagnostics` | `NodeStateResponse`: `state` (`pending`, `running`, `exited`, `terminated`, `gone`, `unknown`), `detail`, and with diagnostics `bootstrap_history`, `bootstrap_detail`, `bootstrap_failed` (`None` when the console could not be read) |
 | `DELETE /infra/nodes/{id}` | — | `NodeStateResponse`; idempotent: a repeated delete answers `terminated` or `gone` |
 
@@ -672,7 +672,8 @@ cancel search every registry you handed out. A bundle request without a `name` r
 `registry.start(url=..., name="")`: the base registry names the archive after the URL it is
 given (`default_bundle_name`), so a registry that normalises the URL in its own `start` passes
 `name` on unchanged and the default follows the normalised URL. A registry built without a
-`describe_error` gets the plugin's (below) for its background jobs' errors. A flag that is `True` needs its method
+`describe_error` gets the plugin's (below) for its background jobs' errors; one built with its
+own keeps it, its answer coerced to text and scrubbed of the plugin's secrets. A flag that is `True` needs its method
 overridden; the conformance kit checks the two agree.
 
 **`CatalogFacet`** (`"catalog"`) — live offerings for the pickers. Abstract:
@@ -760,16 +761,17 @@ them for the duration of the call through `tlc_plugin_sdk.infrastructure.legacy`
 (`{plugin_id: {...}}`) and `current_request_owner()` (the caller the host acts for; also the
 request's `owner` field) — the same pattern as `connections`. The `credentials` object with a
 non-empty value wins, so an empty top-level object never hides a filled `workspace.credentials`;
-two filled objects that disagree are 400. An empty object alone still reaches you as `{}` (not
+two filled objects that disagree are 400. An all-blank object alone is passed on as given (not
 `None`): the request meant "use my account", so refuse it rather than fall back to your own
 keys. A plugin
 **without** that facet is sent **400** (*"This provider takes no request credentials; act
 through a Connection instead."*) before its method runs, and a `credentials` that is not an
 object is 400 for every plugin: a silently dropped `credentials` object would create the
-resource in the host's own account. Errors are scrubbed of the request's secret-bearing
-credential values only — a field the descriptor marks `secret`, or a key whose name says so
-(`*secret*`, `*token*`, `*api_key*`, `*password*`, `*account_key*`, `*private_key*`,
-`*access_key*`) — so a region or a role ARN stays readable in the sentence.
+resource in the host's own account. Errors are scrubbed of every string value of the request's
+credentials — fail-closed — except a key the descriptor marks `secret: False` or one on the
+readable allowlist (`region`, `location`, `role_arn`, `start_url`, `tenant_id`, `client_id`,
+`subscription_id`, `account`, `resource_group`), so a region or a role ARN stays readable in the
+sentence; a key the descriptor marks `secret: True` is always scrubbed.
 
 Precedence inside a provider: request-carried legacy credentials (the legacy context) → the
 Connection (`current_credential()`; `Ambient` never falls back to saved keys) → the plugin's
@@ -839,15 +841,17 @@ anything. `tlc_plugin_sdk.infrastructure.errors`:
 | anything else | 502 | `describe_error(exc)`, never an opaque 500 |
 
 Every body is `{"detail": "<sentence>"}`, scrubbed of `secret_values()` and of the request's
-token and secret-bearing credentials.
+token and credentials (all but the readable keys).
 
 An exception you did not word — a cloud SDK's, say — is answered with
 `InfrastructurePlugin.describe_error(exc)`: by default its own text scrubbed of
 `secret_values()`. Override it to strip what such messages carry (ARNs, request ids,
 endpoints) instead of wrapping every call; it words every route the SDK mounts, the transfer
 and bundle registries' plan, start and status included, and the errors their background jobs
-record. The result is scrubbed again, and an empty answer or a hook that raises falls back to
-the default:
+record. The SDK scrubs the exception's raw text and your answer (coerced to text) of whole
+secret values, then truncates to 500 characters — so return the whole sentence, never truncated
+or re-encoded (quoted, escaped, base64): a cut or re-encoded secret is no longer recognised. An
+empty answer or a hook that raises falls back to the scrubbed raw text:
 
 ```python
 def describe_error(self, exc: Exception) -> str:

@@ -15,7 +15,7 @@ rules every one of them follows:
 - The aliases the wire carries are kept on both sides: ``node_type``/``gpu_type`` on a create
   body and a preflight query, ``node_types``/``gpu_types`` on capabilities. ``from_dict`` prefers
   the ``node_*`` name; ``to_dict`` emits both.
-- An ``extra`` field is emit-only: ``to_dict`` merges it first and typed keys win; ``from_dict``
+- An ``extra`` field is emit-only: ``to_dict`` merges it first and a typed key that is set wins; ``from_dict``
   never fills it.
 """
 
@@ -308,7 +308,11 @@ class WorkspaceRequest:
 
 
 def _idle_ttl(value: Any) -> float:
-    """An idle TTL in seconds: ``0`` and negatives kept (never auto-off); missing or unreadable is 1800."""
+    """An idle TTL in seconds: ``0`` and negatives kept (never auto-off).
+
+    Only a finite number is read: a missing or unreadable value, ``nan`` and ``inf`` (``"inf"``
+    included) are the 1800 s default — never mapped to "never".
+    """
     parsed = _opt_float(value)
     return parsed if parsed is not None and math.isfinite(parsed) else 1800.0
 
@@ -332,7 +336,8 @@ class CreateNodeRequest:
     exposed or listed here.
 
     ``idle_ttl_s`` is how long the node may sit idle before its agent turns it off; ``0`` (or
-    less) means never. Only a missing or unreadable value reads as the 1800 s default.
+    less) means never. Only a finite number is read: a missing or unreadable value, and ``inf``,
+    read as the 1800 s default.
 
     ``storage_id`` names the provider storage to attach (a network volume; ``""`` for the
     provider's default or none). ``workspace`` is filled for ``flavor == "workspace"`` and empty
