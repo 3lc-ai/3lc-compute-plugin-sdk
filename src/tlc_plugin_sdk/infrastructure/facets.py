@@ -171,6 +171,10 @@ class StorageFacet(ABC):
     def bundle_registry(self, url: str) -> BundleRegistry:
         """The folder-download engine for the storage ``url`` is on (backs the bundle routes).
 
+        The route calls ``start(url=<the request's url>, name=<the request's name or "">)``. A
+        registry that normalises the URL (a subclass overriding ``start``) passes ``name`` on
+        as it came: an empty one is resolved from the normalised URL by the base registry.
+
         Args:
             url: A folder URL on the storage.
 

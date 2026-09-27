@@ -369,8 +369,8 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
                 raise InvalidRequest(msg)
             registry = facet.bundle_registry(req.url)
             remember(bundle_registries, registry)
-            name = req.name or req.url.rstrip("/").rsplit("/", 1)[-1]
-            return dict(registry.start(url=req.url, name=name))
+            # No name: the registry names the archive after the URL it bundles, once it has normalised it.
+            return dict(registry.start(url=req.url, name=req.name))
 
         return answer(plugin, run)
 

@@ -131,10 +131,16 @@ class BundleRegistry:
 
     # ── public ────────────────────────────────────────────────────────────
 
-    def start(self, *, url: str, name: str) -> dict[str, Any]:
-        """Begin bundling ``url``; returns the bundle's first status (``state: listing``)."""
+    def start(self, *, url: str, name: str = "") -> dict[str, Any]:
+        """Begin bundling ``url``; returns the bundle's first status (``state: listing``).
+
+        ``name`` is the archive's name; ``""`` names it :func:`default_bundle_name` of ``url``. A
+        subclass that normalises the URL first passes the name through unchanged, so the default
+        is taken from the normalised URL.
+        """
         self._prune()
-        bundle = Bundle(id=uuid.uuid4().hex[:12], url=url, name=_safe_name(name) or "download")
+        name = _safe_name(name) or _safe_name(default_bundle_name(url)) or "download"
+        bundle = Bundle(id=uuid.uuid4().hex[:12], url=url, name=name)
         with self._lock:
             self._bundles[bundle.id] = bundle
         threading.Thread(target=self._run, args=(bundle,), name=f"bundle-{bundle.id}", daemon=True).start()
@@ -266,6 +272,11 @@ def _default_arcname(url: str, key: str) -> str:
     rel = key[len(prefix) :].lstrip("/") if prefix and key.startswith(prefix) else key
     top = prefix.rsplit("/", 1)[-1] if prefix else url.split("://", 1)[-1].split("/", 1)[0]
     return f"{top}/{rel}" if rel else top
+
+
+def default_bundle_name(url: str) -> str:
+    """The archive name for a folder when none is given: the URL's last segment (``s3://b/data/fire`` → ``fire``)."""
+    return str(url or "").rstrip("/").rsplit("/", 1)[-1]
 
 
 def _safe_name(name: str) -> str:

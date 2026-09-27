@@ -106,3 +106,24 @@ def test_bundle_names_and_arcnames_are_safe() -> None:
     assert sb._default_arcname("s3://bucket/data/fire", "data/fire/x/y.jpg") == "fire/x/y.jpg"
     assert sb._default_arcname("s3://bucket", "y.jpg") == "bucket/y.jpg"
     assert sb._default_arcname("volume://vol1/models", "models/best.pt") == "models/best.pt"
+
+
+def test_an_empty_name_is_resolved_from_the_url_the_registry_bundles() -> None:
+    registry = sb.BundleRegistry(list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "")
+    assert registry.start(url="s3://bucket/data/fire/", name="")["name"] == "fire"
+    assert registry.start(url="s3://bucket")["name"] == "bucket"
+    assert registry.start(url="s3://bucket/data", name="mine")["name"] == "mine"
+    assert sb.default_bundle_name("volume://vol1") == "vol1"
+
+
+def test_a_normalising_subclass_sees_an_empty_name_and_gets_the_normalised_default() -> None:
+    seen: list[str] = []
+
+    class Normalising(sb.BundleRegistry):
+        def start(self, *, url: str, name: str = "") -> dict[str, Any]:
+            seen.append(name)
+            return super().start(url=url.replace("VOLUME://", "volume://").rstrip("/") + "/models", name=name)
+
+    registry = Normalising(list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "")
+    assert registry.start(url="VOLUME://vol1/")["name"] == "models"
+    assert seen == [""]

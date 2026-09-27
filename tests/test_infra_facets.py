@@ -239,6 +239,30 @@ def test_bundles_run_over_the_plugins_registry(fake: PluginHarness) -> None:
     assert fake.post("/infra/storage/bundle", json_body={}).status_code == 400
 
 
+def test_the_bundle_route_leaves_an_unnamed_archive_to_the_registry(tmp_path: Path) -> None:
+    names: list[str] = []
+
+    class Recording(FakeProvider):
+        def bundle_registry(self, url: str) -> Any:
+            registry = super().bundle_registry(url)
+            if "start" not in vars(registry):  # the fake caches one registry per bucket
+                start = registry.start
+
+                def recorded(*, url: str, name: str = "") -> dict[str, Any]:
+                    names.append(name)
+                    return start(url=url, name=name)
+
+                registry.start = recorded
+            return registry
+
+    with PluginHarness(Recording(), plugin_id="fake", config_root=tmp_path) as h:
+        assert h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train/"}).json()["name"] == "train"
+        assert h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data", "name": "all"}).json()["name"] == (
+            "all"
+        )
+    assert names == ["", "all"]
+
+
 class _ListOnly(InfrastructurePlugin, StorageFacet):
     """A storage facet that overrides only the abstract methods: everything else must answer 501."""
 
