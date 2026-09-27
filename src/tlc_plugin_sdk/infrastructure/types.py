@@ -21,6 +21,7 @@ rules every one of them follows:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -302,6 +303,12 @@ class WorkspaceRequest:
         }
 
 
+def _idle_ttl(value: Any) -> float:
+    """An idle TTL in seconds: ``0`` and negatives kept (never auto-off); missing or unreadable is 1800."""
+    parsed = _opt_float(value)
+    return parsed if parsed is not None and math.isfinite(parsed) else 1800.0
+
+
 @dataclass
 class CreateNodeRequest:
     """What the host sends when it asks a provider to create a node.
@@ -319,6 +326,9 @@ class CreateNodeRequest:
     (a notebook server, for example) the provider exposes besides ``agent_port``. Workers on the
     node are loopback-only: the host reaches them through the agent, so no worker port is ever
     exposed or listed here.
+
+    ``idle_ttl_s`` is how long the node may sit idle before its agent turns it off; ``0`` (or
+    less) means never. Only a missing or unreadable value reads as the 1800 s default.
 
     ``storage_id`` names the provider storage to attach (a network volume; ``""`` for the
     provider's default or none). ``workspace`` is filled for ``flavor == "workspace"`` and empty
@@ -352,7 +362,7 @@ class CreateNodeRequest:
             env=_str_dict(data.get("env")),
             agent_port=_int(data.get("agent_port"), 8800) or 8800,
             ports=_int_list(data.get("ports")),
-            idle_ttl_s=_float(data.get("idle_ttl_s"), 1800.0) or 1800.0,
+            idle_ttl_s=_idle_ttl(data.get("idle_ttl_s")),
             flavor=_str(data.get("flavor")) or "gpu",
             owner=_str(data.get("owner")),
             pricing=_str(data.get("pricing")),

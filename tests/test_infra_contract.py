@@ -98,6 +98,18 @@ class TestCreateNodeRequest:
         assert req.agent_port == 8800
         assert req.idle_ttl_s == 1800.0
 
+    @pytest.mark.parametrize(("sent", "read"), [(0, 0.0), ("0", 0.0), (-1, -1.0), (0.0, 0.0)])
+    def test_an_idle_ttl_of_zero_or_less_is_kept_as_never(self, sent: object, read: float) -> None:
+        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "idle_ttl_s": sent})
+        assert req.idle_ttl_s == read
+        assert CreateNodeRequest.from_dict(req.to_dict()).idle_ttl_s == read
+        assert req.to_dict()["idle_ttl_s"] == read
+
+    @pytest.mark.parametrize("sent", ["soon", True, float("nan"), float("inf"), [], {}])
+    def test_an_unreadable_idle_ttl_is_the_default(self, sent: object) -> None:
+        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "idle_ttl_s": sent})
+        assert req.idle_ttl_s == 1800.0
+
 
 class TestCreateNodeResponse:
     def test_to_dict_minimal(self) -> None:
