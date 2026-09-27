@@ -36,6 +36,7 @@ __all__ = [
     "current_provider_configs",
     "current_request_credentials",
     "current_request_owner",
+    "has_values",
     "request_credentials",
     "strip_request_credentials",
 ]
@@ -94,6 +95,15 @@ def request_credentials(
         _CREDENTIALS.reset(credentials_token)
 
 
+def has_values(credentials: Any) -> bool:
+    """Whether a ``credentials`` object carries anything: at least one value that is not empty or blank."""
+    return isinstance(credentials, dict) and any(str(v or "").strip() for v in credentials.values())
+
+
+def _filled(credentials: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in credentials.items() if str(v or "").strip()}
+
+
 def strip_request_credentials(
     data: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, dict[str, Any]]]:
@@ -102,15 +112,19 @@ def strip_request_credentials(
     Args:
         data: The request body.
 
+    A ``credentials`` object with no non-empty value counts as absent (the host's rule too), so
+    an empty top-level object never hides a filled ``workspace.credentials``.
+
     Returns:
         ``(body, credentials, provider_configs)``: the body without the transient keys (a copy;
-        the ``workspace`` object is copied too), the ``credentials`` object found top-level or
-        under ``workspace`` (``None`` when none), and ``workspace.provider_configs`` (``{}`` when
-        none).
+        the ``workspace`` object is copied too), the non-empty ``credentials`` object found
+        top-level or under ``workspace`` (``None`` when neither has a value), and
+        ``workspace.provider_configs`` (``{}`` when none).
 
     Raises:
         InvalidRequest: When a ``credentials`` or ``provider_configs`` key is present but not an
-            object — silently dropping it would create the resource in the host's own account.
+            object — silently dropping it would create the resource in the host's own account —
+            or when both ``credentials`` objects carry values and disagree.
     """
     body = dict(data)
     credentials: dict[str, Any] | None = None
@@ -119,7 +133,7 @@ def strip_request_credentials(
         if not isinstance(top, dict):
             msg = "'credentials' must be an object of key/value pairs"
             raise InvalidRequest(msg)
-        credentials = top
+        credentials = top if has_values(top) else None
     provider_configs: dict[str, dict[str, Any]] = {}
     workspace = body.get("workspace")
     if isinstance(workspace, dict):
@@ -129,8 +143,14 @@ def strip_request_credentials(
             if not isinstance(nested, dict):
                 msg = "'workspace.credentials' must be an object of key/value pairs"
                 raise InvalidRequest(msg)
-            if credentials is None:
-                credentials = nested
+            if has_values(nested):
+                if credentials is not None and _filled(credentials) != _filled(nested):
+                    msg = (
+                        "The request carries two different credentials objects (top-level and under 'workspace'). "
+                        "Send one."
+                    )
+                    raise InvalidRequest(msg)
+                credentials = credentials or nested
         if "provider_configs" in workspace:
             configs = workspace.pop("provider_configs")
             if not isinstance(configs, dict) or not all(isinstance(v, dict) for v in configs.values()):

@@ -354,10 +354,41 @@ def test_strip_request_credentials_finds_them_top_level_or_under_workspace() -> 
     assert creds == {"api_key": "k"}
     assert configs == {"aws": {"region": "eu"}}
     assert body["workspace"] == {"name": "w"}
-    body, creds, configs = strip_request_credentials({"credentials": {"a": 1}, "workspace": {"credentials": {"b": 2}}})
-    assert creds == {"a": 1}, "the top-level object wins"
+    body, creds, configs = strip_request_credentials({"credentials": {"a": 1}, "workspace": {"credentials": {"a": 1}}})
+    assert creds == {"a": 1}, "the same object in both places is one"
     assert configs == {}
     assert strip_request_credentials({"node_id": "n"}) == ({"node_id": "n"}, None, {})
+
+
+@pytest.mark.parametrize(
+    ("body", "found"),
+    [
+        ({"credentials": {}, "workspace": {"credentials": {"api_key": "k"}}}, {"api_key": "k"}),
+        (
+            {"credentials": {"api_key": " ", "region": None}, "workspace": {"credentials": {"api_key": "k"}}},
+            {"api_key": "k"},
+        ),
+        ({"credentials": {"api_key": "k"}, "workspace": {"credentials": {}}}, {"api_key": "k"}),
+        (
+            {"credentials": {"api_key": "k", "region": ""}, "workspace": {"credentials": {"api_key": "k"}}},
+            {"api_key": "k", "region": ""},
+        ),
+        ({"credentials": {}, "workspace": {"credentials": {"region": ""}}}, None),
+        ({"credentials": {}}, None),
+    ],
+)
+def test_an_empty_credentials_object_is_absent_and_never_hides_a_filled_one(
+    body: dict[str, Any], found: dict[str, Any] | None
+) -> None:
+    _, creds, _ = strip_request_credentials(body)
+    assert creds == found
+
+
+def test_two_filled_credentials_objects_that_disagree_are_refused() -> None:
+    from tlc_plugin_sdk.infrastructure import InvalidRequest
+
+    with pytest.raises(InvalidRequest, match="two different credentials"):
+        strip_request_credentials({"credentials": {"a": 1}, "workspace": {"credentials": {"b": 2}}})
 
 
 @pytest.mark.parametrize(

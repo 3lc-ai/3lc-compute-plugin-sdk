@@ -145,6 +145,8 @@ def test_credentials_on_create_are_refused_without_the_legacy_facet(fake: Plugin
     assert fake.post("/infra/nodes", json_body=nested).status_code == 400
     r = fake.post("/infra/storage", json_body={"name": "b", "credentials": {"api_key": "k"}})
     assert r.status_code == 400
+    empty = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": {"k": ""}}
+    assert fake.post("/infra/nodes", json_body=empty).status_code == 201, "an empty credentials object is absent"
     malformed = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": "x"}
     r = fake.post("/infra/nodes", json_body=malformed)
     assert r.status_code == 400, "a malformed credentials value is refused for every provider"
