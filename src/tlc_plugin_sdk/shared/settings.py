@@ -99,11 +99,15 @@ class _Spec:
         )
 
 
-def secret(*, label: str, help: str = "", href: str = "", placeholder: str = "", required: bool = True) -> Any:  # noqa: A002
+def secret(*, label: str = "", help: str = "", href: str = "", placeholder: str = "", required: bool = True) -> Any:  # noqa: A002
     """A secret string setting (default ``""``): masked in the fragment, never echoed, ``"-"`` clears it.
 
+    A secret without a label (a key a request or a Connection usually supplies) is still masked,
+    redacted and scrubbed from errors, but never prompted for: it is not in ``missing_fields`` or
+    ``missing``, whatever ``required`` says.
+
     Args:
-        label: What the prompt says.
+        label: What the prompt says; ``""`` (the default) for a secret that is never prompted for.
         help: Where the value is found, in a sentence.
         href: A link to where the value is found.
         placeholder: An example value.
@@ -467,6 +471,9 @@ class PluginSettings(Generic[S]):
 
     def missing_fields(self, settings: S) -> list[SettingsField]:
         """The described (labelled) fields whose value is empty, each as a prompt.
+
+        The order is the dataclass's field order: declare the fields in the order a person should
+        be asked for them. A field without a label is never listed.
 
         Args:
             settings: The record.

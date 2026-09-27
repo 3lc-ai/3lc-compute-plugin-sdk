@@ -211,3 +211,24 @@ def test_option_takes_a_default_factory() -> None:
             "placeholder": "",
         }
     ]
+
+
+def test_an_unlabelled_secret_is_never_prompted_but_still_secret() -> None:
+    @dataclass
+    class Unlabelled:
+        id: str = "default"
+        created: str = ""
+        last_run: str | None = None
+        client_secret: str = secret()
+        tlc_api_key: str = secret(label="3LC API key")
+        subscription_id: str = option("", label="Subscription id", required=True)
+
+    layer = PluginSettings(Unlabelled, "probe")
+    current = layer.load()
+    assert [f.key for f in layer.missing_fields(current)] == ["tlc_api_key", "subscription_id"], "field order"
+    assert layer.readiness(current)["missing"] == ["tlc_api_key", "subscription_id"]
+    assert [f["key"] for f in layer.field_view()] == ["tlc_api_key", "subscription_id"]
+    saved = layer.save({"client_secret": "s3cr3t-value"})
+    assert layer.secret_fields() == ["client_secret", "tlc_api_key"]
+    assert layer.secret_values(saved) == ["s3cr3t-value"]
+    assert "client_secret" not in layer.redacted(saved) and layer.redacted(saved)["client_secret_set"] is True
