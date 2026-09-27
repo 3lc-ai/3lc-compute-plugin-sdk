@@ -24,7 +24,7 @@ from litestar import post as http_post
 from litestar.exceptions import HTTPException
 
 from tlc_plugin_sdk.connections import CredentialUnavailable
-from tlc_plugin_sdk.infrastructure.errors import InvalidRequest, NotFound, ProviderError
+from tlc_plugin_sdk.infrastructure.errors import InvalidRequest, NotFound, ProviderError, scrub
 from tlc_plugin_sdk.infrastructure.facets import (
     CatalogFacet,
     LegacyOwnerCredentialsFacet,
@@ -48,6 +48,7 @@ __all__ = [
     "build_infra_handlers",
     "catalog_handlers",
     "core_handlers",
+    "describe_unexpected",
     "legacy_handlers",
     "scrub",
     "settings_handlers",
@@ -66,29 +67,30 @@ _NO_LEGACY_CREDENTIALS = "This provider takes no request credentials; act throug
 # ── The exception → HTTP mapper ────────────────────────────────────────────────
 
 
-#: A value shorter than this is not scrubbed: no key or token is that short, and replacing a
-#: one-letter "secret" everywhere would mangle every word of the sentence.
-_MIN_SECRET_LEN = 4
-
-
-def scrub(text: str, secrets: Iterable[str]) -> str:
-    """``text`` with every value in ``secrets`` (of :data:`_MIN_SECRET_LEN` characters or more) replaced by ``***``.
-
-    Args:
-        text: The message.
-        secrets: The values that must not appear in it.
-
-    Returns:
-        The scrubbed message.
-    """
-    for value in sorted({s for s in secrets if s and len(s) >= _MIN_SECRET_LEN}, key=len, reverse=True):
-        text = text.replace(value, "***")
-    return text
-
-
 def _detail(plugin: InfrastructurePlugin, exc: BaseException, extra: Iterable[str]) -> str:
     text = str(exc).strip() or type(exc).__name__
     return scrub(text, [*plugin.secret_values(), *extra])[:_DETAIL_MAX]
+
+
+def describe_unexpected(plugin: InfrastructurePlugin, exc: Exception, secrets: Iterable[str] = ()) -> str:
+    """The sentence for an exception the provider did not word: its ``describe_error``, always scrubbed.
+
+    A hook that raises or answers nothing falls back to the exception's own text, and the result is
+    scrubbed of the plugin's secrets and ``secrets`` whatever the hook returned.
+
+    Args:
+        plugin: The plugin whose hook words the error.
+        exc: The exception.
+        secrets: Request-scoped values to scrub as well.
+
+    Returns:
+        At most 500 characters.
+    """
+    try:
+        text = str(plugin.describe_error(exc) or "").strip()
+    except Exception:
+        text = ""
+    return scrub(text or str(exc).strip() or type(exc).__name__, [*plugin.secret_values(), *secrets])[:_DETAIL_MAX]
 
 
 def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterable[str] = ()) -> T:
@@ -99,7 +101,9 @@ def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterab
     :class:`~tlc_plugin_sdk.shared.settings.SettingsUnreadable` 409; ``ValueError`` (the transfer
     engine's ``TransferError`` included) and ``TypeError`` 400;
     :class:`~tlc_plugin_sdk.connections.CredentialUnavailable` 424; ``NotImplementedError`` 501;
-    anything else 502. Every detail is the exception's own sentence, scrubbed of the plugin's
+    anything else 502 with the sentence the plugin's
+    :meth:`~tlc_plugin_sdk.infrastructure.InfrastructurePlugin.describe_error` makes of it. Every
+    other detail is the exception's own sentence. Each is scrubbed of the plugin's
     :meth:`~tlc_plugin_sdk.infrastructure.InfrastructurePlugin.secret_values` and ``secrets``.
 
     Args:
@@ -130,7 +134,7 @@ def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterab
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=_detail(plugin, exc, secrets)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=_detail(plugin, exc, secrets)) from exc
+        raise HTTPException(status_code=502, detail=describe_unexpected(plugin, exc, secrets)) from exc
 
 
 def _job_id(value: str, what: str) -> str:
@@ -243,7 +247,15 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     transfer_registries: list[Any] = []
     bundle_registries: list[Any] = []
 
+    def job_error(exc: Exception) -> str:
+        # What a registry's background job records: a worded error keeps its sentence, like on a route.
+        if isinstance(exc, (ProviderError, ValueError)):
+            return _detail(plugin, exc, ())
+        return describe_unexpected(plugin, exc)
+
     def remember(registries: list[Any], registry: Any) -> None:
+        if getattr(registry, "describe_error", False) is None:
+            registry.describe_error = job_error
         if not any(r is registry for r in registries):
             registries.append(registry)
 

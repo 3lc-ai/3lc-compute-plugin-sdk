@@ -196,6 +196,7 @@ class TransferRegistry:
         workers: int = 16,
         max_files: int = MAX_TRANSFER_FILES,
         notify_change: Callable[[str, str], None] = _notify_discovery,
+        describe_error: Callable[[Exception], str] | None = None,
     ) -> None:
         """
         Args:
@@ -208,6 +209,9 @@ class TransferRegistry:
             workers: Copies in flight at once.
             max_files: Refuse a transfer larger than this (the CLI is the tool then).
             notify_change: Notify 3LC discovery after successful writes/deletes, including partial transfers.
+            describe_error: ``exception -> sentence`` for a failed transfer's ``error`` and each
+                failure's ``reason`` (default: the exception's text). An infrastructure plugin's
+                routes set it to the plugin's ``describe_error`` when it is unset.
         """
         self._list = list_objects
         self._head = head_object
@@ -216,6 +220,7 @@ class TransferRegistry:
         self._workers = max(1, workers)
         self._max_files = max_files
         self._notify_change = notify_change
+        self.describe_error = describe_error
         self._transfers: dict[str, Transfer] = {}
         self._lock = threading.Lock()
 
@@ -347,7 +352,7 @@ class TransferRegistry:
                     self._copy(src, dst)
                 except Exception as exc:
                     with lock:
-                        transfer.failures.append({"path": src, "reason": str(exc)[:200]})
+                        transfer.failures.append({"path": src, "reason": self._error_text(exc)[:200]})
                     return
                 with lock:
                     copied.append(pair)
@@ -374,7 +379,7 @@ class TransferRegistry:
                     except Exception as exc:
                         transfer.failures.append({
                             "path": src,
-                            "reason": f"copied, but not removed from the source: {exc!s:.160}",
+                            "reason": f"copied, but not removed from the source: {self._error_text(exc):.160}",
                         })
             if transfer.failures:
                 verb = "moved" if transfer.mode == "move" else "copied"
@@ -383,7 +388,17 @@ class TransferRegistry:
             self._finish(transfer, "done", "")
         except Exception as exc:
             logger.exception("Transfer %s (%s → %s) failed", transfer.id, transfer.src_url, transfer.dst_url)
-            self._finish(transfer, "failed", str(exc)[:400])
+            self._finish(transfer, "failed", self._error_text(exc)[:400])
+
+    def _error_text(self, exc: Exception) -> str:
+        if self.describe_error is not None:
+            try:
+                text = self.describe_error(exc)
+            except Exception:
+                text = ""
+            if text:
+                return text
+        return str(exc)
 
     def _finish(self, transfer: Transfer, state: str, error: str) -> None:
         # The worker has joined every copy thread before finishing. Notify even

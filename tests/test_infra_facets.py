@@ -17,6 +17,7 @@ from tlc_plugin_sdk.infrastructure import (
     CreateNodeRequest,
     CreateNodeResponse,
     CreateStorageRequest,
+    GpuCatalog,
     InfrastructurePlugin,
     InvalidRequest,
     LegacyOwnerCredentialsFacet,
@@ -346,6 +347,121 @@ def test_details_are_scrubbed_of_the_plugins_secrets_and_the_request_token() -> 
     assert r.json()["detail"] == "key *** and token *** rejected"
     assert scrub("a bbbb", ["", "bbbb"]) == "a ***"
     assert scrub("ghost t", ["t"]) == "ghost t", "a value too short to be a secret is left alone"
+
+
+_ARN = "arn:aws:iam::123456789012:role/x"
+
+
+def _plain(exc: Exception) -> str:
+    return "AWS refused the call." if _ARN in str(exc) else ""
+
+
+class _Describing(_Raising):
+    def describe_error(self, exc: Exception) -> str:
+        return _plain(exc)
+
+
+def test_describe_error_words_an_unexpected_exception_and_is_still_scrubbed() -> None:
+    plugin = _Describing()
+    plugin.exc = RuntimeError(f"AccessDenied for {_ARN} (request id 42)")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        assert h.get("/infra/nodes/x").json()["detail"] == "AWS refused the call."
+        plugin.exc = RuntimeError("hunter2 is wrong")
+        assert h.get("/infra/nodes/x").json()["detail"] == "*** is wrong", "an empty answer falls back, scrubbed"
+        plugin.exc = ProviderError(f"worded by the provider: {_ARN}")
+        r = h.get("/infra/nodes/x")
+        assert r.status_code == 502 and _ARN in r.json()["detail"], "a ProviderError keeps its own sentence"
+
+
+def test_a_describe_error_that_leaks_a_secret_or_raises_is_contained() -> None:
+    class Leaky(_Raising):
+        def describe_error(self, exc: Exception) -> str:
+            if "boom" in str(exc):
+                msg = "hook failed"
+                raise RuntimeError(msg)
+            return "the key hunter2 was refused"
+
+    plugin = Leaky()
+    plugin.exc = RuntimeError("anything")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        assert h.get("/infra/nodes/x").json()["detail"] == "the key *** was refused"
+        plugin.exc = RuntimeError("boom")
+        assert h.get("/infra/nodes/x").json()["detail"] == "boom"
+
+
+def test_the_default_describe_error_is_the_scrubbed_text() -> None:
+    assert _Raising().describe_error(RuntimeError("key hunter2")) == "key ***"
+    assert _Raising().describe_error(KeyError()) == "KeyError"
+
+
+class _DescribingFake(FakeProvider):
+    """A fake whose catalog and storage calls fail the way a cloud SDK does."""
+
+    fail_catalog = False
+
+    def describe_error(self, exc: Exception) -> str:
+        return _plain(exc)
+
+    def gpu_catalog(self, *, node_type: str = "", region: str = "") -> GpuCatalog:
+        if self.fail_catalog:
+            msg = f"DescribeInstanceTypes failed for {_ARN}"
+            raise RuntimeError(msg)
+        return super().gpu_catalog(node_type=node_type, region=region)
+
+    def transfer_registry(self, url: str) -> Any:
+        registry = super().transfer_registry(url)
+
+        def copy(src: str, dst: str) -> None:
+            msg = f"CopyObject denied for {_ARN}"
+            raise RuntimeError(msg)
+
+        registry._copy = copy
+        return registry
+
+    def bundle_registry(self, url: str) -> Any:
+        registry = super().bundle_registry(url)
+
+        def store(path: Path, name: str) -> str:
+            msg = f"PutObject denied for {_ARN}"
+            raise RuntimeError(msg)
+
+        registry._store = store
+        return registry
+
+
+def test_describe_error_covers_the_routes_and_jobs_the_sdk_drives(tmp_path: Path) -> None:
+    plugin = _DescribingFake()
+    plugin.fail_catalog = True
+    with PluginHarness(plugin, plugin_id="fake", config_root=tmp_path) as h:
+        r = h.get("/infra/gpu-catalog")
+        assert (r.status_code, r.json()["detail"]) == (502, "AWS refused the call.")
+        body = {"src_url": "fake://fake-data", "dst_url": "fake://fake-data/copy", "items": ["train/"]}
+        tid = h.post("/infra/storage/transfer", json_body=body).json()["transfer_id"]
+        transfer = _wait(h, f"/infra/storage/transfer/{tid}")
+        assert transfer["state"] == "failed"
+        assert {f["reason"] for f in transfer["failures"]} == {"AWS refused the call."}
+        bid = h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}).json()["bundle_id"]
+        bundle = _wait(h, f"/infra/storage/bundle/{bid}")
+        assert (bundle["state"], bundle["error"]) == ("failed", "AWS refused the call.")
+
+
+def test_a_registry_built_with_its_own_describer_keeps_it() -> None:
+    from tlc_plugin_sdk.shared.storage_bundle import BundleRegistry
+
+    def mine(exc: Exception) -> str:
+        return "mine"
+
+    registry = BundleRegistry(
+        list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "", describe_error=mine
+    )
+
+    class Own(FakeProvider):
+        def bundle_registry(self, url: str) -> Any:
+            return registry
+
+    with PluginHarness(Own(), plugin_id="fake") as h:
+        h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"})
+    assert registry.describe_error is mine
 
 
 # ── Legacy owner-credentials facet ───────────────────────────────────────────

@@ -102,6 +102,7 @@ class BundleRegistry:
         arcname: Callable[[str, str], str] | None = None,
         max_bytes: int = MAX_BUNDLE_BYTES,
         max_files: int = MAX_BUNDLE_FILES,
+        describe_error: Callable[[Exception], str] | None = None,
     ) -> None:
         """
         Args:
@@ -113,6 +114,9 @@ class BundleRegistry:
             arcname: ``(url, key) -> path inside the zip``; default strips the prefix of ``url``.
             max_bytes: Refuse a folder larger than this (a CLI copy is the right tool then).
             max_files: Refuse a folder with more objects than this.
+            describe_error: ``exception -> sentence`` for a failed bundle's ``error`` (default: the
+                exception's text). An infrastructure plugin's routes set it to the plugin's
+                ``describe_error`` when it is unset.
 
         """
         self._list = list_objects
@@ -121,6 +125,7 @@ class BundleRegistry:
         self._arcname = arcname
         self._max_bytes = max_bytes
         self._max_files = max_files
+        self.describe_error = describe_error
         self._bundles: dict[str, Bundle] = {}
         self._lock = threading.Lock()
 
@@ -158,6 +163,16 @@ class BundleRegistry:
 
     # ── internals ─────────────────────────────────────────────────────────
 
+    def _error_text(self, exc: Exception) -> str:
+        if self.describe_error is not None:
+            try:
+                text = self.describe_error(exc)
+            except Exception:
+                text = ""
+            if text:
+                return text
+        return str(exc)
+
     def _prune(self) -> None:
         cutoff = time.time() - BUNDLE_TTL_S
         with self._lock:
@@ -186,7 +201,7 @@ class BundleRegistry:
             self._finish(bundle, "done", "")
         except Exception as exc:
             logger.exception("Bundle %s of %s failed", bundle.id, bundle.url)
-            self._finish(bundle, "failed", str(exc)[:400])
+            self._finish(bundle, "failed", self._error_text(exc)[:400])
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
