@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ids validated centrally; the legacy facet's sign-in and role-setup routes are mounted only when
   the plugin overrides the method. Request-carried legacy `credentials` / `provider_configs` reach
   a legacy-facet plugin through `tlc_plugin_sdk.infrastructure.legacy` (a request context, never a
-  request field); a plugin without that facet answers such a request 400.
+  request field) together with the request's `owner` (`current_request_owner()`; also
+  `CreateNodeRequest.owner` / `CreateStorageRequest.owner`); a plugin without that facet answers
+  such a request 400, and a `credentials` that is not an object is 400 for every plugin.
 - **The whole infrastructure wire is typed.** `tlc_plugin_sdk.infrastructure` is a package (same
   import path) whose dataclasses all carry `from_dict`/`to_dict`: `CreateNodeRequest` gains
   `storage_id` and a typed `workspace` (`WorkspaceRequest`) and a `to_dict`; `CreateNodeResponse`

@@ -39,14 +39,34 @@ def test_the_default_run_needs_no_cloud_and_no_lifecycle(tmp_path: Path) -> None
     assert "passed, 0 failed" in report.text()
 
 
-def test_without_a_config_root_the_settings_write_checks_do_not_run() -> None:
+def test_without_a_config_root_a_temporary_one_is_used_and_the_real_root_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tlc_plugin_sdk.shared import config_store
+
+    real = tmp_path / "real-home-configs"
+    monkeypatch.setattr(config_store, "CONFIG_ROOT", real)
     report = check_provider(FakeProvider(), plugin_id="fake", skip=("routes",))
-    names = [c.name for c in report.checks if c.name.startswith("settings:")]
-    assert names == [
-        "settings: GET /settings answers 200",
-        "settings: GET /settings carries <secret>_set for every secret field",
-        "settings: GET /settings carries no secret field by name",
-    ]
+    assert report.ok, report.text()
+    assert any(c.name == "settings: an unreadable settings file answers 409" for c in report.checks)
+    assert not real.exists(), "the default run never touches the configured settings root"
+    assert real == config_store.CONFIG_ROOT, "the redirect was restored"
+
+
+class _NoTypes(FakeProvider):
+    def capabilities(self) -> CapabilitiesResponse:
+        caps = super().capabilities()
+        caps.node_types = []
+        return caps
+
+
+def test_preflight_is_skipped_with_a_sentence_when_there_is_nothing_to_preflight(tmp_path: Path) -> None:
+    report = check_provider(_NoTypes(), plugin_id="fake", config_root=tmp_path)
+    assert report.ok, report.text()
+    skipped = [c for c in report.checks if c.name == "preflight: skipped"]
+    assert len(skipped) == 1
+    assert "no node_types" in skipped[0].detail
+    assert "ok   preflight: skipped — capabilities list no node_types" in report.text()
 
 
 def test_skip_leaves_a_group_out(tmp_path: Path) -> None:

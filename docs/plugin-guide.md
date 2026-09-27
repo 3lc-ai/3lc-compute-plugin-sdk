@@ -743,11 +743,13 @@ identity.
 `POST /infra/storage`. These are never fields of `CreateNodeRequest` or `CreateStorageRequest`:
 the SDK strips them from the body and, for a plugin with `LegacyOwnerCredentialsFacet`, exposes
 them for the duration of the call through `tlc_plugin_sdk.infrastructure.legacy` —
-`current_request_credentials()` (`dict | None`) and `current_provider_configs()`
-(`{plugin_id: {...}}`) — the same pattern as `connections`. A plugin **without** that facet is
+`current_request_credentials()` (`dict | None`), `current_provider_configs()`
+(`{plugin_id: {...}}`) and `current_request_owner()` (the caller the host acts for; also the
+request's `owner` field) — the same pattern as `connections`. A plugin **without** that facet is
 sent **400** (*"This provider takes no request credentials; act through a Connection
-instead."*) before its method runs: a silently dropped `credentials` object would create the
-resource in the host's own account.
+instead."*) before its method runs, and a `credentials` that is not an object is 400 for every
+plugin: a silently dropped `credentials` object would create the resource in the host's own
+account.
 
 Precedence inside a provider: request-carried legacy credentials (the legacy context) → the
 Connection (`current_credential()`; `Ambient` never falls back to saved keys) → the plugin's
@@ -785,7 +787,9 @@ parse is `SettingsUnreadable` → 409 with *"fix or delete it"*, before any merg
 as defaults.
 
 `secret()` and `option()` return dataclass fields, like `dataclasses.field`; a repo that lints
-with ruff lists them under `[tool.ruff.lint.flake8-bugbear] extend-immutable-calls`.
+with ruff lists them by qualified name under `[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls` (`tlc_plugin_sdk.infrastructure.secret`, `.option`, and the
+`tlc_plugin_sdk.shared.settings.` pair) so `RUF009` accepts them as defaults.
 
 A provider that keeps hand-rolled `/settings` routes leaves `settings = None`: the SDK mounts
 nothing, and the conformance kit flags a plugin that has both.
@@ -833,8 +837,10 @@ workspaces-envelope checks — no cloud credentials, no seam patched; `create_no
 node lifecycle (create, state, diagnostics, delete twice, a `credentials` object refused) and
 `live_storage=True` the object listing and a transfer dry-run against the first listed storage.
 `skip=("routes",)` leaves a group out; `headers=` sends an `x-3lc-connection` binding on every
-call. The CLI is `python -m tlc_plugin_sdk.infrastructure.testing src/my_provider [--config-root
-DIR] [--create-nodes] [--live-storage] [--node-type T] [--skip GROUP]`. `FakeProvider` in the same
+call. Settings are read and written under `config_root` — a temporary directory when none is
+given — so a run never touches `~/.3lc-plugin-configs`. The CLI is `python -m
+tlc_plugin_sdk.infrastructure.testing src/my_provider [--config-root DIR] [--create-nodes]
+[--live-storage] [--node-type T] [--skip GROUP] [--header NAME=VALUE]`. `FakeProvider` in the same
 module implements every facet in memory and is the reference implementation to read next to
 this chapter.
 

@@ -110,8 +110,10 @@ def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterab
     """
     try:
         return fn()
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        # A plugin's own litestar answer keeps its status; its detail is scrubbed like every other.
+        detail = scrub(str(exc.detail), [*plugin.secret_values(), *secrets])[:_DETAIL_MAX]
+        raise HTTPException(status_code=exc.status_code, detail=detail, headers=exc.headers) from exc
     except ProviderError as exc:
         raise HTTPException(status_code=exc.status, detail=_detail(plugin, exc, secrets)) from exc
     except SettingsUnreadable as exc:
@@ -132,6 +134,19 @@ def _job_id(value: str, what: str) -> str:
         msg = f"'{text[:40]}' is not a {what} id. Use the id the {what} answered."
         raise InvalidRequest(msg)
     return text
+
+
+def _split_legacy(
+    data: dict[str, Any], *, legacy: bool
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, dict[str, Any]]]:
+    """The typed body and the transient legacy part; 400 for a malformed part or a provider without the facet."""
+    try:
+        body, credentials, provider_configs = strip_request_credentials(data)
+    except InvalidRequest as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if (credentials is not None or provider_configs) and not legacy:
+        raise HTTPException(status_code=400, detail=_NO_LEGACY_CREDENTIALS)
+    return body, credentials, provider_configs
 
 
 def _secret_strings(credentials: dict[str, Any] | None) -> list[str]:
@@ -176,15 +191,13 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
 
     @http_post("/infra/nodes", status_code=201, sync_to_thread=True)
     def _create_node(data: dict[str, Any]) -> dict[str, Any]:
-        body, credentials, provider_configs = strip_request_credentials(data)
-        if (credentials is not None or provider_configs) and not legacy:
-            raise HTTPException(status_code=400, detail=_NO_LEGACY_CREDENTIALS)
+        body, credentials, provider_configs = _split_legacy(data, legacy=legacy)
         req = CreateNodeRequest.from_dict(body)
         if not req.node_id or not req.token:
             raise HTTPException(status_code=400, detail="The create call needs both a node_id and a token")
 
         def run() -> dict[str, Any]:
-            with request_credentials(credentials, provider_configs):
+            with request_credentials(credentials, provider_configs, owner=req.owner):
                 return plugin.create_node(req).to_dict()
 
         return answer(plugin, run, secrets=[req.token, *_secret_strings(credentials)])
@@ -235,16 +248,14 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
 
     @http_post("/infra/storage", status_code=201, sync_to_thread=True)
     def _create_storage(data: dict[str, Any]) -> dict[str, Any]:
-        body, credentials, provider_configs = strip_request_credentials(data)
-        if (credentials is not None or provider_configs) and not legacy:
-            raise HTTPException(status_code=400, detail=_NO_LEGACY_CREDENTIALS)
+        body, credentials, provider_configs = _split_legacy(data, legacy=legacy)
         req = CreateStorageRequest.from_dict(body)
 
         def run() -> dict[str, Any]:
             if not req.name:
                 msg = "The storage needs a name"
                 raise InvalidRequest(msg)
-            with request_credentials(credentials, provider_configs):
+            with request_credentials(credentials, provider_configs, owner=req.owner):
                 return facet.create_storage(req).to_dict()
 
         return answer(plugin, run, secrets=_secret_strings(credentials))
@@ -471,7 +482,7 @@ def legacy_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     cls = type(plugin)
 
     def credentials_of(data: dict[str, Any]) -> tuple[dict[str, Any], str]:
-        _, credentials, _ = strip_request_credentials(data)
+        _, credentials, _ = _split_legacy(data, legacy=True)
         return credentials or {}, str(data.get("owner", "") or "")
 
     @http_post("/infra/nodes/{provider_id:str}/terminate", status_code=200, sync_to_thread=True)

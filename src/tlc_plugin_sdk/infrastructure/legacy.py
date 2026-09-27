@@ -17,6 +17,7 @@ duration of the call — the same pattern as :mod:`tlc_plugin_sdk.connections`:
 
     creds = legacy.current_request_credentials()  # dict | None
     configs = legacy.current_provider_configs()  # {plugin_id: {...}}
+    owner = legacy.current_request_owner()  # the caller the host acts for
 
 A plugin without that facet is sent a 400 for such a request before its method runs: a silently
 dropped ``credentials`` object would create the resource in the host's own account.
@@ -29,9 +30,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from tlc_plugin_sdk.infrastructure.errors import InvalidRequest
+
 __all__ = [
     "current_provider_configs",
     "current_request_credentials",
+    "current_request_owner",
     "request_credentials",
     "strip_request_credentials",
 ]
@@ -42,6 +46,7 @@ _CREDENTIALS: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Contex
 _PROVIDER_CONFIGS: contextvars.ContextVar[dict[str, dict[str, Any]]] = contextvars.ContextVar(
     "tlc_legacy_provider_configs", default={}
 )
+_OWNER: contextvars.ContextVar[str] = contextvars.ContextVar("tlc_legacy_owner", default="")
 
 
 def current_request_credentials() -> dict[str, Any] | None:
@@ -54,21 +59,37 @@ def current_provider_configs() -> dict[str, dict[str, Any]]:
     return _PROVIDER_CONFIGS.get()
 
 
+def current_request_owner() -> str:
+    """The ``owner`` the current request names (the caller the host acts for), or ``""``.
+
+    An identity, not a credential: it is also a field of the typed request
+    (``CreateNodeRequest.owner``, ``CreateStorageRequest.owner``); here it sits next to the
+    credentials for a provider that derives something from both (an STS external id, say).
+    """
+    return _OWNER.get()
+
+
 @contextmanager
 def request_credentials(
-    credentials: dict[str, Any] | None, provider_configs: dict[str, dict[str, Any]] | None = None
+    credentials: dict[str, Any] | None,
+    provider_configs: dict[str, dict[str, Any]] | None = None,
+    *,
+    owner: str = "",
 ) -> Iterator[None]:
-    """Expose request-carried credentials to the plugin for the duration of the block.
+    """Expose request-carried credentials (and the owner) to the plugin for the duration of the block.
 
     Args:
         credentials: The request's ``credentials`` object, or ``None``.
         provider_configs: The request's ``workspace.provider_configs``, or ``None``.
+        owner: The request's ``owner``.
     """
     credentials_token = _CREDENTIALS.set(credentials)
     configs_token = _PROVIDER_CONFIGS.set(dict(provider_configs or {}))
+    owner_token = _OWNER.set(owner)
     try:
         yield
     finally:
+        _OWNER.reset(owner_token)
         _PROVIDER_CONFIGS.reset(configs_token)
         _CREDENTIALS.reset(credentials_token)
 
@@ -86,21 +107,35 @@ def strip_request_credentials(
         the ``workspace`` object is copied too), the ``credentials`` object found top-level or
         under ``workspace`` (``None`` when none), and ``workspace.provider_configs`` (``{}`` when
         none).
+
+    Raises:
+        InvalidRequest: When a ``credentials`` or ``provider_configs`` key is present but not an
+            object — silently dropping it would create the resource in the host's own account.
     """
     body = dict(data)
     credentials: dict[str, Any] | None = None
-    top = body.pop("credentials", None)
-    if isinstance(top, dict):
+    if "credentials" in body:
+        top = body.pop("credentials")
+        if not isinstance(top, dict):
+            msg = "'credentials' must be an object of key/value pairs"
+            raise InvalidRequest(msg)
         credentials = top
     provider_configs: dict[str, dict[str, Any]] = {}
     workspace = body.get("workspace")
     if isinstance(workspace, dict):
         workspace = dict(workspace)
-        nested = workspace.pop("credentials", None)
-        if credentials is None and isinstance(nested, dict):
-            credentials = nested
-        configs = workspace.pop("provider_configs", None)
-        if isinstance(configs, dict):
-            provider_configs = {str(k): v for k, v in configs.items() if isinstance(v, dict)}
+        if "credentials" in workspace:
+            nested = workspace.pop("credentials")
+            if not isinstance(nested, dict):
+                msg = "'workspace.credentials' must be an object of key/value pairs"
+                raise InvalidRequest(msg)
+            if credentials is None:
+                credentials = nested
+        if "provider_configs" in workspace:
+            configs = workspace.pop("provider_configs")
+            if not isinstance(configs, dict) or not all(isinstance(v, dict) for v in configs.values()):
+                msg = "'workspace.provider_configs' must be an object of per-plugin objects"
+                raise InvalidRequest(msg)
+            provider_configs = {str(k): v for k, v in configs.items()}
         body["workspace"] = workspace
     return body, credentials, provider_configs

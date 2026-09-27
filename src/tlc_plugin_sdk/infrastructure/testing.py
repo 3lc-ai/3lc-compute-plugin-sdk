@@ -14,8 +14,9 @@ By default (``create_nodes=False``, ``live_storage=False``) the kit runs the sha
 errors, settings, routes, catalog-envelope and workspaces-envelope checks — nothing that needs
 cloud credentials or a patched provider seam. ``create_nodes=True`` adds the node lifecycle
 (create, state, diagnostics, delete twice); ``live_storage=True`` adds ``list_objects`` and a
-transfer dry-run against the first listed storage. The settings write checks (keep, clear,
-unreadable file) run only when ``config_root`` points the settings at a scratch directory.
+transfer dry-run against the first listed storage. Settings are read and written under
+``config_root`` — a temporary directory when none is given — so a run never touches
+``~/.3lc-plugin-configs``.
 
 Also a CLI: ``python -m tlc_plugin_sdk.infrastructure.testing <plugin_dir> [--config-root DIR]
 [--create-nodes] [--live-storage] [--node-type T] [--skip GROUP]... [--header N=V]...``.
@@ -31,6 +32,7 @@ import io
 import json
 import re
 import sys
+import tempfile
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,7 +155,7 @@ class _Run:
         harness: PluginHarness,
         *,
         headers: dict[str, str] | None,
-        config_root: Path | None,
+        config_root: Path,
         node_type: str,
         create_nodes: bool,
         live_storage: bool,
@@ -176,8 +178,9 @@ class _Run:
         self.responses.append((method, path, response.status_code, response.text))
         return response
 
-    def check(self, name: str, ok: bool, detail: str = "") -> bool:
-        self.checks.append(Check(name=name, ok=bool(ok), detail=detail if not ok else ""))
+    def check(self, name: str, ok: bool, detail: str = "", *, note: str = "") -> bool:
+        """Record a check; ``detail`` is kept for a failure, ``note`` for a pass (a skip's reason)."""
+        self.checks.append(Check(name=name, ok=bool(ok), detail=detail if not ok else note))
         return bool(ok)
 
     @staticmethod
@@ -307,7 +310,14 @@ class _Run:
     def preflight(self) -> None:
         types_ = self.caps.get("node_types") or []
         node_type = self.node_type or (str(types_[0]) if types_ else "")
-        path = f"/infra/preflight?node_type={node_type}" if node_type else "/infra/preflight"
+        if not node_type:
+            self.check(
+                "preflight: skipped",
+                True,
+                note="capabilities list no node_types and no --node-type was given; nothing to preflight",
+            )
+            return
+        path = f"/infra/preflight?node_type={node_type}"
         r = self.call("GET", path)
         if not self.check("preflight: GET /infra/preflight answers 200", r.status_code == 200, self.status_detail(r)):
             return
@@ -361,7 +371,7 @@ class _Run:
             not any(n in view for n in names),
             f"present: {[n for n in names if n in view]}",
         )
-        if self.config_root is None or not names:
+        if not names:
             return
         name = names[0]
         r = self.call("POST", "/settings", json_body={name: "conformance-secret-value"})
@@ -587,7 +597,7 @@ def check_provider(
         plugin: The provider.
         plugin_id: The manifest id a host would hydrate onto it.
         config_root: A scratch settings root (see :class:`~tlc_plugin_sdk.harness.PluginHarness`);
-            the settings write checks run only when it is given.
+            a temporary directory when ``None``. The real ``~/.3lc-plugin-configs`` is never used.
         node_type: The node type to create and preflight (default: the first in ``node_types``).
         create_nodes: Run the lifecycle checks (create, state, diagnostics, delete).
         live_storage: Run ``list_objects`` and a transfer dry-run against the first listed storage.
@@ -597,14 +607,40 @@ def check_provider(
     Returns:
         The report.
     """
-    from tlc_plugin_sdk.harness import PluginHarness
-
     skipped = set(skip)
-    root = Path(config_root) if config_root is not None else None
     route_checks, duplicates = _route_checks(plugin) if "routes" not in skipped else ([], False)
     if duplicates:
         # Litestar refuses to build an app with two handlers on one method and path: nothing else can run.
         return ConformanceReport(checks=route_checks, facets=plugin.implemented_facets())
+    with tempfile.TemporaryDirectory(prefix="tlc-conformance-") as scratch:
+        root = Path(config_root) if config_root is not None else Path(scratch)
+        return _run_checks(
+            plugin,
+            plugin_id=plugin_id,
+            root=root,
+            node_type=node_type,
+            create_nodes=create_nodes,
+            live_storage=live_storage,
+            skipped=skipped,
+            headers=headers,
+            route_checks=route_checks,
+        )
+
+
+def _run_checks(
+    plugin: InfrastructurePlugin,
+    *,
+    plugin_id: str,
+    root: Path,
+    node_type: str,
+    create_nodes: bool,
+    live_storage: bool,
+    skipped: set[str],
+    headers: dict[str, str] | None,
+    route_checks: list[Check],
+) -> ConformanceReport:
+    from tlc_plugin_sdk.harness import PluginHarness
+
     with PluginHarness(plugin, plugin_id=plugin_id, config_root=root) as h:
         run = _Run(
             plugin,
@@ -950,7 +986,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m tlc_plugin_sdk.infrastructure.testing", description="Check a provider against the contract"
     )
     parser.add_argument("plugin_dir", help="Directory holding plugin.toml or pyproject.toml")
-    parser.add_argument("--config-root", default=None, help="Scratch settings root (enables the settings write checks)")
+    parser.add_argument("--config-root", default=None, help="Settings root (default: a temporary directory)")
     parser.add_argument("--create-nodes", action="store_true", help="Run the node lifecycle checks")
     parser.add_argument(
         "--live-storage", action="store_true", help="List objects and dry-run a transfer on real storage"

@@ -851,26 +851,37 @@ class StorageListing:
 
 @dataclass
 class CreateStorageRequest:
-    """The body of ``POST /infra/storage``: ``{name, region?, size_gb?, make_default?}``."""
+    """The body of ``POST /infra/storage``: ``{name, region?, size_gb?, make_default?, owner?}``.
+
+    ``owner`` is the caller the host acts for (an identity, not a credential); a transient
+    ``credentials`` object goes to the legacy context, not here.
+    """
 
     name: str
     region: str = ""
     size_gb: int | None = None
     make_default: bool = False
+    owner: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CreateStorageRequest:
-        """Parse the body (``credentials`` and ``owner`` go to the legacy context, not here)."""
+        """Parse the body (``credentials`` goes to the legacy context, not here)."""
         return cls(
             name=_stripped(data.get("name")),
             region=_stripped(data.get("region")),
             size_gb=_opt_int(data.get("size_gb")),
             make_default=_bool(data.get("make_default")),
+            owner=_str(data.get("owner")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the body."""
-        d: dict[str, Any] = {"name": self.name, "region": self.region, "make_default": self.make_default}
+        d: dict[str, Any] = {
+            "name": self.name,
+            "region": self.region,
+            "make_default": self.make_default,
+            "owner": self.owner,
+        }
         if self.size_gb is not None:
             d["size_gb"] = self.size_gb
         return d
@@ -938,12 +949,13 @@ class PresignResponse:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``expires_s`` and ``refused`` always; ``uploads``/``downloads`` for their mode; ``region`` when set."""
-        d: dict[str, Any] = {"expires_s": self.expires_s, "refused": [dict(r) for r in self.refused]}
-        if self.uploads or not self.downloads:
-            d["uploads"] = [dict(u) for u in self.uploads]
-        if self.downloads:
-            d["downloads"] = [dict(u) for u in self.downloads]
+        """``expires_s``, ``uploads``, ``downloads`` and ``refused`` always; ``region`` when set."""
+        d: dict[str, Any] = {
+            "expires_s": self.expires_s,
+            "uploads": [dict(u) for u in self.uploads],
+            "downloads": [dict(u) for u in self.downloads],
+            "refused": [dict(r) for r in self.refused],
+        }
         if self.region:
             d["region"] = self.region
         return d

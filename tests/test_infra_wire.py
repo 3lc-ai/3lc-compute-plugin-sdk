@@ -180,11 +180,11 @@ ROUND_TRIPS: list[tuple[Any, set[str]]] = [
         StorageListing(_CAPS, [StorageItem("b")], [Region("r")], "acct", "eu"),
         {*_CAPS.to_dict(), "storage", "regions", "account", "region"},
     ),
-    (CreateStorageRequest("n", "r", 5, True), {"name", "region", "size_gb", "make_default"}),
+    (CreateStorageRequest("n", "r", 5, True, "me"), {"name", "region", "size_gb", "make_default", "owner"}),
     (StorageDeleted(True, "b"), {"deleted", "id"}),
     (PresignRequest("s3://b", [{"path": "a"}], "download"), {"url", "files", "mode"}),
-    (PresignResponse(60, [{"k": 1}], [], [{"r": 1}], "eu"), {"expires_s", "uploads", "refused", "region"}),
-    (PresignResponse(60, [], [{"k": 1}], [], "eu"), {"expires_s", "downloads", "refused", "region"}),
+    (PresignResponse(60, [{"k": 1}], [], [{"r": 1}], "eu"), {"expires_s", "uploads", "downloads", "refused", "region"}),
+    (PresignResponse(60, [], [{"k": 1}], [], "eu"), {"expires_s", "uploads", "downloads", "refused", "region"}),
     (
         ObjectListing("s3://b/", [{"name": "d"}], [{"key": "k"}], True, "tok"),
         {"url", "prefixes", "objects", "truncated", "next_token"},
@@ -323,6 +323,23 @@ def test_strip_request_credentials_finds_them_top_level_or_under_workspace() -> 
     assert creds == {"a": 1}, "the top-level object wins"
     assert configs == {}
     assert strip_request_credentials({"node_id": "n"}) == ({"node_id": "n"}, None, {})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"credentials": "not-an-object"},
+        {"credentials": ["a"]},
+        {"workspace": {"credentials": 1}},
+        {"workspace": {"provider_configs": "x"}},
+        {"workspace": {"provider_configs": {"aws": "not-an-object"}}},
+    ],
+)
+def test_a_malformed_transient_key_is_refused_not_dropped(body: dict[str, Any]) -> None:
+    from tlc_plugin_sdk.infrastructure import InvalidRequest
+
+    with pytest.raises(InvalidRequest):
+        strip_request_credentials(body)
 
 
 def test_preflight_query_emits_the_alias_once() -> None:

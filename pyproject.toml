@@ -110,8 +110,6 @@ extend-immutable-calls = [
     "tlc_plugin_sdk.infrastructure.secret",
     "tlc_plugin_sdk.shared.settings.option",
     "tlc_plugin_sdk.shared.settings.secret",
-    "option",
-    "secret",
 ]
 
 [tool.ruff.format]

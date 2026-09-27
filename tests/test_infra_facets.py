@@ -16,6 +16,7 @@ from tlc_plugin_sdk.infrastructure import (
     CapabilitiesResponse,
     CreateNodeRequest,
     CreateNodeResponse,
+    CreateStorageRequest,
     InfrastructurePlugin,
     InvalidRequest,
     LegacyOwnerCredentialsFacet,
@@ -28,6 +29,7 @@ from tlc_plugin_sdk.infrastructure import (
     ProviderError,
     StorageCapabilities,
     StorageFacet,
+    StorageItem,
     StorageListing,
     legacy,
 )
@@ -141,6 +143,10 @@ def test_credentials_on_create_are_refused_without_the_legacy_facet(fake: Plugin
     assert fake.post("/infra/nodes", json_body=nested).status_code == 400
     r = fake.post("/infra/storage", json_body={"name": "b", "credentials": {"api_key": "k"}})
     assert r.status_code == 400
+    malformed = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": "x"}
+    r = fake.post("/infra/nodes", json_body=malformed)
+    assert r.status_code == 400, "a malformed credentials value is refused for every provider"
+    assert "object" in r.json()["detail"]
 
 
 # ── Storage routes ───────────────────────────────────────────────────────────
@@ -178,7 +184,7 @@ def test_browse_presign_and_delete_objects(fake: PluginHarness) -> None:
     assert fake.get("/infra/storage/list").status_code == 400
     r = fake.post("/infra/storage/presign", json_body={"url": "fake://fake-data/up", "files": [{"path": "x.jpg"}]})
     assert r.json()["uploads"][0]["method"] == "PUT"
-    assert "downloads" not in r.json()
+    assert r.json()["downloads"] == []
     r = fake.post(
         "/infra/storage/presign",
         json_body={"url": "fake://fake-data", "files": [{"path": "readme.txt"}], "mode": "download"},
@@ -322,6 +328,15 @@ def test_what_a_method_raises_maps_to_a_status_with_the_sentence(exc: BaseExcept
     assert r.json()["detail"] != "Internal Server Error"
 
 
+def test_a_plugins_own_http_exception_keeps_its_status_but_is_scrubbed() -> None:
+    plugin = _Raising()
+    plugin.exc = HTTPException(status_code=418, detail="raw hunter2 in a teapot")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        r = h.get("/infra/nodes/x")
+    assert r.status_code == 418
+    assert r.json()["detail"] == "raw *** in a teapot"
+
+
 def test_details_are_scrubbed_of_the_plugins_secrets_and_the_request_token() -> None:
     plugin = _Raising()
     plugin.exc = RuntimeError("key hunter2 and token tok-123 rejected")
@@ -335,9 +350,21 @@ def test_details_are_scrubbed_of_the_plugins_secrets_and_the_request_token() -> 
 # ── Legacy owner-credentials facet ───────────────────────────────────────────
 
 
-class _Legacy(InfrastructurePlugin, LegacyOwnerCredentialsFacet):
+class _Legacy(InfrastructurePlugin, LegacyOwnerCredentialsFacet, StorageFacet):
     def __init__(self) -> None:
         self.seen: list[tuple[dict[str, Any] | None, dict[str, dict[str, Any]]]] = []
+        self.owners: list[tuple[str, str]] = []
+        self.storage_seen: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def storage_capabilities(self) -> StorageCapabilities:
+        return StorageCapabilities(kind="bucket", label="B")
+
+    def list_storage(self, *, fallback_url: str = "") -> StorageListing:
+        return StorageListing(capabilities=self.storage_capabilities())
+
+    def create_storage(self, request: CreateStorageRequest) -> StorageItem:
+        self.storage_seen.append((request.owner, legacy.current_request_owner(), legacy.current_request_credentials()))
+        return StorageItem(id=request.name, name=request.name, url=f"x://{request.name}")
 
     def get_ui_fragment(self) -> str:
         return "<div/>"
@@ -347,6 +374,7 @@ class _Legacy(InfrastructurePlugin, LegacyOwnerCredentialsFacet):
 
     def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
         self.seen.append((legacy.current_request_credentials(), legacy.current_provider_configs()))
+        self.owners.append((request.owner, legacy.current_request_owner()))
         return CreateNodeResponse(provider_id="p", agent_url="http://x")
 
     def node_state(self, provider_id: str) -> NodeStateResponse:
@@ -379,7 +407,7 @@ class _LegacyWithLogin(_Legacy):
 
 
 def test_legacy_routes_are_mounted_only_for_overridden_methods() -> None:
-    base = _paths(_Legacy())
+    base = {(m, p) for m, p in _paths(_Legacy()) if not p.startswith("/infra/storage") or p.endswith("/discover")}
     assert ("POST", "/infra/nodes/{provider_id:str}/terminate") in base
     assert ("POST", "/infra/storage/discover") in base
     assert not any(p.startswith("/infra/login") or p == "/infra/role-setup" for _, p in base)
@@ -393,7 +421,7 @@ def test_legacy_credentials_reach_the_plugin_through_the_context_and_never_the_r
     plugin = _Legacy()
     with PluginHarness(plugin, plugin_id="legacy") as h:
         caps = h.get("/infra/capabilities").json()
-        assert caps["facets"] == ["legacy-owner-credentials"]
+        assert caps["facets"] == ["storage", "legacy-owner-credentials"]
         assert caps["credential_keys"] == ["api_key"]
         assert caps["workspace_login"]["label"] == "Sign in"
         assert "workspace_role" not in caps
@@ -401,6 +429,7 @@ def test_legacy_credentials_reach_the_plugin_through_the_context_and_never_the_r
             "node_id": "n",
             "node_type": "t",
             "token": "tok",
+            "owner": "me@x",
             "workspace": {"name": "w", "credentials": {"api_key": "sekrit"}, "provider_configs": {"aws": {"r": 1}}},
         }
         assert h.post("/infra/nodes", json_body=body).status_code == 201
@@ -419,7 +448,18 @@ def test_legacy_credentials_reach_the_plugin_through_the_context_and_never_the_r
             == "o"
         )
     assert plugin.seen == [({"api_key": "sekrit"}, {"aws": {"r": 1}}), (None, {})]
+    assert plugin.owners == [("me@x", "me@x"), ("", "")]
     assert legacy.current_request_credentials() is None, "reset after the call"
+    assert legacy.current_request_owner() == ""
+
+
+def test_owner_reaches_create_storage_in_the_request_and_the_context() -> None:
+    plugin = _Legacy()
+    with PluginHarness(plugin, plugin_id="legacy") as h:
+        r = h.post("/infra/storage", json_body={"name": "b", "owner": "me@x", "credentials": {"api_key": "k"}})
+        assert r.status_code == 201, r.text
+        assert h.post("/infra/storage", json_body={"name": "c", "owner": "you@x"}).status_code == 201
+    assert plugin.storage_seen == [("me@x", "me@x", {"api_key": "k"}), ("you@x", "you@x", None)]
 
 
 def test_login_and_role_routes_pass_the_owner_through() -> None:
