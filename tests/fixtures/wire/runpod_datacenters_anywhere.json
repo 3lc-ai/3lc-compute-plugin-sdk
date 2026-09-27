@@ -1,0 +1,22 @@
+{
+  "message": "Datacenters",
+  "answer": {
+    "datacenters": [
+      {
+        "id": "US-NC-1",
+        "name": "US-NC-1",
+        "location": "United States",
+        "country": "US",
+        "storage_support": true,
+        "available": true,
+        "stock": "Low"
+      }
+    ],
+    "gpu_type": "NVIDIA GeForce RTX 4090",
+    "placement": "auto",
+    "placement_effective": {}
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": ["node_type"]
+}

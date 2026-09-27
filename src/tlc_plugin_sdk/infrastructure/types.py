@@ -167,6 +167,10 @@ def _any_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _opt_dict(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, Mapping) else None
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -1093,23 +1097,27 @@ class BundleRequest:
 
 @dataclass
 class GpuCatalog:
-    """The answer of ``GET /infra/gpu-catalog``: rows for the catalogue table; ``error`` says why a list is short."""
+    """The answer of ``GET /infra/gpu-catalog``: rows for the catalogue table; ``error`` says why a list is short.
+
+    ``placement`` is where the provider looked for stock: ``{}`` means anywhere and is emitted;
+    ``None`` (the default) means the provider did not say, and the key is left out.
+    """
 
     gpus: list[dict[str, Any]] = field(default_factory=list)
-    placement: dict[str, Any] = field(default_factory=dict)
+    placement: dict[str, Any] | None = None
     error: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> GpuCatalog:
         """Parse the answer."""
         return cls(
-            gpus=_dict_list(data.get("gpus")), placement=_any_dict(data.get("placement")), error=_str(data.get("error"))
+            gpus=_dict_list(data.get("gpus")), placement=_opt_dict(data.get("placement")), error=_str(data.get("error"))
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``gpus`` always; ``placement`` and ``error`` when non-empty."""
+        """``gpus`` always; ``placement`` when set (``{}`` included); ``error`` when non-empty."""
         d: dict[str, Any] = {"gpus": [dict(g) for g in self.gpus]}
-        if self.placement:
+        if self.placement is not None:
             d["placement"] = dict(self.placement)
         if self.error:
             d["error"] = self.error
@@ -1141,12 +1149,16 @@ class CpuCatalog:
 
 @dataclass
 class Datacenters:
-    """The answer of ``GET /infra/datacenters``: sites with stock of ``node_type``, and the placement in force."""
+    """The answer of ``GET /infra/datacenters``: sites with stock of ``node_type``, and the placement in force.
+
+    ``placement`` is the setting as saved (``"auto"``, ``"dc:US-NC-1"``); ``placement_effective`` what
+    it resolves to: ``{}`` means anywhere and is emitted; ``None`` (the default) leaves the key out.
+    """
 
     datacenters: list[dict[str, Any]] = field(default_factory=list)
     node_type: str = ""
     placement: str = ""
-    placement_effective: dict[str, Any] = field(default_factory=dict)
+    placement_effective: dict[str, Any] | None = None
     error: str = ""
 
     @classmethod
@@ -1156,19 +1168,22 @@ class Datacenters:
             datacenters=_dict_list(data.get("datacenters")),
             node_type=_str(data.get("node_type") or data.get("gpu_type")),
             placement=_str(data.get("placement")),
-            placement_effective=_any_dict(data.get("placement_effective")),
+            placement_effective=_opt_dict(data.get("placement_effective")),
             error=_str(data.get("error")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``datacenters`` always; ``node_type`` (and its ``gpu_type`` alias), ``placement*``, ``error`` when set."""
+        """``datacenters`` always; ``placement_effective`` when set (``{}`` included); the rest when non-empty.
+
+        ``node_type`` is emitted with its ``gpu_type`` alias.
+        """
         d: dict[str, Any] = {"datacenters": [dict(x) for x in self.datacenters]}
         if self.node_type:
             d["node_type"] = self.node_type
             d["gpu_type"] = self.node_type
         if self.placement:
             d["placement"] = self.placement
-        if self.placement_effective:
+        if self.placement_effective is not None:
             d["placement_effective"] = dict(self.placement_effective)
         if self.error:
             d["error"] = self.error

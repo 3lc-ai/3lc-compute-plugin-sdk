@@ -244,6 +244,17 @@ def test_minimal_answers_omit_every_unset_optional_key() -> None:
     assert OwnerCredentialsDescriptor().to_dict() == {}
 
 
+def test_an_empty_placement_means_anywhere_and_is_emitted() -> None:
+    assert GpuCatalog(placement={}).to_dict() == {"gpus": [], "placement": {}}
+    assert GpuCatalog.from_dict({"gpus": [], "placement": {}}).placement == {}
+    assert GpuCatalog.from_dict({"gpus": []}).placement is None
+    assert GpuCatalog.from_dict({"placement": "bogus"}).placement is None
+    dcs = Datacenters(node_type="A100", placement="auto", placement_effective={})
+    assert dcs.to_dict()["placement_effective"] == {}
+    assert Datacenters.from_dict(dcs.to_dict()) == dcs
+    assert "placement_effective" not in Datacenters(placement="auto").to_dict()
+
+
 def test_a_gpu_create_body_sends_an_empty_workspace_and_no_pricing() -> None:
     d = CreateNodeRequest(node_id="n", node_type="t", token="k").to_dict()
     assert d["workspace"] == {}
@@ -384,6 +395,8 @@ def _emit(message: str, answer: dict[str, Any]) -> dict[str, Any]:
         "StorageListing": StorageListing,
         "ObjectListing": ObjectListing,
         "WorkspaceListing": WorkspaceListing,
+        "GpuCatalog": GpuCatalog,
+        "Datacenters": Datacenters,
     }
     result: dict[str, Any] = parsers[message].from_dict(answer).to_dict()
     return result
