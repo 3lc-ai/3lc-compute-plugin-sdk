@@ -344,7 +344,8 @@ def test_details_are_scrubbed_of_the_plugins_secrets_and_the_request_token() -> 
         r = h.post("/infra/nodes", json_body={"node_id": "n", "node_type": "t", "token": "tok-123"})
     assert r.status_code == 502
     assert r.json()["detail"] == "key *** and token *** rejected"
-    assert scrub("a b", ["", "b"]) == "a ***"
+    assert scrub("a bbbb", ["", "bbbb"]) == "a ***"
+    assert scrub("ghost t", ["t"]) == "ghost t", "a value too short to be a secret is left alone"
 
 
 # ── Legacy owner-credentials facet ───────────────────────────────────────────

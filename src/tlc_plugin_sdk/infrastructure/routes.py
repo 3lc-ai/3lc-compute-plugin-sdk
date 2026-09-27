@@ -66,8 +66,13 @@ _NO_LEGACY_CREDENTIALS = "This provider takes no request credentials; act throug
 # ── The exception → HTTP mapper ────────────────────────────────────────────────
 
 
+#: A value shorter than this is not scrubbed: no key or token is that short, and replacing a
+#: one-letter "secret" everywhere would mangle every word of the sentence.
+_MIN_SECRET_LEN = 4
+
+
 def scrub(text: str, secrets: Iterable[str]) -> str:
-    """``text`` with every non-empty value in ``secrets`` replaced by ``***``.
+    """``text`` with every value in ``secrets`` (of :data:`_MIN_SECRET_LEN` characters or more) replaced by ``***``.
 
     Args:
         text: The message.
@@ -76,7 +81,7 @@ def scrub(text: str, secrets: Iterable[str]) -> str:
     Returns:
         The scrubbed message.
     """
-    for value in sorted({s for s in secrets if s}, key=len, reverse=True):
+    for value in sorted({s for s in secrets if s and len(s) >= _MIN_SECRET_LEN}, key=len, reverse=True):
         text = text.replace(value, "***")
     return text
 
