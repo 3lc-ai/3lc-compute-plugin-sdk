@@ -1,0 +1,10 @@
+{
+  "message": "NodeStateResponse",
+  "answer": {
+    "state": "exited",
+    "detail": "provisioning failed: Allocation failed. We do not have sufficient capacity for the requested VM size."
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}

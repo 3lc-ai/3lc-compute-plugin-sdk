@@ -1,0 +1,26 @@
+{
+  "message": "ObjectListing",
+  "answer": {
+    "url": "volume://abc123volume/train/",
+    "prefixes": [
+      {
+        "name": "images",
+        "url": "volume://abc123volume/train/images/"
+      }
+    ],
+    "objects": [
+      {
+        "key": "train/labels.json",
+        "name": "labels.json",
+        "size": 2048,
+        "last_modified": "2026-09-01T10:00:00+00:00",
+        "url": "volume://abc123volume/train/labels.json"
+      }
+    ],
+    "truncated": true,
+    "next_token": "1/abc"
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}

@@ -13,7 +13,7 @@ The plugin hierarchy:
 - :class:`ComputePlugin` (:class:`HubPlugin`) — adds ``run_job`` /
   ``initialise_runtime`` for long-running work.
 - :class:`InfrastructurePlugin` (:class:`HubPlugin`) — typed provider contract
-  for remote-node plugins (in :mod:`tlc_plugin_sdk.infra`).
+  for remote-node plugins (in :mod:`tlc_plugin_sdk.infrastructure`).
 
 There is no ``register()`` to call — metadata lives in the plugin manifest, and
 the host discovers the plugin via its manifest ``entrypoint``.

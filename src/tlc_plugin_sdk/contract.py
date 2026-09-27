@@ -18,7 +18,7 @@ The hierarchy has three tiers:
 :class:`InfrastructurePlugin` (:class:`HubPlugin`)
     The provider contract for remote-node plugins — typed abstract methods for
     ``capabilities`` / ``create_node`` / ``node_state`` / ``delete_node`` and an
-    optional ``preflight``.  Lives in :mod:`tlc_plugin_sdk.infra`
+    optional ``preflight``, plus opt-in facets.  Lives in :mod:`tlc_plugin_sdk.infrastructure`
     (``kind = "infrastructure"``).
 
 All *metadata* lives in the plugin manifest — a standalone ``plugin.toml`` or a

@@ -1,0 +1,138 @@
+{
+  "message": "CapabilitiesResponse",
+  "answer": {
+    "provider": "runpod",
+    "flavors": [
+      "gpu"
+    ],
+    "credential_keys": [
+      "api_key"
+    ],
+    "workspace_fields": [
+      {
+        "key": "api_key",
+        "required": true,
+        "label": "RunPod API key",
+        "secret": true,
+        "placeholder": "rpa_…",
+        "help": "Create one under console → Settings → API Keys.",
+        "href": "https://www.runpod.io/console/user/settings"
+      },
+      {
+        "key": "s3_access_key",
+        "required": false,
+        "label": "Network volume access key id",
+        "secret": true,
+        "placeholder": "user_…",
+        "help": "RunPod's own key pair for its network volumes, separate from the API key.",
+        "href": "https://www.runpod.io/console/user/settings"
+      },
+      {
+        "key": "s3_secret_key",
+        "required": false,
+        "label": "Network volume access key secret",
+        "secret": true,
+        "placeholder": "",
+        "help": "The second half of the pair, shown once when it is created.",
+        "href": ""
+      }
+    ],
+    "gpu_types": [
+      "NVIDIA GeForce RTX 4090"
+    ],
+    "pricing": [
+      "on_demand",
+      "spot"
+    ],
+    "ready": false,
+    "missing": [
+      "api_key",
+      "tlc_api_key"
+    ],
+    "missing_fields": [
+      {
+        "key": "api_key",
+        "required": true,
+        "label": "RunPod API key",
+        "secret": true,
+        "placeholder": "rpa_…",
+        "help": "Create one under console → Settings → API Keys.",
+        "href": "https://www.runpod.io/console/user/settings"
+      },
+      {
+        "key": "tlc_api_key",
+        "required": true,
+        "label": "3LC API key",
+        "secret": true,
+        "placeholder": "",
+        "help": "The same key you use for 3LC on your machine; the node logs in to 3LC with it.",
+        "href": "https://account.3lc.ai/api-key"
+      },
+      {
+        "key": "aws_access_key_id",
+        "required": false,
+        "label": "AWS access key id",
+        "secret": true,
+        "placeholder": "AKIA…",
+        "help": "IAM → your user → Security credentials → Create access key.",
+        "href": "https://console.aws.amazon.com/iam/home#/security_credentials"
+      },
+      {
+        "key": "aws_secret_access_key",
+        "required": false,
+        "label": "AWS secret access key",
+        "secret": true,
+        "placeholder": "",
+        "help": "Shown once, when the access key is created.",
+        "href": ""
+      },
+      {
+        "key": "aws_region",
+        "required": false,
+        "label": "AWS region of the bucket",
+        "secret": false,
+        "placeholder": "us-east-1",
+        "help": "S3 console → your bucket → Properties → AWS Region.",
+        "href": ""
+      },
+      {
+        "key": "s3_access_key",
+        "required": false,
+        "label": "Network volume access key id",
+        "secret": true,
+        "placeholder": "user_…",
+        "help": "RunPod's own key pair for its network volumes, separate from the API key.",
+        "href": "https://www.runpod.io/console/user/settings"
+      },
+      {
+        "key": "s3_secret_key",
+        "required": false,
+        "label": "Network volume access key secret",
+        "secret": true,
+        "placeholder": "",
+        "help": "The second half of the pair, shown once when it is created.",
+        "href": ""
+      }
+    ],
+    "storage": {
+      "kind": "volume",
+      "label": "RunPod network volume",
+      "creatable": true,
+      "upload": false,
+      "browse": false,
+      "download": false,
+      "bundle": false,
+      "delete": false,
+      "transfer": false,
+      "rename": false,
+      "upload_hint": "Add the network volume access keys (RunPod console → Settings → S3 API Keys) to browse, upload to and download from volumes.",
+      "default_id": "abc123volume"
+    }
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": [
+    "node_types",
+    "facets"
+  ]
+}
