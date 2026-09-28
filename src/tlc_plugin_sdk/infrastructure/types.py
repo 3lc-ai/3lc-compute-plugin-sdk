@@ -34,6 +34,7 @@ __all__ = [
     "FACET_WORKSPACES",
     "BundleRequest",
     "CapabilitiesResponse",
+    "ConnectionCheckResponse",
     "CpuCatalog",
     "CreateNodeRequest",
     "CreateNodeResponse",
@@ -571,6 +572,35 @@ class PreflightResponse:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the JSON body the host passes through."""
         return {"ok": self.ok, "checks": [c.to_dict() for c in self.checks], "summary": self.summary}
+
+
+@dataclass
+class ConnectionCheckResponse:
+    """What checking the request's Connection found (``GET /infra/connection/check``).
+
+    Reaching the handler already means the binding resolved (a ``KEYLESS`` role was assumed);
+    a provider adds what it asked its own API.
+
+    Attributes:
+        identity: Who the Connection acts as (an ARN), or ``""`` when the provider did not ask.
+        checked: What was checked, in order (``["resolve", "get_caller_identity"]``).
+    """
+
+    identity: str = ""
+    checked: list[str] = field(default_factory=lambda: ["resolve"])
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ConnectionCheckResponse:
+        """Parse a provider's answer."""
+        checked = data.get("checked")
+        return cls(
+            identity=_str(data.get("identity")),
+            checked=[_str(c) for c in checked if _str(c)] if isinstance(checked, (list, tuple)) else [],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the JSON body the host reads."""
+        return {"identity": self.identity, "checked": list(self.checked)}
 
 
 def preflight_query(node_type: str = "", datacenter: str = "") -> dict[str, str]:

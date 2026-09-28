@@ -29,6 +29,12 @@ Kinds:
 
 The header is **host-owned**: the host sets it and must strip any copy a caller sent. A request
 without it resolves to nothing, and the plugin behaves exactly as before Connections.
+
+A host may also say what the Connection is being used *for* in the host-owned
+:data:`CONNECTION_USE_HEADER`: the resource the call is about (a node id) and the person it acts
+for. A resolver reads it with :func:`current_use` — the AWS resolver names the role session after
+the resource and stamps the person as the session's source identity, so the customer's audit
+trail says which node and whose.
 """
 
 from __future__ import annotations
@@ -41,21 +47,28 @@ from typing import Any
 
 __all__ = [
     "CONNECTION_HEADER",
+    "CONNECTION_USE_HEADER",
     "Ambient",
     "AwsSession",
     "ConnectionBinding",
+    "ConnectionUse",
     "CredentialUnavailable",
     "ResolvedCredential",
     "connection_middleware",
     "current_connection",
     "current_credential",
+    "current_use",
     "encode_binding",
+    "encode_use",
     "register_resolver",
     "resolve",
 ]
 
 CONNECTION_HEADER = "x-3lc-connection"
 """The request header carrying a JSON-encoded :class:`ConnectionBinding` (host-owned)."""
+
+CONNECTION_USE_HEADER = "x-3lc-connection-use"
+"""The request header carrying a JSON-encoded :class:`ConnectionUse` (host-owned, optional)."""
 
 KIND_AMBIENT = "AMBIENT"
 KIND_KEYLESS = "KEYLESS"
@@ -106,6 +119,54 @@ class ConnectionBinding:
             msg = "a connection binding needs string 'id', 'provider' and 'kind', and an object 'metadata'"
             raise ValueError(msg)
         return cls(id=str(values[0]), provider=str(values[1]), kind=str(values[2]).upper(), metadata=metadata)
+
+
+@dataclass(frozen=True)
+class ConnectionUse:
+    """What a request uses its Connection for, as the host says.
+
+    Attributes:
+        resource_id: The host's id for the resource the call is about (a node id), or ``""``.
+        source_identity: Who the call acts for (the person who created the node), or ``""``.
+    """
+
+    resource_id: str = ""
+    source_identity: str = ""
+
+    @classmethod
+    def from_json(cls, raw: str | bytes) -> ConnectionUse:
+        """Parse the header value.
+
+        Args:
+            raw: The JSON object ``{resource_id?, source_identity?}``.
+
+        Returns:
+            The use.
+
+        Raises:
+            ValueError: When the value is not such an object.
+        """
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            msg = "a connection use is a JSON object"
+            raise ValueError(msg)
+        values = [data.get(k, "") for k in ("resource_id", "source_identity")]
+        if not all(isinstance(v, str) for v in values):
+            msg = "a connection use has string 'resource_id' and 'source_identity'"
+            raise ValueError(msg)
+        return cls(resource_id=str(values[0]), source_identity=str(values[1]))
+
+
+def encode_use(use: ConnectionUse) -> str:
+    """The header value for ``use`` (for hosts and tests).
+
+    Args:
+        use: What the request uses its Connection for.
+
+    Returns:
+        Compact JSON.
+    """
+    return json.dumps({"resource_id": use.resource_id, "source_identity": use.source_identity}, separators=(",", ":"))
 
 
 def encode_binding(binding: ConnectionBinding) -> str:
@@ -167,6 +228,7 @@ _CONNECTION: contextvars.ContextVar[ConnectionBinding | None] = contextvars.Cont
 _CREDENTIAL: contextvars.ContextVar[ResolvedCredential | None] = contextvars.ContextVar(
     "tlc_connection_credential", default=None
 )
+_USE: contextvars.ContextVar[ConnectionUse | None] = contextvars.ContextVar("tlc_connection_use", default=None)
 
 
 def register_resolver(provider: str, kind: str, resolver: Resolver) -> None:
@@ -221,6 +283,14 @@ def current_credential() -> ResolvedCredential | None:
     return _CREDENTIAL.get()
 
 
+def current_use() -> ConnectionUse | None:
+    """What the current request uses its Connection for, or ``None`` when the host did not say.
+
+    Set before the binding is resolved, so a resolver reads it too.
+    """
+    return _USE.get()
+
+
 async def _reply(send: Any, status: int, detail: str) -> None:
     body = json.dumps({"detail": detail}).encode()
     await send({
@@ -234,11 +304,13 @@ async def _reply(send: Any, status: int, detail: str) -> None:
 def connection_middleware(app: Any) -> Any:
     """ASGI middleware: resolve the request's :data:`CONNECTION_HEADER` around the handler.
 
-    No header: passes through untouched. A malformed or repeated header answers 400; a binding
-    this process cannot resolve answers 424 (the request depends on a Connection it cannot use).
-    Resolution runs in a worker thread (a provider resolver may call its provider). The
-    resolution is set in context variables for the handler — including ``def`` handlers run in a
-    thread, which receive a copy of the context — and reset afterwards.
+    No header: passes through untouched. A malformed or repeated header (either of
+    :data:`CONNECTION_HEADER` and :data:`CONNECTION_USE_HEADER`) answers 400; a binding this
+    process cannot resolve answers 424 (the request depends on a Connection it cannot use).
+    Resolution runs in a worker thread (a provider resolver may call its provider), with
+    :func:`current_use` already set. The resolution is set in context variables for the handler —
+    including ``def`` handlers run in a thread, which receive a copy of the context — and reset
+    afterwards.
 
     Args:
         app: The wrapped ASGI app.
@@ -249,6 +321,7 @@ def connection_middleware(app: Any) -> Any:
     import anyio
 
     header = CONNECTION_HEADER.encode()
+    use_header = CONNECTION_USE_HEADER.encode()
 
     async def middleware(scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -266,17 +339,31 @@ def connection_middleware(app: Any) -> Any:
         except ValueError as exc:
             await _reply(send, 400, f"Invalid {CONNECTION_HEADER} header: {exc}")
             return
-        try:
-            credential = await anyio.to_thread.run_sync(resolve, binding)
-        except CredentialUnavailable as exc:
-            await _reply(send, 424, str(exc))
+        uses = [value for name, value in scope.get("headers", []) if name == use_header]
+        if len(uses) > 1:
+            await _reply(send, 400, f"Send at most one {CONNECTION_USE_HEADER} header, not {len(uses)}")
             return
-        connection_token = _CONNECTION.set(binding)
-        credential_token = _CREDENTIAL.set(credential)
         try:
-            await app(scope, receive, send)
+            use = ConnectionUse.from_json(uses[0]) if uses else None
+        except ValueError as exc:
+            await _reply(send, 400, f"Invalid {CONNECTION_USE_HEADER} header: {exc}")
+            return
+        use_token = _USE.set(use)
+        try:
+            context = contextvars.copy_context()
+            try:
+                credential = await anyio.to_thread.run_sync(context.run, resolve, binding)
+            except CredentialUnavailable as exc:
+                await _reply(send, 424, str(exc))
+                return
+            connection_token = _CONNECTION.set(binding)
+            credential_token = _CREDENTIAL.set(credential)
+            try:
+                await app(scope, receive, send)
+            finally:
+                _CREDENTIAL.reset(credential_token)
+                _CONNECTION.reset(connection_token)
         finally:
-            _CREDENTIAL.reset(credential_token)
-            _CONNECTION.reset(connection_token)
+            _USE.reset(use_token)
 
     return middleware

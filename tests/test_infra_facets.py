@@ -61,7 +61,8 @@ def fake(tmp_path: Path) -> Any:
 
 def test_every_facet_mounts_its_routes_and_settings_mounts_two() -> None:
     paths = _paths(FakeProvider())
-    assert len(paths) == 5 + 12 + 3 + 1 + 2
+    assert len(paths) == 6 + 12 + 3 + 1 + 2
+    assert ("GET", "/infra/connection/check") in paths
     assert ("GET", "/infra/storage/list") in paths
     assert ("DELETE", "/infra/storage/bundle/{bundle_id:str}") in paths
     assert ("GET", "/infra/cpu-catalog") in paths

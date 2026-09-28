@@ -23,7 +23,7 @@ from litestar import get as http_get
 from litestar import post as http_post
 from litestar.exceptions import HTTPException
 
-from tlc_plugin_sdk.connections import CredentialUnavailable
+from tlc_plugin_sdk.connections import CONNECTION_HEADER, CredentialUnavailable, current_connection
 from tlc_plugin_sdk.infrastructure.errors import InvalidRequest, NotFound, ProviderError, scrub
 from tlc_plugin_sdk.infrastructure.facets import (
     CatalogFacet,
@@ -216,7 +216,7 @@ def _secret_strings(plugin: InfrastructurePlugin, credentials: dict[str, Any] | 
 
 
 def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
-    """The five core routes: capabilities, preflight, create, state (with diagnostics), delete.
+    """The core routes: capabilities, preflight, create, state (with diagnostics), delete, connection check.
 
     Args:
         plugin: The plugin.
@@ -269,7 +269,13 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     def _delete_node(provider_id: str) -> dict[str, Any]:
         return answer(plugin, lambda: plugin.delete_node(provider_id).to_dict())
 
-    return [_capabilities, _preflight, _create_node, _node_state, _delete_node]
+    @http_get("/infra/connection/check", sync_to_thread=True)
+    def _connection_check() -> dict[str, Any]:
+        if current_connection() is None:
+            raise HTTPException(status_code=400, detail=f"Send the Connection to check in {CONNECTION_HEADER}")
+        return answer(plugin, lambda: plugin.connection_check().to_dict())
+
+    return [_capabilities, _preflight, _create_node, _node_state, _delete_node, _connection_check]
 
 
 # ── Storage facet ──────────────────────────────────────────────────────────────
