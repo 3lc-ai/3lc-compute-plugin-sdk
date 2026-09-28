@@ -20,7 +20,14 @@ Importing this package pulls in neither litestar nor ``tlc``: the route layer
 
 from __future__ import annotations
 
-from tlc_plugin_sdk.infrastructure.errors import InvalidRequest, NotConfigured, NotFound, NotSupported, ProviderError
+from tlc_plugin_sdk.infrastructure.errors import (
+    Conflict,
+    InvalidRequest,
+    NotConfigured,
+    NotFound,
+    NotSupported,
+    ProviderError,
+)
 from tlc_plugin_sdk.infrastructure.facets import (
     CatalogFacet,
     LegacyOwnerCredentialsFacet,
@@ -78,6 +85,7 @@ __all__ = [
     "BundleRequest",
     "CapabilitiesResponse",
     "CatalogFacet",
+    "Conflict",
     "CpuCatalog",
     "CreateNodeRequest",
     "CreateNodeResponse",

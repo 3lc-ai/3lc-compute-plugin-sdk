@@ -244,6 +244,17 @@ def test_minimal_answers_omit_every_unset_optional_key() -> None:
     assert OwnerCredentialsDescriptor().to_dict() == {}
 
 
+def test_an_empty_placement_means_anywhere_and_is_emitted() -> None:
+    assert GpuCatalog(placement={}).to_dict() == {"gpus": [], "placement": {}}
+    assert GpuCatalog.from_dict({"gpus": [], "placement": {}}).placement == {}
+    assert GpuCatalog.from_dict({"gpus": []}).placement is None
+    assert GpuCatalog.from_dict({"placement": "bogus"}).placement is None
+    dcs = Datacenters(node_type="A100", placement="auto", placement_effective={})
+    assert dcs.to_dict()["placement_effective"] == {}
+    assert Datacenters.from_dict(dcs.to_dict()) == dcs
+    assert "placement_effective" not in Datacenters(placement="auto").to_dict()
+
+
 def test_a_gpu_create_body_sends_an_empty_workspace_and_no_pricing() -> None:
     d = CreateNodeRequest(node_id="n", node_type="t", token="k").to_dict()
     assert d["workspace"] == {}
@@ -289,6 +300,30 @@ def test_extra_is_emit_only_and_typed_keys_win() -> None:
     assert CapabilitiesResponse.from_dict(d).extra == {}
 
 
+def test_presign_extra_carries_provider_keys_and_an_explicit_null() -> None:
+    presign = PresignResponse(60, extra={"bucket": "b", "account": "acct", "volume": "v", "cors": None, "expires_s": 1})
+    d = presign.to_dict()
+    assert d["bucket"] == "b" and d["account"] == "acct" and d["volume"] == "v"
+    assert "cors" in d and d["cors"] is None, "an explicit None in extra is emitted as null"
+    assert d["expires_s"] == 60, "typed keys win"
+    assert PresignResponse.from_dict(d).extra == {}
+
+
+def test_region_extra_carries_a_country() -> None:
+    d = Region("US-NC-1", "US-NC-1", extra={"country": "US", "location": "", "id": "spoof"}).to_dict()
+    assert d == {"id": "US-NC-1", "name": "US-NC-1", "country": "US", "location": ""}
+    assert Region.from_dict(d).extra == {}
+
+
+def test_listing_extra_answers_an_empty_account_and_a_subscription() -> None:
+    listing = StorageListing(_CAPS, extra={"account": "", "subscription": "sub-1", "kind": "spoof"})
+    d = listing.to_dict()
+    assert d["account"] == "" and d["subscription"] == "sub-1"
+    assert d["kind"] == "bucket", "typed keys win"
+    assert StorageListing(_CAPS, account="acct", extra={"account": ""}).to_dict()["account"] == "acct"
+    assert StorageListing.from_dict(d).extra == {}
+
+
 def test_unknown_keys_and_bad_values_never_raise() -> None:
     state = NodeStateResponse.from_dict({"state": "weird", "detail": None, "bootstrap_failed": "no", "extra": 1})
     assert state.state == "unknown"
@@ -319,10 +354,43 @@ def test_strip_request_credentials_finds_them_top_level_or_under_workspace() -> 
     assert creds == {"api_key": "k"}
     assert configs == {"aws": {"region": "eu"}}
     assert body["workspace"] == {"name": "w"}
-    body, creds, configs = strip_request_credentials({"credentials": {"a": 1}, "workspace": {"credentials": {"b": 2}}})
-    assert creds == {"a": 1}, "the top-level object wins"
+    body, creds, configs = strip_request_credentials({"credentials": {"a": 1}, "workspace": {"credentials": {"a": 1}}})
+    assert creds == {"a": 1}, "the same object in both places is one"
     assert configs == {}
     assert strip_request_credentials({"node_id": "n"}) == ({"node_id": "n"}, None, {})
+
+
+@pytest.mark.parametrize(
+    ("body", "found"),
+    [
+        ({"credentials": {}, "workspace": {"credentials": {"api_key": "k"}}}, {"api_key": "k"}),
+        (
+            {"credentials": {"api_key": " ", "region": None}, "workspace": {"credentials": {"api_key": "k"}}},
+            {"api_key": "k"},
+        ),
+        ({"credentials": {"api_key": "k"}, "workspace": {"credentials": {}}}, {"api_key": "k"}),
+        (
+            {"credentials": {"api_key": "k", "region": ""}, "workspace": {"credentials": {"api_key": "k"}}},
+            {"api_key": "k", "region": ""},
+        ),
+        ({"credentials": {}, "workspace": {"credentials": {"region": ""}}}, {}),
+        ({"credentials": {"api_key": ""}}, {"api_key": ""}),
+        ({"workspace": {"credentials": {}}}, {}),
+        ({"node_id": "n"}, None),
+    ],
+)
+def test_an_empty_credentials_object_never_hides_a_filled_one_but_is_still_seen(
+    body: dict[str, Any], found: dict[str, Any] | None
+) -> None:
+    _, creds, _ = strip_request_credentials(body)
+    assert creds == found
+
+
+def test_two_filled_credentials_objects_that_disagree_are_refused() -> None:
+    from tlc_plugin_sdk.infrastructure import InvalidRequest
+
+    with pytest.raises(InvalidRequest, match="two different credentials"):
+        strip_request_credentials({"credentials": {"a": 1}, "workspace": {"credentials": {"b": 2}}})
 
 
 @pytest.mark.parametrize(
@@ -360,6 +428,8 @@ def _emit(message: str, answer: dict[str, Any]) -> dict[str, Any]:
         "StorageListing": StorageListing,
         "ObjectListing": ObjectListing,
         "WorkspaceListing": WorkspaceListing,
+        "GpuCatalog": GpuCatalog,
+        "Datacenters": Datacenters,
     }
     result: dict[str, Any] = parsers[message].from_dict(answer).to_dict()
     return result

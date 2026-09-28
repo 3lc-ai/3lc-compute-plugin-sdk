@@ -15,12 +15,13 @@ rules every one of them follows:
 - The aliases the wire carries are kept on both sides: ``node_type``/``gpu_type`` on a create
   body and a preflight query, ``node_types``/``gpu_types`` on capabilities. ``from_dict`` prefers
   the ``node_*`` name; ``to_dict`` emits both.
-- An ``extra`` field is emit-only: ``to_dict`` merges it first and typed keys win; ``from_dict``
+- An ``extra`` field is emit-only: ``to_dict`` merges it first and a typed key that is set wins; ``from_dict``
   never fills it.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -166,6 +167,10 @@ def _any_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _opt_dict(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, Mapping) else None
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -302,6 +307,16 @@ class WorkspaceRequest:
         }
 
 
+def _idle_ttl(value: Any) -> float:
+    """An idle TTL in seconds: ``0`` and negatives kept (never auto-off).
+
+    Only a finite number is read: a missing or unreadable value, ``nan`` and ``inf`` (``"inf"``
+    included) are the 1800 s default — never mapped to "never".
+    """
+    parsed = _opt_float(value)
+    return parsed if parsed is not None and math.isfinite(parsed) else 1800.0
+
+
 @dataclass
 class CreateNodeRequest:
     """What the host sends when it asks a provider to create a node.
@@ -319,6 +334,10 @@ class CreateNodeRequest:
     (a notebook server, for example) the provider exposes besides ``agent_port``. Workers on the
     node are loopback-only: the host reaches them through the agent, so no worker port is ever
     exposed or listed here.
+
+    ``idle_ttl_s`` is how long the node may sit idle before its agent turns it off; ``0`` (or
+    less) means never. Only a finite number is read: a missing or unreadable value, and ``inf``,
+    read as the 1800 s default.
 
     ``storage_id`` names the provider storage to attach (a network volume; ``""`` for the
     provider's default or none). ``workspace`` is filled for ``flavor == "workspace"`` and empty
@@ -352,7 +371,7 @@ class CreateNodeRequest:
             env=_str_dict(data.get("env")),
             agent_port=_int(data.get("agent_port"), 8800) or 8800,
             ports=_int_list(data.get("ports")),
-            idle_ttl_s=_float(data.get("idle_ttl_s"), 1800.0) or 1800.0,
+            idle_ttl_s=_idle_ttl(data.get("idle_ttl_s")),
             flavor=_str(data.get("flavor")) or "gpu",
             owner=_str(data.get("owner")),
             pricing=_str(data.get("pricing")),
@@ -789,11 +808,12 @@ class StorageItem:
 
 @dataclass
 class Region:
-    """A place storage can be created in."""
+    """A place storage can be created in. ``extra`` is emit-only passthrough (a ``country``, for example)."""
 
     id: str
     name: str = ""
     location: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Any) -> Region:
@@ -802,8 +822,9 @@ class Region:
         return cls(id=_str(d.get("id")), name=_str(d.get("name")), location=_str(d.get("location")))
 
     def to_dict(self) -> dict[str, Any]:
-        """``id`` and ``name`` always; ``location`` when set."""
-        d: dict[str, Any] = {"id": self.id, "name": self.name}
+        """``extra`` first; ``id`` and ``name`` always; ``location`` when set."""
+        d: dict[str, Any] = dict(self.extra)
+        d.update({"id": self.id, "name": self.name})
         if self.location:
             d["location"] = self.location
         return d
@@ -815,7 +836,8 @@ class StorageListing:
 
     ``to_dict`` flattens: the :class:`StorageCapabilities` keys at the top level, then
     ``storage`` and ``regions``, then ``account`` and ``region`` when set — the shape the host
-    splits into per-provider meta and items.
+    splits into per-provider meta and items. ``extra`` is emit-only passthrough, merged first (an
+    ``account`` answered even when empty, the ``subscription`` a discover listed).
     """
 
     capabilities: StorageCapabilities
@@ -823,6 +845,7 @@ class StorageListing:
     regions: list[Region] = field(default_factory=list)
     account: str = ""
     region: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> StorageListing:
@@ -838,8 +861,9 @@ class StorageListing:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """The flattened answer."""
-        d = self.capabilities.to_dict()
+        """The flattened answer; ``extra`` first, typed keys over it."""
+        d: dict[str, Any] = dict(self.extra)
+        d.update(self.capabilities.to_dict())
         d["storage"] = [i.to_dict() for i in self.storage]
         d["regions"] = [r.to_dict() for r in self.regions]
         if self.account:
@@ -928,7 +952,9 @@ class PresignRequest:
 class PresignResponse:
     """Presigned URLs for the browser.
 
-    The item dicts are browser-facing and provider-shaped; only the envelope is typed.
+    The item dicts are browser-facing and provider-shaped; only the envelope is typed. ``extra`` is
+    emit-only passthrough for the keys a provider's answer adds (``bucket``, ``account``, ``volume``,
+    ``cors``); a ``None`` value in it is emitted as ``null``.
     """
 
     expires_s: int = 0
@@ -936,6 +962,7 @@ class PresignResponse:
     downloads: list[dict[str, Any]] = field(default_factory=list)
     refused: list[dict[str, Any]] = field(default_factory=list)
     region: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> PresignResponse:
@@ -949,13 +976,14 @@ class PresignResponse:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``expires_s``, ``uploads``, ``downloads`` and ``refused`` always; ``region`` when set."""
-        d: dict[str, Any] = {
+        """``extra`` first; ``expires_s``, ``uploads``, ``downloads`` and ``refused`` always; ``region`` when set."""
+        d: dict[str, Any] = dict(self.extra)
+        d.update({
             "expires_s": self.expires_s,
             "uploads": [dict(u) for u in self.uploads],
             "downloads": [dict(u) for u in self.downloads],
             "refused": [dict(r) for r in self.refused],
-        }
+        })
         if self.region:
             d["region"] = self.region
         return d
@@ -1074,23 +1102,27 @@ class BundleRequest:
 
 @dataclass
 class GpuCatalog:
-    """The answer of ``GET /infra/gpu-catalog``: rows for the catalogue table; ``error`` says why a list is short."""
+    """The answer of ``GET /infra/gpu-catalog``: rows for the catalogue table; ``error`` says why a list is short.
+
+    ``placement`` is where the provider looked for stock: ``{}`` means anywhere and is emitted;
+    ``None`` (the default) means the provider did not say, and the key is left out.
+    """
 
     gpus: list[dict[str, Any]] = field(default_factory=list)
-    placement: dict[str, Any] = field(default_factory=dict)
+    placement: dict[str, Any] | None = None
     error: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> GpuCatalog:
         """Parse the answer."""
         return cls(
-            gpus=_dict_list(data.get("gpus")), placement=_any_dict(data.get("placement")), error=_str(data.get("error"))
+            gpus=_dict_list(data.get("gpus")), placement=_opt_dict(data.get("placement")), error=_str(data.get("error"))
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``gpus`` always; ``placement`` and ``error`` when non-empty."""
+        """``gpus`` always; ``placement`` when set (``{}`` included); ``error`` when non-empty."""
         d: dict[str, Any] = {"gpus": [dict(g) for g in self.gpus]}
-        if self.placement:
+        if self.placement is not None:
             d["placement"] = dict(self.placement)
         if self.error:
             d["error"] = self.error
@@ -1122,12 +1154,16 @@ class CpuCatalog:
 
 @dataclass
 class Datacenters:
-    """The answer of ``GET /infra/datacenters``: sites with stock of ``node_type``, and the placement in force."""
+    """The answer of ``GET /infra/datacenters``: sites with stock of ``node_type``, and the placement in force.
+
+    ``placement`` is the setting as saved (``"auto"``, ``"dc:US-NC-1"``); ``placement_effective`` what
+    it resolves to: ``{}`` means anywhere and is emitted; ``None`` (the default) leaves the key out.
+    """
 
     datacenters: list[dict[str, Any]] = field(default_factory=list)
     node_type: str = ""
     placement: str = ""
-    placement_effective: dict[str, Any] = field(default_factory=dict)
+    placement_effective: dict[str, Any] | None = None
     error: str = ""
 
     @classmethod
@@ -1137,19 +1173,22 @@ class Datacenters:
             datacenters=_dict_list(data.get("datacenters")),
             node_type=_str(data.get("node_type") or data.get("gpu_type")),
             placement=_str(data.get("placement")),
-            placement_effective=_any_dict(data.get("placement_effective")),
+            placement_effective=_opt_dict(data.get("placement_effective")),
             error=_str(data.get("error")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``datacenters`` always; ``node_type`` (and its ``gpu_type`` alias), ``placement*``, ``error`` when set."""
+        """``datacenters`` always; ``placement_effective`` when set (``{}`` included); the rest when non-empty.
+
+        ``node_type`` is emitted with its ``gpu_type`` alias.
+        """
         d: dict[str, Any] = {"datacenters": [dict(x) for x in self.datacenters]}
         if self.node_type:
             d["node_type"] = self.node_type
             d["gpu_type"] = self.node_type
         if self.placement:
             d["placement"] = self.placement
-        if self.placement_effective:
+        if self.placement_effective is not None:
             d["placement_effective"] = dict(self.placement_effective)
         if self.error:
             d["error"] = self.error

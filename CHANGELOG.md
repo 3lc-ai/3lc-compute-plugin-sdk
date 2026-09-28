@@ -54,6 +54,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lifecycle and `live_storage=True` the object listing and a transfer dry-run. Also a CLI
   (`python -m tlc_plugin_sdk.infrastructure.testing <plugin_dir>`). `FakeProvider` implements every
   facet in memory as the reference implementation.
+- **`InfrastructurePlugin.describe_error(exc)`**: the sentence an exception the provider did not
+  word is answered with (502) on every SDK-mounted route — core, facet calls, catalogs, and the
+  transfer and bundle registries' plan, start and status — and the error a registry's background
+  job records (`TransferRegistry` / `BundleRegistry` take `describe_error=`; the routes supply the
+  plugin's to a registry built without one, and coerce to text and scrub the answer of one built
+  with its own; a registry never lets a describer's failure or non-text answer strand a job). The
+  default is the exception's text scrubbed of `secret_values()`; the SDK scrubs the raw text and
+  the hook's answer, then truncates, so an override must not truncate or re-encode; a hook that
+  raises or answers `""` falls back to the scrubbed raw text. `scrub()` moves to `tlc_plugin_sdk.infrastructure.errors`
+  (`routes.scrub` still imports).
+- **`Conflict` (409)** in the provider error family: a request that clashes with the provider's
+  state (a bucket that still holds data, credentials that did not work).
+- **Emit-only `extra` on `PresignResponse`, `Region` and `StorageListing`**, as on `StorageItem`
+  and `CapabilitiesResponse`: merged into `to_dict` first, a typed key that is set wins, `from_dict` leaves it
+  empty; an explicit `None` in it is emitted as `null` (a presign's `cors`).
+- `shared.storage_bundle.default_bundle_name(url)`: the archive name for a folder when none is
+  given (the URL's last segment).
+- `legacy.secret_credential_values(credentials, descriptor)` and `legacy.has_values(credentials)`.
 - `tlc_plugin_sdk.harness.forward_for(harness)`: a host-shaped `forward(spec, method, path, ...)`
   over a harnessed plugin, so a host test can run its manager against real SDK routes;
   `PluginHarness.call` takes a raw `content=` body.
@@ -67,6 +85,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node's storage credential. Empty from an older host.
 
 ### Changed
+- **`secret()` takes `label=""` by default.** An unlabelled secret is masked, redacted and
+  scrubbed but never prompted for (not in `missing_fields` or `missing`), so it needs no
+  `required=False`. Prompts follow the settings dataclass's field order.
+- **An empty placement is emitted.** `GpuCatalog.placement` and `Datacenters.placement_effective`
+  are `dict | None = None`: `{}` means anywhere and is on the wire; only `None` leaves the key out.
+- **The bundle route leaves an unnamed archive to the registry.** It calls
+  `registry.start(url=..., name=<the request's name or "">)` and `BundleRegistry.start` (whose
+  `name` now defaults to `""`) names an empty one after the URL it is given, so a registry that
+  normalises the URL first gets a default taken from the normalised URL.
+- **Readable request credentials are no longer scrubbed from errors.** Scrubbing is fail-closed:
+  every string value of a request's credentials is scrubbed except a key `credential_descriptor()`
+  marks `secret: False` or one on the readable allowlist (`region`, `location`, `role_arn`,
+  `start_url`, `tenant_id`, `client_id`, `subscription_id`, `account`, `resource_group`); a key
+  the descriptor marks `secret: True` is always scrubbed. The descriptor is read only when an
+  error is scrubbed. Settings secrets are scrubbed as before.
+- **An empty request `credentials` object no longer hides a filled one.** The object with a
+  non-empty value wins, top-level or under `workspace`; two filled objects that differ answer 400.
+  An all-blank object alone is still passed on as given, so a provider can refuse a "use my account"
+  request that carries no key instead of falling back to its own.
+- **The conformance kit's legacy group reads `credential_descriptor()`** instead of demanding a
+  top-level `credential_keys` in capabilities: the descriptor must name a key (top-level, an
+  entered field, the sign-in's or the role's) and every key it emits must be on the capabilities
+  answer.
 - **`CreateNodeResponse` no longer carries `worker_url_template`.** A created node is reached by its
   `agent_url` alone: the host talks to the node agent, which proxies its traffic to the node's
   loopback-only workers. `CreateNodeRequest.ports` are the browser-facing app ports a provider
@@ -142,6 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to is the host's to say, and is carried in the run body.
 
 ### Fixed
+- `CreateNodeRequest.from_dict` keeps `idle_ttl_s: 0` (and negatives) — "never turn off on idle" —
+  instead of reading it as 1800; only a missing, unreadable or non-finite value defaults.
 - The worker no longer logs an `AttributeError` traceback at start-up for a plugin that
   subclasses `HubPlugin` or `InfrastructurePlugin` directly: `initialise_runtime` is a
   `ComputePlugin` hook, and is now only called when the plugin has it.

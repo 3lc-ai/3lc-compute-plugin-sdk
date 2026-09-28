@@ -57,6 +57,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     GpuCatalog,
     NodeStateResponse,
     ObjectListing,
+    OwnerCredentialsDescriptor,
     PreflightResponse,
     PresignRequest,
     PresignResponse,
@@ -532,14 +533,38 @@ class _Run:
     def legacy(self) -> None:
         if not isinstance(self.plugin, LegacyOwnerCredentialsFacet):
             return
-        keys = self.caps.get("credential_keys")
-        self.check("legacy: capabilities carry credential_keys", isinstance(keys, list) and bool(keys), f"{keys!r}")
+        try:
+            descriptor: OwnerCredentialsDescriptor | None = self.plugin.credential_descriptor()
+        except Exception as exc:
+            descriptor = None
+            self.check("legacy: credential_descriptor() answers", False, f"{type(exc).__name__}: {exc}"[:200])
+        if descriptor is not None:
+            keys = _descriptor_keys(descriptor)
+            self.check(
+                "legacy: credential_descriptor() names the keys a request's credentials carry", bool(keys), f"{keys!r}"
+            )
+            absent = sorted(k for k in descriptor.to_dict() if k not in self.caps)
+            self.check(
+                "legacy: capabilities carry the credential descriptor",
+                not absent,
+                f"missing {absent}" if absent else "",
+            )
         r = self.call("POST", "/infra/nodes/conformance-missing/terminate", json_body={})
         self.check(
             "legacy: POST /infra/nodes/{id}/terminate without credentials answers 400",
             r.status_code == 400,
             self.status_detail(r),
         )
+
+
+def _descriptor_keys(descriptor: OwnerCredentialsDescriptor) -> list[str]:
+    """Every credential key the descriptor names: top-level, the entered fields, the sign-in's, the role's."""
+    keys = [*descriptor.credential_keys, *(f.key for f in descriptor.workspace_credentials)]
+    if descriptor.login is not None:
+        keys += descriptor.login.credential_keys
+    if descriptor.role is not None and descriptor.role.field.get("key"):
+        keys.append(str(descriptor.role.field["key"]))
+    return [k for k in dict.fromkeys(keys) if k]
 
 
 def _route_checks(plugin: InfrastructurePlugin) -> tuple[list[Check], bool]:

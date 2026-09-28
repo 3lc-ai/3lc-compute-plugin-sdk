@@ -14,9 +14,11 @@ from litestar.exceptions import HTTPException
 from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.infrastructure import (
     CapabilitiesResponse,
+    Conflict,
     CreateNodeRequest,
     CreateNodeResponse,
     CreateStorageRequest,
+    GpuCatalog,
     InfrastructurePlugin,
     InvalidRequest,
     LegacyOwnerCredentialsFacet,
@@ -27,6 +29,7 @@ from tlc_plugin_sdk.infrastructure import (
     NotSupported,
     OwnerCredentialsDescriptor,
     ProviderError,
+    SettingsField,
     StorageCapabilities,
     StorageFacet,
     StorageItem,
@@ -143,6 +146,8 @@ def test_credentials_on_create_are_refused_without_the_legacy_facet(fake: Plugin
     assert fake.post("/infra/nodes", json_body=nested).status_code == 400
     r = fake.post("/infra/storage", json_body={"name": "b", "credentials": {"api_key": "k"}})
     assert r.status_code == 400
+    empty = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": {"k": ""}}
+    assert fake.post("/infra/nodes", json_body=empty).status_code == 400, "an empty object still meant 'my account'"
     malformed = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": "x"}
     r = fake.post("/infra/nodes", json_body=malformed)
     assert r.status_code == 400, "a malformed credentials value is refused for every provider"
@@ -237,6 +242,30 @@ def test_bundles_run_over_the_plugins_registry(fake: PluginHarness) -> None:
     assert fake.post("/infra/storage/bundle", json_body={}).status_code == 400
 
 
+def test_the_bundle_route_leaves_an_unnamed_archive_to_the_registry(tmp_path: Path) -> None:
+    names: list[str] = []
+
+    class Recording(FakeProvider):
+        def bundle_registry(self, url: str) -> Any:
+            registry = super().bundle_registry(url)
+            if "start" not in vars(registry):  # the fake caches one registry per bucket
+                start = registry.start
+
+                def recorded(*, url: str, name: str = "") -> dict[str, Any]:
+                    names.append(name)
+                    return start(url=url, name=name)
+
+                registry.start = recorded
+            return registry
+
+    with PluginHarness(Recording(), plugin_id="fake", config_root=tmp_path) as h:
+        assert h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train/"}).json()["name"] == "train"
+        assert h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data", "name": "all"}).json()["name"] == (
+            "all"
+        )
+    assert names == ["", "all"]
+
+
 class _ListOnly(InfrastructurePlugin, StorageFacet):
     """A storage facet that overrides only the abstract methods: everything else must answer 501."""
 
@@ -308,6 +337,7 @@ class _Raising(InfrastructurePlugin):
         (ProviderError("upstream said no"), 502),
         (InvalidRequest("bad id"), 400),
         (NotConfigured("no key"), 409),
+        (Conflict("bucket not empty"), 409),
         (NotFound("no such node"), 404),
         (NotSupported("nope"), 501),
         (ValueError("not a region"), 400),
@@ -346,6 +376,174 @@ def test_details_are_scrubbed_of_the_plugins_secrets_and_the_request_token() -> 
     assert r.json()["detail"] == "key *** and token *** rejected"
     assert scrub("a bbbb", ["", "bbbb"]) == "a ***"
     assert scrub("ghost t", ["t"]) == "ghost t", "a value too short to be a secret is left alone"
+
+
+_ARN = "arn:aws:iam::123456789012:role/x"
+
+
+def _plain(exc: Exception) -> str:
+    return "AWS refused the call." if _ARN in str(exc) else ""
+
+
+class _Describing(_Raising):
+    def describe_error(self, exc: Exception) -> str:
+        return _plain(exc)
+
+
+def test_a_conflict_answers_409_with_its_sentence() -> None:
+    plugin = _Raising()
+    plugin.exc = Conflict("The bucket is not empty. Delete its objects first.")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        r = h.get("/infra/nodes/x")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "The bucket is not empty. Delete its objects first."
+
+
+def test_describe_error_words_an_unexpected_exception_and_is_still_scrubbed() -> None:
+    plugin = _Describing()
+    plugin.exc = RuntimeError(f"AccessDenied for {_ARN} (request id 42)")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        assert h.get("/infra/nodes/x").json()["detail"] == "AWS refused the call."
+        plugin.exc = RuntimeError("hunter2 is wrong")
+        assert h.get("/infra/nodes/x").json()["detail"] == "*** is wrong", "an empty answer falls back, scrubbed"
+        plugin.exc = ProviderError(f"worded by the provider: {_ARN}")
+        r = h.get("/infra/nodes/x")
+        assert r.status_code == 502 and _ARN in r.json()["detail"], "a ProviderError keeps its own sentence"
+
+
+def test_a_describe_error_that_leaks_a_secret_or_raises_is_contained() -> None:
+    class Leaky(_Raising):
+        def describe_error(self, exc: Exception) -> str:
+            if "boom" in str(exc):
+                msg = "hook failed"
+                raise RuntimeError(msg)
+            return "the key hunter2 was refused"
+
+    plugin = Leaky()
+    plugin.exc = RuntimeError("anything")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        assert h.get("/infra/nodes/x").json()["detail"] == "the key *** was refused"
+        plugin.exc = RuntimeError("boom")
+        assert h.get("/infra/nodes/x").json()["detail"] == "boom"
+
+
+def test_the_default_describe_error_is_the_scrubbed_text() -> None:
+    assert _Raising().describe_error(RuntimeError("key hunter2")) == "key ***"
+    assert _Raising().describe_error(KeyError()) == "KeyError"
+
+
+class _DescribingFake(FakeProvider):
+    """A fake whose catalog and storage calls fail the way a cloud SDK does."""
+
+    fail_catalog = False
+
+    def describe_error(self, exc: Exception) -> str:
+        return _plain(exc)
+
+    def gpu_catalog(self, *, node_type: str = "", region: str = "") -> GpuCatalog:
+        if self.fail_catalog:
+            msg = f"DescribeInstanceTypes failed for {_ARN}"
+            raise RuntimeError(msg)
+        return super().gpu_catalog(node_type=node_type, region=region)
+
+    def transfer_registry(self, url: str) -> Any:
+        registry = super().transfer_registry(url)
+
+        def copy(src: str, dst: str) -> None:
+            msg = f"CopyObject denied for {_ARN}"
+            raise RuntimeError(msg)
+
+        registry._copy = copy
+        return registry
+
+    def bundle_registry(self, url: str) -> Any:
+        registry = super().bundle_registry(url)
+
+        def store(path: Path, name: str) -> str:
+            msg = f"PutObject denied for {_ARN}"
+            raise RuntimeError(msg)
+
+        registry._store = store
+        return registry
+
+
+def test_describe_error_covers_the_routes_and_jobs_the_sdk_drives(tmp_path: Path) -> None:
+    plugin = _DescribingFake()
+    plugin.fail_catalog = True
+    with PluginHarness(plugin, plugin_id="fake", config_root=tmp_path) as h:
+        r = h.get("/infra/gpu-catalog")
+        assert (r.status_code, r.json()["detail"]) == (502, "AWS refused the call.")
+        body = {"src_url": "fake://fake-data", "dst_url": "fake://fake-data/copy", "items": ["train/"]}
+        tid = h.post("/infra/storage/transfer", json_body=body).json()["transfer_id"]
+        transfer = _wait(h, f"/infra/storage/transfer/{tid}")
+        assert transfer["state"] == "failed"
+        assert {f["reason"] for f in transfer["failures"]} == {"AWS refused the call."}
+        bid = h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}).json()["bundle_id"]
+        bundle = _wait(h, f"/infra/storage/bundle/{bid}")
+        assert (bundle["state"], bundle["error"]) == ("failed", "AWS refused the call.")
+
+
+def test_a_registry_built_with_its_own_describer_keeps_it() -> None:
+    from tlc_plugin_sdk.shared.storage_bundle import BundleRegistry
+
+    def mine(exc: Exception) -> str:
+        return "mine"
+
+    registry = BundleRegistry(
+        list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "", describe_error=mine
+    )
+
+    class Own(FakeProvider):
+        def bundle_registry(self, url: str) -> Any:
+            return registry
+
+    with PluginHarness(Own(), plugin_id="fake") as h:
+        h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"})
+        h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"})
+    describer = registry.describe_error
+    assert getattr(describer, "own", None) is mine, "kept, wrapped once"
+    assert describer is not None and describer(RuntimeError("x")) == "mine"
+
+
+def test_a_registry_describer_of_its_own_is_scrubbed_and_coerced(tmp_path: Path) -> None:
+    class Secretive(_DescribingFake):
+        def secret_values(self) -> list[str]:
+            return ["hunter2"]
+
+        def bundle_registry(self, url: str) -> Any:
+            registry = super().bundle_registry(url)
+            if registry.describe_error is None:
+                registry.describe_error = lambda exc: f"PutObject with key hunter2 failed: {exc}"
+            return registry
+
+    with PluginHarness(Secretive(), plugin_id="fake", config_root=tmp_path) as h:
+        bid = h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}).json()["bundle_id"]
+        bundle = _wait(h, f"/infra/storage/bundle/{bid}")
+    assert bundle["state"] == "failed"
+    assert "hunter2" not in bundle["error"] and bundle["error"].startswith("PutObject with key *** failed")
+
+
+def test_a_non_str_describe_error_answer_is_coerced() -> None:
+    class Numeric(_Raising):
+        def describe_error(self, exc: Exception) -> Any:
+            return 404
+
+    plugin = Numeric()
+    plugin.exc = RuntimeError("hunter2 boom")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        assert h.get("/infra/nodes/x").json()["detail"] == "404"
+
+
+def test_a_described_error_is_scrubbed_before_it_is_truncated() -> None:
+    class Long(_Raising):
+        def describe_error(self, exc: Exception) -> str:
+            return "x" * 495 + " hunter2 tail"
+
+    plugin = Long()
+    plugin.exc = RuntimeError("anything")
+    with PluginHarness(plugin, plugin_id="raising") as h:
+        detail = h.get("/infra/nodes/x").json()["detail"]
+    assert len(detail) == 500 and "hunt" not in detail
 
 
 # ── Legacy owner-credentials facet ───────────────────────────────────────────
@@ -407,6 +605,108 @@ class _LegacyWithLogin(_Legacy):
         return {"external_id": owner}
 
 
+class _LegacyEchoing(_Legacy):
+    """Echoes every credential value in its error, the way a cloud SDK's message names a region or a role."""
+
+    def credential_descriptor(self) -> OwnerCredentialsDescriptor:
+        return OwnerCredentialsDescriptor(
+            workspace_credentials=[
+                SettingsField(key="access", label="Access id", secret=True),
+                SettingsField(key="region", label="Region"),
+            ],
+            login=LoginDescriptor(kind="k", label="Sign in", fields=[{"key": "pin", "secret": True}]),
+        )
+
+    def terminate_with_credentials(
+        self, provider_id: str, *, credentials: dict[str, Any], owner: str = ""
+    ) -> NodeStateResponse:
+        msg = " ".join(f"{k}={v}" for k, v in credentials.items())
+        raise RuntimeError(msg)
+
+
+def test_only_secret_bearing_request_credentials_are_scrubbed() -> None:
+    creds = {
+        "access": "AKIDENTIFIER",
+        "region": "us-east-1",
+        "role_arn": "arn:aws:iam::1:role/r",
+        "pin": "123456",
+        "client_secret": "cs-value",
+        "aws_session_token": "tok-value",
+        "subscription_id": "sub-1",
+    }
+    with PluginHarness(_LegacyEchoing(), plugin_id="legacy") as h:
+        r = h.post("/infra/nodes/p/terminate", json_body={"credentials": creds})
+    assert r.status_code == 502
+    assert r.json()["detail"] == (
+        "access=*** region=us-east-1 role_arn=arn:aws:iam::1:role/r pin=*** client_secret=*** "
+        "aws_session_token=*** subscription_id=sub-1"
+    )
+
+
+def test_credential_scrub_fails_closed_without_a_descriptor() -> None:
+    creds = {"aws_access_key_id": "AKIA1234", "api_key": "rp-key", "region": "eu-west-1", "account_key": "ak=="}
+    assert legacy.secret_credential_values(creds) == ["AKIA1234", "rp-key", "ak=="]
+    assert legacy.secret_credential_values(None) == []
+
+
+@pytest.mark.parametrize("key", ["sas", "connection_string", "credentials_json", "key", "passphrase", "Region"])
+def test_an_unknown_credential_key_is_scrubbed(key: str) -> None:
+    assert legacy.secret_credential_values({key: "some-value"}) == ["some-value"]
+
+
+def test_readable_credential_keys_and_descriptor_marks() -> None:
+    readable = {
+        k: f"v-{k}"
+        for k in (
+            "region",
+            "location",
+            "role_arn",
+            "start_url",
+            "tenant_id",
+            "client_id",
+            "subscription_id",
+            "account",
+            "resource_group",
+        )
+    }
+    assert legacy.secret_credential_values(readable) == []
+    descriptor = OwnerCredentialsDescriptor(
+        workspace_credentials=[
+            SettingsField(key="region", label="Region", secret=True),
+            SettingsField(key="profile", label="Profile"),
+        ],
+        login=LoginDescriptor(kind="k", label="l", fields=[{"key": "org", "secret": False}, {"key": "hint"}]),
+    )
+    creds = {"region": "r-1", "profile": "p-1", "org": "o-1", "hint": "h-1"}
+    assert legacy.secret_credential_values(creds, descriptor) == ["r-1", "h-1"], "marked secret wins; unmarked scrubs"
+
+
+def test_the_credential_descriptor_is_read_only_when_an_error_is_scrubbed() -> None:
+    reads: list[int] = []
+
+    class Counting(_LegacyEchoing):
+        def credential_descriptor(self) -> OwnerCredentialsDescriptor:
+            reads.append(1)
+            return super().credential_descriptor()
+
+        def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
+            creds = legacy.current_request_credentials() or {}
+            if creds.get("fail"):
+                msg = f"refused {creds['access']} in {creds['region']}"
+                raise RuntimeError(msg)
+            return CreateNodeResponse(provider_id="p", agent_url="http://x")
+
+    body = {"node_id": "n", "node_type": "t", "token": "tok"}
+    with PluginHarness(Counting(), plugin_id="legacy") as h:
+        ok = {**body, "credentials": {"access": "AKIDVALUE", "region": "eu-1"}}
+        assert h.post("/infra/nodes", json_body=ok).status_code == 201
+        assert reads == [], "a call that succeeds never reads the descriptor"
+        bad = {**body, "credentials": {"access": "AKIDVALUE", "region": "eu-1", "fail": "yes"}}
+        r = h.post("/infra/nodes", json_body=bad)
+    assert r.json()["detail"] == "refused *** in eu-1"
+    assert reads == [1]
+
+
 def test_legacy_routes_are_mounted_only_for_overridden_methods() -> None:
     base = {(m, p) for m, p in _paths(_Legacy()) if not p.startswith("/infra/storage") or p.endswith("/discover")}
     assert ("POST", "/infra/nodes/{provider_id:str}/terminate") in base
@@ -416,6 +716,19 @@ def test_legacy_routes_are_mounted_only_for_overridden_methods() -> None:
     assert ("POST", "/infra/login") in more
     assert ("GET", "/infra/role-setup") in more
     assert ("GET", "/infra/login/{login_id:str}") not in more, "login_poll was not overridden"
+
+
+def test_an_empty_top_level_credentials_object_does_not_hide_the_workspace_one() -> None:
+    plugin = _Legacy()
+    base = {"node_id": "n", "node_type": "t", "token": "tok"}
+    with PluginHarness(plugin, plugin_id="legacy") as h:
+        body = {**base, "credentials": {}, "workspace": {"credentials": {"api_key": "k"}}}
+        assert h.post("/infra/nodes", json_body=body).status_code == 201
+        assert h.post("/infra/nodes", json_body={**base, "credentials": {}}).status_code == 201
+        clash = {**base, "credentials": {"api_key": "a"}, "workspace": {"credentials": {"api_key": "b"}}}
+        r = h.post("/infra/nodes", json_body=clash)
+        assert r.status_code == 400 and "two different credentials" in r.json()["detail"]
+    assert [creds for creds, _ in plugin.seen] == [{"api_key": "k"}, {}]
 
 
 def test_legacy_credentials_reach_the_plugin_through_the_context_and_never_the_request() -> None:

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from tlc_plugin_sdk.contract import HubPlugin
 from tlc_plugin_sdk.infrastructure import facets as _facets
+from tlc_plugin_sdk.infrastructure.errors import scrub
 from tlc_plugin_sdk.infrastructure.types import (
     FACET_CATALOG,
     FACET_LEGACY_OWNER_CREDENTIALS,
@@ -148,6 +149,26 @@ class InfrastructurePlugin(HubPlugin):
             return self.settings.secret_values(self.settings.load())
         except Exception:
             return []
+
+    def describe_error(self, exc: Exception) -> str:
+        """The sentence a person reads for an exception the provider did not word (the 502 detail).
+
+        Every route the SDK mounts — the core, each facet's calls, the transfer and bundle
+        registries' plan, start and status, and the errors a registry's background job records —
+        answers an unexpected exception with this. The default is the exception's own text
+        scrubbed of :meth:`secret_values`; override to strip what a cloud SDK's message carries
+        (ARNs, request ids, endpoints). The route layer scrubs the result again, so an override
+        need not — and must not truncate or re-encode the text (quote, escape, base64): the SDK
+        scrubs whole secret values first and truncates after, and a cut or re-encoded secret is
+        no longer recognised.
+
+        Args:
+            exc: The exception.
+
+        Returns:
+            One or two sentences, untruncated; ``""`` falls back to the default.
+        """
+        return scrub(str(exc).strip() or type(exc).__name__, self.secret_values())
 
     def settings_view(self, settings: Any) -> dict[str, Any]:
         """What ``GET /settings`` and ``POST /settings`` answer: the redacted record.

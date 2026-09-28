@@ -15,7 +15,7 @@ opaque 500: the host writes the sentence on the node record.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, TypeVar
 
 from litestar import delete as http_delete
@@ -24,14 +24,18 @@ from litestar import post as http_post
 from litestar.exceptions import HTTPException
 
 from tlc_plugin_sdk.connections import CredentialUnavailable
-from tlc_plugin_sdk.infrastructure.errors import InvalidRequest, NotFound, ProviderError
+from tlc_plugin_sdk.infrastructure.errors import InvalidRequest, NotFound, ProviderError, scrub
 from tlc_plugin_sdk.infrastructure.facets import (
     CatalogFacet,
     LegacyOwnerCredentialsFacet,
     StorageFacet,
     WorkspaceFacet,
 )
-from tlc_plugin_sdk.infrastructure.legacy import request_credentials, strip_request_credentials
+from tlc_plugin_sdk.infrastructure.legacy import (
+    request_credentials,
+    secret_credential_values,
+    strip_request_credentials,
+)
 from tlc_plugin_sdk.infrastructure.plugin import InfrastructurePlugin
 from tlc_plugin_sdk.infrastructure.types import (
     BundleRequest,
@@ -48,6 +52,7 @@ __all__ = [
     "build_infra_handlers",
     "catalog_handlers",
     "core_handlers",
+    "describe_unexpected",
     "legacy_handlers",
     "scrub",
     "settings_handlers",
@@ -66,29 +71,50 @@ _NO_LEGACY_CREDENTIALS = "This provider takes no request credentials; act throug
 # ── The exception → HTTP mapper ────────────────────────────────────────────────
 
 
-#: A value shorter than this is not scrubbed: no key or token is that short, and replacing a
-#: one-letter "secret" everywhere would mangle every word of the sentence.
-_MIN_SECRET_LEN = 4
-
-
-def scrub(text: str, secrets: Iterable[str]) -> str:
-    """``text`` with every value in ``secrets`` (of :data:`_MIN_SECRET_LEN` characters or more) replaced by ``***``.
-
-    Args:
-        text: The message.
-        secrets: The values that must not appear in it.
-
-    Returns:
-        The scrubbed message.
-    """
-    for value in sorted({s for s in secrets if s and len(s) >= _MIN_SECRET_LEN}, key=len, reverse=True):
-        text = text.replace(value, "***")
-    return text
-
-
 def _detail(plugin: InfrastructurePlugin, exc: BaseException, extra: Iterable[str]) -> str:
     text = str(exc).strip() or type(exc).__name__
     return scrub(text, [*plugin.secret_values(), *extra])[:_DETAIL_MAX]
+
+
+def describe_unexpected(plugin: InfrastructurePlugin, exc: Exception, secrets: Iterable[str] = ()) -> str:
+    """The sentence for an exception the provider did not word: its ``describe_error``, always scrubbed.
+
+    The exception's own text is scrubbed first (it is the fallback); the hook's answer is coerced
+    to ``str`` and scrubbed of the plugin's secrets and ``secrets`` whatever it returned; a hook
+    that raises or answers nothing falls back to the scrubbed text. Truncation comes last.
+
+    Args:
+        plugin: The plugin whose hook words the error.
+        exc: The exception.
+        secrets: Request-scoped values to scrub as well.
+
+    Returns:
+        At most 500 characters.
+    """
+    values = [*plugin.secret_values(), *secrets]
+    raw = scrub(str(exc).strip() or type(exc).__name__, values)
+    try:
+        text = scrub(str(plugin.describe_error(exc) or "").strip(), values)
+    except Exception:
+        text = ""
+    return (text or raw)[:_DETAIL_MAX]
+
+
+class _ScrubbedDescriber:
+    """A registry's own ``describe_error``, its answer coerced to ``str`` and scrubbed of the plugin's secrets."""
+
+    def __init__(self, plugin: InfrastructurePlugin, own: Callable[[Exception], Any]) -> None:
+        self.plugin = plugin
+        self.own = own
+
+    def __call__(self, exc: Exception) -> str:
+        values = self.plugin.secret_values()
+        raw = scrub(str(exc).strip() or type(exc).__name__, values)
+        try:
+            text = scrub(str(self.own(exc) or "").strip(), values)
+        except Exception:
+            text = ""
+        return text or raw
 
 
 def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterable[str] = ()) -> T:
@@ -99,7 +125,9 @@ def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterab
     :class:`~tlc_plugin_sdk.shared.settings.SettingsUnreadable` 409; ``ValueError`` (the transfer
     engine's ``TransferError`` included) and ``TypeError`` 400;
     :class:`~tlc_plugin_sdk.connections.CredentialUnavailable` 424; ``NotImplementedError`` 501;
-    anything else 502. Every detail is the exception's own sentence, scrubbed of the plugin's
+    anything else 502 with the sentence the plugin's
+    :meth:`~tlc_plugin_sdk.infrastructure.InfrastructurePlugin.describe_error` makes of it. Every
+    other detail is the exception's own sentence. Each is scrubbed of the plugin's
     :meth:`~tlc_plugin_sdk.infrastructure.InfrastructurePlugin.secret_values` and ``secrets``.
 
     Args:
@@ -130,7 +158,7 @@ def answer(plugin: InfrastructurePlugin, fn: Callable[[], T], *, secrets: Iterab
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=_detail(plugin, exc, secrets)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=_detail(plugin, exc, secrets)) from exc
+        raise HTTPException(status_code=502, detail=describe_unexpected(plugin, exc, secrets)) from exc
 
 
 def _job_id(value: str, what: str) -> str:
@@ -154,10 +182,34 @@ def _split_legacy(
     return body, credentials, provider_configs
 
 
-def _secret_strings(credentials: dict[str, Any] | None) -> list[str]:
-    if not credentials:
-        return []
-    return [v for v in credentials.values() if isinstance(v, str) and v]
+class _CredentialSecrets:
+    """The secret-bearing values of request credentials, worked out only when an error is scrubbed.
+
+    Iterable any number of times; ``credential_descriptor()`` is read on the first iteration only,
+    so a call that succeeds never loads it.
+    """
+
+    def __init__(self, plugin: InfrastructurePlugin, credentials: dict[str, Any] | None, *also: str) -> None:
+        self._plugin = plugin
+        self._credentials = credentials
+        self._also = [a for a in also if a]
+        self._values: list[str] | None = None
+
+    def __iter__(self) -> Iterator[str]:
+        if self._values is None:
+            descriptor = None
+            if self._credentials and isinstance(self._plugin, LegacyOwnerCredentialsFacet):
+                try:
+                    descriptor = self._plugin.credential_descriptor()
+                except Exception:
+                    descriptor = None
+            self._values = [*self._also, *secret_credential_values(self._credentials, descriptor)]
+        return iter(self._values)
+
+
+def _secret_strings(plugin: InfrastructurePlugin, credentials: dict[str, Any] | None) -> _CredentialSecrets:
+    """The secret-bearing values of request credentials (a region or a role ARN stays readable), lazily."""
+    return _CredentialSecrets(plugin, credentials)
 
 
 # ── Core ───────────────────────────────────────────────────────────────────────
@@ -205,7 +257,7 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             with request_credentials(credentials, provider_configs, owner=req.owner):
                 return plugin.create_node(req).to_dict()
 
-        return answer(plugin, run, secrets=[req.token, *_secret_strings(credentials)])
+        return answer(plugin, run, secrets=_CredentialSecrets(plugin, credentials, req.token))
 
     @http_get("/infra/nodes/{provider_id:str}", sync_to_thread=True)
     def _node_state(provider_id: str, diagnostics: bool = False) -> dict[str, Any]:
@@ -243,7 +295,19 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     transfer_registries: list[Any] = []
     bundle_registries: list[Any] = []
 
+    def job_error(exc: Exception) -> str:
+        # What a registry's background job records: a worded error keeps its sentence, like on a route.
+        if isinstance(exc, (ProviderError, ValueError)):
+            return _detail(plugin, exc, ())
+        return describe_unexpected(plugin, exc)
+
     def remember(registries: list[Any], registry: Any) -> None:
+        own = getattr(registry, "describe_error", False)
+        if own is None:
+            registry.describe_error = job_error
+        elif callable(own) and own is not job_error and not isinstance(own, _ScrubbedDescriber):
+            # A describer the provider built the registry with keeps its words, scrubbed like the routes'.
+            registry.describe_error = _ScrubbedDescriber(plugin, own)
         if not any(r is registry for r in registries):
             registries.append(registry)
 
@@ -263,7 +327,7 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             with request_credentials(credentials, provider_configs, owner=req.owner):
                 return facet.create_storage(req).to_dict()
 
-        return answer(plugin, run, secrets=_secret_strings(credentials))
+        return answer(plugin, run, secrets=_secret_strings(plugin, credentials))
 
     @http_delete("/infra/storage/{storage_id:str}", status_code=200, sync_to_thread=True)
     def _delete_storage(storage_id: str) -> dict[str, Any]:
@@ -357,8 +421,8 @@ def storage_handlers(plugin: InfrastructurePlugin) -> list[Any]:
                 raise InvalidRequest(msg)
             registry = facet.bundle_registry(req.url)
             remember(bundle_registries, registry)
-            name = req.name or req.url.rstrip("/").rsplit("/", 1)[-1]
-            return dict(registry.start(url=req.url, name=name))
+            # No name: the registry names the archive after the URL it bundles, once it has normalised it.
+            return dict(registry.start(url=req.url, name=req.name))
 
         return answer(plugin, run)
 
@@ -500,7 +564,7 @@ def legacy_handlers(plugin: InfrastructurePlugin) -> list[Any]:
                 raise InvalidRequest(msg)
             return facet.terminate_with_credentials(provider_id, credentials=credentials, owner=owner).to_dict()
 
-        return answer(plugin, run, secrets=_secret_strings(credentials))
+        return answer(plugin, run, secrets=_secret_strings(plugin, credentials))
 
     @http_post("/infra/storage/discover", sync_to_thread=True)
     def _discover_storage(data: dict[str, Any]) -> dict[str, Any]:
@@ -512,7 +576,7 @@ def legacy_handlers(plugin: InfrastructurePlugin) -> list[Any]:
                 raise InvalidRequest(msg)
             return facet.discover_storage(credentials=credentials, owner=owner).to_dict()
 
-        return answer(plugin, run, secrets=_secret_strings(credentials))
+        return answer(plugin, run, secrets=_secret_strings(plugin, credentials))
 
     handlers: list[Any] = [_terminate_with_credentials, _discover_storage]
 
