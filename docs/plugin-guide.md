@@ -625,11 +625,12 @@ an explicit `None` in it is emitted as `null`, and `from_dict` leaves it empty.
 
 | Route | Request | Answer |
 |---|---|---|
-| `GET /infra/capabilities` | — | `CapabilitiesResponse`: `provider`, `node_types`, `flavors` (`["gpu"]`, or `["gpu", "workspace"]`), `pricing` (`["on_demand", "spot"]`; the host assumes on-demand when absent), `ready`, `missing`, `missing_fields` (what to ask a person for), `node_type_label`, `region`, `workspace_fields`; `storage` and `facets` are filled by the SDK from your class's facets — an author-set value of either is overwritten; `extra` passes provider-private keys through to your own fragment |
+| `GET /infra/capabilities` | — | `CapabilitiesResponse`: `provider`, `node_types`, `flavors` (`["gpu"]`, or `["gpu", "workspace"]`), `pricing` (`["on_demand", "spot"]`; the host assumes on-demand when absent), `ready`, `missing`, `missing_fields` (what to ask a person for), `node_type_label`, `region`, `workspace_fields`; `requires_connection` (true when a node acts on an external account the request must name: a host that takes its Connections from the Config Service then refuses a create without one); `storage` and `facets` are filled by the SDK from your class's facets — an author-set value of either is overwritten; `extra` passes provider-private keys through to your own fragment |
 | `GET /infra/preflight?node_type=&datacenter=` | — | `PreflightResponse`: `ok`, `checks[]` (`name`, `ok`, `level`, `detail`), `summary` |
 | `POST /infra/nodes` | `CreateNodeRequest`: `node_id`, `node_type`, `token`, `env`, `agent_port`, `ports`, `idle_ttl_s` (`0` or less = never turn off on idle; only a finite number is read — a missing or unreadable value, or `inf`, is 1800), `flavor`, `owner`, `pricing` (`""` = your configured default), `storage_id`, `compute_spec`, `wheelhouse`, `project_storage`, `workspace` (a `WorkspaceRequest`; empty for a GPU node) | `CreateNodeResponse`: `provider_id`, `agent_url` (a GPU node) or `services` (a workspace: `object_service_url`, `compute_service_url`), `hourly_rate`, `pricing`, `managed_by` (`"owner"` when the node lives in the requester's own account), `token`, `detail`. The SDK answers 201; the host accepts 200 and 201 |
 | `GET /infra/nodes/{id}` | `?diagnostics=true` for `node_diagnostics` | `NodeStateResponse`: `state` (`pending`, `running`, `exited`, `terminated`, `gone`, `unknown`), `detail`, and with diagnostics `bootstrap_history`, `bootstrap_detail`, `bootstrap_failed` (`None` when the console could not be read) |
 | `DELETE /infra/nodes/{id}` | — | `NodeStateResponse`; idempotent: a repeated delete answers `terminated` or `gone` |
+| `GET /infra/connection/check` | a Connection in `x-3lc-connection` (400 without one) | `ConnectionCheckResponse`: `identity` (who the Connection acts as, `""` when not asked), `checked[]`. The default (`connection_check()`) answers `{"identity": "", "checked": ["resolve"]}`: reaching it means the binding resolved. Override to ask the provider who the credential is |
 
 The host refuses a request for any `flavor` or `pricing` the capabilities did not declare, so a
 plugin never guesses a default. Every create request carries `flavor` and `pricing`.
@@ -747,6 +748,13 @@ credential = connections.current_credential()  # Ambient | AwsSession | None
   provider.
 - A malformed or repeated header answers **400**; a binding the plugin cannot resolve answers
   **424** with the resolver's reason. Neither reaches your method.
+- **What the Connection is used for.** A host may add the host-owned `x-3lc-connection-use`
+  header (`{resource_id, source_identity}`: the node the call is about, and the person it acts
+  for). `connections.current_use()` returns it as a `ConnectionUse` (or `None`), in your method
+  and already inside a resolver. `source_identity` is the person's user id on calls a person
+  asked for (creating a node, verifying a Connection) and empty on the host's own cleanup calls.
+  The AWS resolver names the role session `3lc-<resource_id>` and sets `SourceIdentity` when one
+  is given, so the customer's CloudTrail says which node and, for a person's call, whose.
 
 Resolved credentials live for the request only; don't cache them in settings or on disk. The
 header is host-owned: a host strips any copy a caller sends, so a fragment can never choose the

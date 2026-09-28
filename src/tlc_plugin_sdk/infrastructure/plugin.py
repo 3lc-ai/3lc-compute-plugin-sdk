@@ -33,6 +33,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     FACET_STORAGE,
     FACET_WORKSPACES,
     CapabilitiesResponse,
+    ConnectionCheckResponse,
     CreateNodeRequest,
     CreateNodeResponse,
     NodeStateResponse,
@@ -125,6 +126,16 @@ class InfrastructurePlugin(HubPlugin):
         override to run provider-specific checks.
         """
         return PreflightResponse(ok=True, summary="no preflight checks")
+
+    def connection_check(self) -> ConnectionCheckResponse:
+        """Who the request's Connection acts as (``GET /infra/connection/check``).
+
+        Runs only with a Connection on the request, after the SDK resolved it: the default
+        reports just that. Override to ask the provider who the resolved credential is (the AWS
+        plugin: ``sts:GetCallerIdentity``). A failure raises like any handler (a refused role is
+        already a 424 before this runs).
+        """
+        return ConnectionCheckResponse(checked=["resolve"])
 
     def node_diagnostics(self, provider_id: str) -> NodeStateResponse:
         """The node's state with startup diagnostics (``GET /infra/nodes/{id}?diagnostics=true``).

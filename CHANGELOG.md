@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **What a Connection is used for, and a check of it.** The host-owned `x-3lc-connection-use`
+  header (`CONNECTION_USE_HEADER`, `{resource_id, source_identity}`) reaches a resolver and the
+  handler as `connections.current_use()` (`ConnectionUse`, or `None`); malformed answers 400. A new
+  core route `GET /infra/connection/check` runs the plugin's `connection_check()` under the
+  request's Connection (400 without one) and answers `ConnectionCheckResponse`
+  (`identity`, `checked[]`); the default reports that the binding resolved.
+- **`CapabilitiesResponse.requires_connection`.** A provider whose nodes act on an external account
+  the request must name sets it; a host that takes its Connections from the Config Service refuses
+  to create such a node without a Connection. Emitted only when true.
 - **Facets: an infrastructure plugin opts into a surface by subclassing.** `StorageFacet`,
   `CatalogFacet`, `WorkspaceFacet` and the legacy `LegacyOwnerCredentialsFacet` are mixins next
   to `InfrastructurePlugin`; the base mounts each facet's routes and lists its id in the new

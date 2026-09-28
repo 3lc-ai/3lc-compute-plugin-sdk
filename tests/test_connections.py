@@ -13,11 +13,14 @@ from litestar import get
 from tlc_plugin_sdk import connections
 from tlc_plugin_sdk.connections import (
     CONNECTION_HEADER,
+    CONNECTION_USE_HEADER,
     Ambient,
     AwsSession,
     ConnectionBinding,
+    ConnectionUse,
     CredentialUnavailable,
     encode_binding,
+    encode_use,
     register_resolver,
 )
 from tlc_plugin_sdk.contract import HubPlugin
@@ -27,8 +30,10 @@ from tlc_plugin_sdk.harness import PluginHarness
 def _describe() -> dict[str, Any]:
     binding = connections.current_connection()
     credential = connections.current_credential()
+    use = connections.current_use()
     return {
         "connection": binding.id if binding else None,
+        "use": [use.resource_id, use.source_identity] if use else None,
         "credential": type(credential).__name__ if credential else None,
         "region": getattr(credential, "region", None),
         "session_token": getattr(credential, "session_token", None),
@@ -71,6 +76,7 @@ def _header(kind: str, **metadata: Any) -> dict[str, str]:
 def test_no_header_means_no_connection(harness: PluginHarness) -> None:
     assert harness.get("/threaded").json() == {
         "connection": None,
+        "use": None,
         "credential": None,
         "region": None,
         "session_token": None,
@@ -80,7 +86,13 @@ def test_no_header_means_no_connection(harness: PluginHarness) -> None:
 @pytest.mark.parametrize("route", ["/threaded", "/async"])
 def test_ambient_resolves_in_the_sdk_for_sync_and_async_handlers(harness: PluginHarness, route: str) -> None:
     body = harness.get(route, headers=_header("ambient", region="eu-north-1")).json()
-    assert body == {"connection": "conn-1", "credential": "Ambient", "region": "eu-north-1", "session_token": None}
+    assert body == {
+        "connection": "conn-1",
+        "use": None,
+        "credential": "Ambient",
+        "region": "eu-north-1",
+        "session_token": None,
+    }
 
 
 def test_nothing_leaks_into_the_next_request(harness: PluginHarness) -> None:
@@ -137,3 +149,35 @@ def test_session_credentials_do_not_print_their_secret() -> None:
     assert "very-secret" not in text
     assert "'tok'" not in text
     assert "AKIAABCDEFGH" not in text
+
+
+def _use(resource_id: str = "node-1", source_identity: str = "ada@example.com") -> dict[str, str]:
+    return {CONNECTION_USE_HEADER: encode_use(ConnectionUse(resource_id, source_identity))}
+
+
+@pytest.mark.parametrize("route", ["/threaded", "/async"])
+def test_the_use_reaches_the_resolver_and_the_handler(
+    harness: PluginHarness, clean_resolvers: None, route: str
+) -> None:
+    seen: list[ConnectionUse | None] = []
+
+    def assume(binding: ConnectionBinding) -> AwsSession:
+        seen.append(connections.current_use())
+        return AwsSession("AKIA123", "secret", "token")
+
+    register_resolver("aws", "KEYLESS", assume)
+    body = harness.get(route, headers={**_header("KEYLESS"), **_use()}).json()
+    assert seen == [ConnectionUse("node-1", "ada@example.com")]
+    assert body["use"] == ["node-1", "ada@example.com"]
+    assert harness.get(route, headers=_header("AMBIENT")).json()["use"] is None, "nothing leaks"
+
+
+def test_a_use_without_a_connection_is_ignored(harness: PluginHarness) -> None:
+    assert harness.get("/threaded", headers=_use()).json()["use"] is None
+
+
+@pytest.mark.parametrize("value", ["not json", "[]", '{"resource_id": 7}'])
+def test_a_malformed_use_is_400(harness: PluginHarness, value: str) -> None:
+    response = harness.get("/threaded", headers={**_header("AMBIENT"), CONNECTION_USE_HEADER: value})
+    assert response.status_code == 400
+    assert CONNECTION_USE_HEADER in response.json()["detail"]

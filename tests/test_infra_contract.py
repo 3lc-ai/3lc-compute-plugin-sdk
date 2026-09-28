@@ -245,6 +245,56 @@ def stub_client() -> TestClient[Litestar]:
     return TestClient(app)
 
 
+def _checking_client(plugin: InfrastructurePlugin) -> TestClient[Litestar]:
+    from tlc_plugin_sdk.connections import connection_middleware
+
+    return TestClient(Litestar(route_handlers=plugin.get_route_handlers(), middleware=[connection_middleware]))
+
+
+class TestRequiresConnection:
+    def test_round_trips_and_is_omitted_when_false(self) -> None:
+        from tlc_plugin_sdk.infrastructure import CapabilitiesResponse
+
+        assert "requires_connection" not in CapabilitiesResponse(provider="p").to_dict()
+        wire = CapabilitiesResponse(provider="p", requires_connection=True).to_dict()
+        assert wire["requires_connection"] is True
+        assert CapabilitiesResponse.from_dict(wire).requires_connection is True
+        assert CapabilitiesResponse.from_dict({"provider": "p"}).requires_connection is False
+
+
+class TestConnectionCheck:
+    def test_default_reports_that_the_binding_resolved(self) -> None:
+        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+
+        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+        with _checking_client(_StubProvider()) as client:
+            resp = client.get("/infra/connection/check", headers=header)
+        assert (resp.status_code, resp.json()) == (200, {"identity": "", "checked": ["resolve"]})
+
+    def test_without_a_connection_there_is_nothing_to_check(self) -> None:
+        with _checking_client(_StubProvider()) as client:
+            resp = client.get("/infra/connection/check")
+        assert resp.status_code == 400
+        assert "x-3lc-connection" in resp.json()["detail"]
+
+    def test_a_provider_reports_who_the_connection_is(self) -> None:
+        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+        from tlc_plugin_sdk.infrastructure import ConnectionCheckResponse
+
+        class Checking(_StubProvider):
+            def connection_check(self) -> ConnectionCheckResponse:
+                return ConnectionCheckResponse(
+                    identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
+                )
+
+        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+        with _checking_client(Checking()) as client:
+            body = client.get("/infra/connection/check", headers=header).json()
+        assert ConnectionCheckResponse.from_dict(body) == ConnectionCheckResponse(
+            identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
+        )
+
+
 class TestDefaultRouteHandlers:
     def test_capabilities(self, stub_client: TestClient[Litestar]) -> None:
         resp = stub_client.get("/infra/capabilities")
@@ -324,7 +374,7 @@ class TestDefaultRouteHandlers:
         plugin = ExtendedProvider()
         plugin.id = "extended"
         handlers = plugin.get_route_handlers()
-        assert len(handlers) == 6  # 5 infra + 1 custom
+        assert len(handlers) == 7  # 6 infra + 1 custom
         app = Litestar(route_handlers=handlers)
         with TestClient(app) as client:
             resp = client.get("/custom")
