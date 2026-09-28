@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   core route `GET /infra/connection/check` runs the plugin's `connection_check()` under the
   request's Connection (400 without one) and answers `ConnectionCheckResponse`
   (`identity`, `checked[]`); the default reports that the binding resolved.
+- **`CapabilitiesResponse.requires_connection`.** A provider whose nodes act on an external account
+  the request must name sets it; a host that takes its Connections from the Config Service refuses
+  to create such a node without a Connection. Emitted only when true.
 - **Facets: an infrastructure plugin opts into a surface by subclassing.** `StorageFacet`,
   `CatalogFacet`, `WorkspaceFacet` and the legacy `LegacyOwnerCredentialsFacet` are mixins next
   to `InfrastructurePlugin`; the base mounts each facet's routes and lists its id in the new

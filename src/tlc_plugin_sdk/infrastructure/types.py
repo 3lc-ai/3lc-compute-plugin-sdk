@@ -709,6 +709,12 @@ class CapabilitiesResponse:
     author-set value is overwritten. ``lists_workspaces`` reads ``True`` when the plugin has the
     workspaces facet. ``extra`` carries provider-specific data for the plugin's own fragment and
     is passed through unchanged.
+
+    ``requires_connection`` says a node from this provider acts on an external account the
+    request must name (a Connection): without one, the plugin would act as the deployment's own
+    identity. A host that takes its Connections from the Config Service refuses to create such a
+    node without one. A provider that reaches machines by other means (ssh to a known host)
+    leaves it ``False``.
     """
 
     provider: str
@@ -724,6 +730,7 @@ class CapabilitiesResponse:
     storage: StorageCapabilities | None = None
     facets: list[str] = field(default_factory=list)
     lists_workspaces: bool = False
+    requires_connection: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
     #: Whether the answer carried a ``facets`` key at all (``from_dict`` sets it): a host tells
     #: "no facets" from "a provider that predates facets" by this.
@@ -750,6 +757,7 @@ class CapabilitiesResponse:
             storage=StorageCapabilities.from_dict(storage) if isinstance(storage, Mapping) else None,
             facets=[f for f in _str_list(data.get("facets")) if f in FACETS],
             lists_workspaces=_bool(data.get("lists_workspaces")),
+            requires_connection=_bool(data.get("requires_connection")),
             facets_reported="facets" in data,
         )
 
@@ -758,7 +766,7 @@ class CapabilitiesResponse:
 
         ``extra`` first, typed keys over it; ``facets`` always (``[]`` for none); ``pricing``,
         ``node_type_label``, ``region``, ``workspace_fields``, ``storage`` only when set;
-        ``lists_workspaces`` only when true.
+        ``lists_workspaces`` and ``requires_connection`` only when true.
         """
         d: dict[str, Any] = dict(self.extra)
         d.update({
@@ -783,6 +791,8 @@ class CapabilitiesResponse:
             d["storage"] = self.storage.to_dict()
         if self.lists_workspaces or FACET_WORKSPACES in self.facets:
             d["lists_workspaces"] = True
+        if self.requires_connection:
+            d["requires_connection"] = True
         return d
 
 

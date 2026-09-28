@@ -251,6 +251,17 @@ def _checking_client(plugin: InfrastructurePlugin) -> TestClient[Litestar]:
     return TestClient(Litestar(route_handlers=plugin.get_route_handlers(), middleware=[connection_middleware]))
 
 
+class TestRequiresConnection:
+    def test_round_trips_and_is_omitted_when_false(self) -> None:
+        from tlc_plugin_sdk.infrastructure import CapabilitiesResponse
+
+        assert "requires_connection" not in CapabilitiesResponse(provider="p").to_dict()
+        wire = CapabilitiesResponse(provider="p", requires_connection=True).to_dict()
+        assert wire["requires_connection"] is True
+        assert CapabilitiesResponse.from_dict(wire).requires_connection is True
+        assert CapabilitiesResponse.from_dict({"provider": "p"}).requires_connection is False
+
+
 class TestConnectionCheck:
     def test_default_reports_that_the_binding_resolved(self) -> None:
         from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
