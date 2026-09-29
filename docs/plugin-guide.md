@@ -475,6 +475,12 @@ PLUGIN_API = {
 - **`compute` / `objects` / `data` / `computeFetch` / `navigate` / `getIcon` / `container`** are
   part of the declared surface but rarely used directly by `ui.html` (plugins reach data through
   `authFetch`); they are documented in the `.d.ts` for completeness.
+- **`createNode(providerId, request?, onNote?)`** (optional) is the host's node-create flow for an
+  infrastructure plugin page's own "Spin up" button: missing settings, preflight, the Connection
+  chooser, the create and its error dialog. Pass the page's create fields in `request`; the host
+  owns `plugin_id` and `connection_id`. It resolves the node, or `false` when cancelled or refused.
+  Feature-detect it and fall back to `POST /api/infra/nodes` on hosts that predate it; that direct
+  post carries no Connection, so a host that requires one refuses it.
 - **`location`** (SDK 0.2+) exposes the host's shared location renderers (`TlcLocationApi`):
   chips and labels for the project roots / scan URLs that tables, runs, and projects from
   `PLUGIN_API.data` resolve to (their `location` / `locations` fields, also 0.2). Every renderer
