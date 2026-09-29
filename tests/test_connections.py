@@ -19,6 +19,7 @@ from tlc_plugin_sdk.connections import (
     ConnectionBinding,
     ConnectionUse,
     CredentialUnavailable,
+    SecretToken,
     encode_binding,
     encode_use,
     register_resolver,
@@ -149,6 +150,16 @@ def test_session_credentials_do_not_print_their_secret() -> None:
     assert "very-secret" not in text
     assert "'tok'" not in text
     assert "AKIAABCDEFGH" not in text
+
+
+def test_secret_token_repr_and_from_wire_hide_and_tolerate() -> None:
+    token = SecretToken.from_wire({"connection_id": "c-1", "provider": "huggingface", "secret": "hf_value", "x": 1})
+    assert token == SecretToken(provider="huggingface", secret="hf_value", connection_id="c-1")
+    assert repr(token) == "SecretToken(provider='huggingface', connection_id='c-1', secret='***')"
+    assert "hf_value" not in repr(token) and "hf_value" not in str(token)
+    for junk in (None, "hf_value", [], {}, {"secret": ""}, {"secret": 7}, {"provider": "huggingface"}):
+        assert SecretToken.from_wire(junk) is None
+    assert SecretToken.from_wire({"secret": "v", "provider": 3}) == SecretToken(provider="", secret="v")
 
 
 def _use(resource_id: str = "node-1", source_identity: str = "ada@example.com") -> dict[str, str]:
