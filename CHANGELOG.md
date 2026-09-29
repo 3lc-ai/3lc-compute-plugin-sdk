@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A job's granted token.** The host-owned run-body key `_credential`
+  (`connections.CREDENTIAL_KEY`, `{connection_id, provider, secret}`) is popped by the worker and
+  exposed for `run_job`'s lifetime as `ctx.credential` / `connections.current_credential()`
+  (`SecretToken`, whose repr masks the value) and, for `huggingface`, as `HF_TOKEN`
+  (`connections.ENV_VAR_BY_PROVIDER`); both are restored afterwards
+  (`connections.bound_credential`). `JobContext` gains the keyword `credential`.
 - **`PLUGIN_API.createNode(providerId, request?, onNote?)`** (optional bridge member). An
   infrastructure plugin page's "Spin up" can run the host's node-create flow (missing settings,
   preflight, the Connection chooser, the create and its error dialog) instead of posting to
