@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`PLUGIN_API.createNode(providerId, request?, onNote?)`** (optional bridge member). An
+  infrastructure plugin page's "Spin up" can run the host's node-create flow (missing settings,
+  preflight, the Connection chooser, the create and its error dialog) instead of posting to
+  `/api/infra/nodes` itself, so nodes created from a provider page act on a Connection like any
+  other. Resolves the node, or `false`. Feature-detect it; older hosts do not define it.
 - **What a Connection is used for, and a check of it.** The host-owned `x-3lc-connection-use`
   header (`CONNECTION_USE_HEADER`, `{resource_id, source_identity}`) reaches a resolver and the
   handler as `connections.current_use()` (`ConnectionUse`, or `None`); malformed answers 400. A new

@@ -320,6 +320,19 @@ export interface PluginApi {
   }): string;
 
   /**
+   * Create a node through the host's own flow, for an infrastructure plugin page's "Spin up": the
+   * host asks for any settings the provider reports missing, runs its preflight, picks the Connection
+   * (the only one offered, or the person chooses), creates the node, and shows a refusal in its own
+   * dialog. `request` carries the page's create fields (e.g. `gpu_type`, `pricing`); the host sets
+   * `plugin_id` to `providerId` and owns `connection_id`. `onNote` receives progress lines.
+   *
+   * Resolves the created node record, or `false` when the person cancels or compute refuses.
+   * Optional: older hosts do not define it; a page that finds it absent posts to
+   * `POST /api/infra/nodes` itself.
+   */
+  createNode?(providerId: string, request?: { [field: string]: unknown }, onNote?: (text: string) => void): Promise<object | false>;
+
+  /**
    * The Dashboard link for a table or a run, built the way every Hub page builds it — the base this
    * browser is on, plus `object_service`, so the Dashboard opens against this deployment's data rather
    * than its own default. Prefer it over concatenating `getConfig('dashboard_url')`, which produces a
