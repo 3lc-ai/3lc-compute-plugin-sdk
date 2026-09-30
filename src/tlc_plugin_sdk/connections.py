@@ -13,7 +13,7 @@ plugin's route handler runs and exposes both for the duration of that one reques
     from tlc_plugin_sdk import connections
 
     binding = connections.current_connection()  # ConnectionBinding | None
-    credential = connections.current_credential()  # Ambient | AwsSession | None
+    credential = connections.current_credential()  # Ambient | AwsSession | SecretToken | None
 
 Kinds:
 
@@ -26,6 +26,12 @@ Kinds:
     Delegated identity (for AWS: assume the customer's role with the stored external id, using the
     deployment's own identity). Resolved by a provider resolver the plugin registers with
     :func:`register_resolver` — the SDK itself carries no provider SDK.
+``SECRET``
+    A stored value (a Hugging Face token). Never sent in a header: the host obtains it for one job
+    and puts it in the run body's host-owned :data:`CREDENTIAL_KEY`; the worker pops it and, for
+    the duration of ``run_job``, exposes it as a :class:`SecretToken` from
+    :func:`current_credential` (and ``ctx.credential``) and, when the provider has one, as its
+    environment variable (:data:`ENV_VAR_BY_PROVIDER`: ``huggingface`` → ``HF_TOKEN``).
 
 The header is **host-owned**: the host sets it and must strip any copy a caller sent. A request
 without it resolves to nothing, and the plugin behaves exactly as before Connections.
@@ -39,21 +45,29 @@ trail says which node and whose.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
-from collections.abc import Callable
+import os
+import threading
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
 __all__ = [
     "CONNECTION_HEADER",
     "CONNECTION_USE_HEADER",
+    "CREDENTIAL_KEY",
+    "ENV_VAR_BY_PROVIDER",
     "Ambient",
     "AwsSession",
     "ConnectionBinding",
     "ConnectionUse",
+    "CredentialInUse",
     "CredentialUnavailable",
     "ResolvedCredential",
+    "SecretToken",
+    "bound_credential",
     "connection_middleware",
     "current_connection",
     "current_credential",
@@ -72,10 +86,21 @@ CONNECTION_USE_HEADER = "x-3lc-connection-use"
 
 KIND_AMBIENT = "AMBIENT"
 KIND_KEYLESS = "KEYLESS"
+KIND_SECRET = "SECRET"
+
+CREDENTIAL_KEY = "_credential"
+"""The host-owned top-level run-body key carrying a job's :class:`SecretToken`; popped by the worker."""
+
+ENV_VAR_BY_PROVIDER: dict[str, str] = {"huggingface": "HF_TOKEN"}
+"""The environment variable a provider's own libraries read a token from, set while a job runs."""
 
 
 class CredentialUnavailable(Exception):
     """A Connection could not be resolved into a credential (unknown kind, no resolver, a refusal)."""
+
+
+class CredentialInUse(RuntimeError):
+    """Another job's different token is bound in this process; the job must not run with either."""
 
 
 @dataclass(frozen=True)
@@ -220,7 +245,46 @@ class AwsSession:
         return f"AwsSession(access_key_id={key!r}, region={self.region!r}, expires_at={self.expires_at!r})"
 
 
-ResolvedCredential = Ambient | AwsSession
+@dataclass(frozen=True, repr=False)
+class SecretToken:
+    """A SECRET Connection's value, granted to one job.
+
+    Attributes:
+        provider: What the token is for (``huggingface``).
+        secret: The value. Never in a repr.
+        connection_id: The Connection it came from.
+    """
+
+    provider: str
+    secret: str
+    connection_id: str = ""
+
+    def __repr__(self) -> str:
+        return f"SecretToken(provider={self.provider!r}, connection_id={self.connection_id!r}, secret='***')"
+
+    @classmethod
+    def from_wire(cls, raw: object) -> SecretToken | None:
+        """Build a token from the run body's :data:`CREDENTIAL_KEY` value, tolerating anything.
+
+        Args:
+            raw: ``{connection_id, provider, secret}`` as the host sends it, or anything else.
+
+        Returns:
+            The token; ``None`` unless ``raw`` is a mapping with a non-empty string ``secret``.
+        """
+        if not isinstance(raw, dict):
+            return None
+        secret, provider, connection_id = (raw.get(k) for k in ("secret", "provider", "connection_id"))
+        if not isinstance(secret, str) or not secret:
+            return None
+        return cls(
+            provider=provider if isinstance(provider, str) else "",
+            secret=secret,
+            connection_id=connection_id if isinstance(connection_id, str) else "",
+        )
+
+
+ResolvedCredential = Ambient | AwsSession | SecretToken
 Resolver = Callable[[ConnectionBinding], ResolvedCredential]
 
 _RESOLVERS: dict[tuple[str, str], Resolver] = {}
@@ -279,8 +343,74 @@ def current_connection() -> ConnectionBinding | None:
 
 
 def current_credential() -> ResolvedCredential | None:
-    """The resolved credential for the current request, or ``None`` when it names no Connection."""
+    """The resolved credential for the current request or job, or ``None`` when it names no Connection."""
     return _CREDENTIAL.get()
+
+
+class _ProcessBinding:
+    """The one token bound in this process, how many jobs hold it, and the env value it replaced."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.credential: SecretToken | None = None
+        self.holders = 0
+        self.previous: str | None = None
+
+
+_BINDING = _ProcessBinding()
+
+
+@contextlib.contextmanager
+def bound_credential(credential: SecretToken | None) -> Iterator[None]:
+    """Expose a job's token for the ``with`` block: :func:`current_credential` and its env var.
+
+    The worker wraps ``run_job`` in this on the job's own thread, so the context variable is the
+    job's alone. The environment variable is process-wide, so one token is bound per process at a
+    time: binding the same token again nests, a different one raises :class:`CredentialInUse`
+    and changes nothing. The previous value of the variable (or its absence) is restored when the
+    last holder exits. ``None`` changes nothing.
+
+    Args:
+        credential: The token the host granted the job, or ``None``.
+
+    Yields:
+        Nothing.
+
+    Raises:
+        CredentialInUse: When a different token is bound in this process.
+    """
+    if credential is None:
+        yield
+        return
+    var = ENV_VAR_BY_PROVIDER.get(credential.provider)
+    with _BINDING.lock:
+        if _BINDING.credential is not None and _BINDING.credential != credential:
+            msg = (
+                f"Connection {_BINDING.credential.connection_id!r} is bound in this worker; "
+                f"a job for {credential.connection_id!r} cannot run until it is released"
+            )
+            raise CredentialInUse(msg)
+        if _BINDING.holders == 0:
+            _BINDING.credential = credential
+            _BINDING.previous = os.environ.get(var) if var else None
+            if var:
+                os.environ[var] = credential.secret
+        _BINDING.holders += 1
+    token = _CREDENTIAL.set(credential)
+    try:
+        yield
+    finally:
+        _CREDENTIAL.reset(token)
+        with _BINDING.lock:
+            _BINDING.holders -= 1
+            if _BINDING.holders == 0:
+                if var:
+                    if _BINDING.previous is None:
+                        os.environ.pop(var, None)
+                    else:
+                        os.environ[var] = _BINDING.previous
+                _BINDING.credential = None
+                _BINDING.previous = None
 
 
 def current_use() -> ConnectionUse | None:

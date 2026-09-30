@@ -309,7 +309,7 @@ class PluginSettings(Generic[S]):
     # ── reading ──
 
     def _store(self) -> PluginConfigStore[S]:
-        # Built per call: the store's directory follows ``config_store.CONFIG_ROOT`` as it is now
+        # Built per call: the store's directory follows ``config_store.config_root()`` as it is now
         # (a harness redirects it for its lifetime).
         return PluginConfigStore(self.settings_cls, self.plugin_id)
 

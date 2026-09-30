@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any, NoReturn
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from tlc_plugin_sdk.connections import SecretToken
+
 #: The host-owned top-level run-body key that carries :class:`JobIdentity` to the worker.
 #: The worker pops it before ``ctx.params`` is built; a plugin never reads or sets it.
 IDENTITY_KEY = "_identity"
@@ -105,6 +107,8 @@ class JobContext:
         sink: Callable invoked with each emitted event dict.
         cancel_event: Set by the host/worker to request cooperative cancellation.
         identity: Who the job runs for (see :class:`JobIdentity`); empty when omitted.
+        credential: The credential the host granted this job, or ``None``; the same object
+            ``connections.current_credential()`` returns inside ``run_job``.
 
     ``project_root_url`` (a property) is the root the job writes to — see there.
 
@@ -119,11 +123,13 @@ class JobContext:
         sink: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
         identity: JobIdentity | None = None,
+        credential: SecretToken | None = None,
     ) -> None:
         self.job_id = job_id
         self.params = params or {}
         self.state_dir = state_dir
         self.identity = identity if identity is not None else JobIdentity()
+        self.credential = credential
         self._sink = sink
         self._cancel = cancel_event
         self._project_root: str | None = None

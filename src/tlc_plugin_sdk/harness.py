@@ -190,7 +190,10 @@ class PluginHarness:
         self.plugin_id = plugin_id
         self._config_root = Path(config_root) if config_root is not None else None
         self._initialise = initialise
+        # The override in force before ``__enter__`` swapped it (``None`` is "follow the home
+        # directory"), and whether a swap is outstanding.
         self._previous_root: Path | None = None
+        self._swapped_root = False
         self._client: TestClient[Any] | None = None
 
     @classmethod
@@ -234,6 +237,7 @@ class PluginHarness:
             self._config_root.mkdir(parents=True, exist_ok=True)
             self._previous_root = config_store.CONFIG_ROOT
             config_store.CONFIG_ROOT = self._config_root
+            self._swapped_root = True
         if self._initialise:
             from tlc_plugin_sdk.worker import _initialise_runtime
 
@@ -254,11 +258,12 @@ class PluginHarness:
             if client is not None:
                 client.__exit__(exc_type, exc, tb)
         finally:
-            if self._previous_root is not None:
+            if self._swapped_root:
                 from tlc_plugin_sdk.shared import config_store
 
                 config_store.CONFIG_ROOT = self._previous_root
                 self._previous_root = None
+                self._swapped_root = False
 
     def call(
         self,

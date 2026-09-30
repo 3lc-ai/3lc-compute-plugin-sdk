@@ -733,7 +733,7 @@ inside any core or facet method:
 from tlc_plugin_sdk import connections
 
 binding = connections.current_connection()     # ConnectionBinding | None
-credential = connections.current_credential()  # Ambient | AwsSession | None
+credential = connections.current_credential()  # Ambient | AwsSession | SecretToken | None
 ```
 
 - **No header:** both are `None` and the plugin behaves as it did before Connections.
@@ -765,6 +765,17 @@ credential = connections.current_credential()  # Ambient | AwsSession | None
 Resolved credentials live for the request only; don't cache them in settings or on disk. The
 header is host-owned: a host strips any copy a caller sends, so a fragment can never choose the
 identity.
+
+**A job's token (`SECRET`).** A run may name a `SECRET` Connection (a Hugging Face token); the
+host obtains its value for that one job and passes it in the host-owned `_credential` run-body
+key, which the worker pops before `ctx.params` exists. For the duration of `run_job` it is
+`ctx.credential` and `connections.current_credential()` (a `SecretToken`: `provider`,
+`connection_id`, `secret`; its repr masks the value), and for a provider in
+`connections.ENV_VAR_BY_PROVIDER` also that environment variable (`huggingface` → `HF_TOKEN`, so
+libraries that read it need no change). Both are restored when `run_job` returns. Never log,
+persist or emit the value. The variable is process-wide, so a worker binds one token at a time: a
+job whose token differs from the one bound fails with `connections.CredentialInUse` rather than
+run with the wrong token (the same token binds again).
 
 **The legacy request-credential context.** The demo and hosted flows put a `credentials` object
 (top-level or under `workspace`) and `workspace.provider_configs` on `POST /infra/nodes` and

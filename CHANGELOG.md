@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A job's granted token.** The host-owned run-body key `_credential`
+  (`connections.CREDENTIAL_KEY`, `{connection_id, provider, secret}`) is popped by the worker and
+  exposed for `run_job`'s lifetime as `ctx.credential` / `connections.current_credential()`
+  (`SecretToken`, whose repr masks the value) and, for `huggingface`, as `HF_TOKEN`
+  (`connections.ENV_VAR_BY_PROVIDER`); both are restored afterwards
+  (`connections.bound_credential`). `JobContext` gains the keyword `credential`.
+- **One token per worker at a time.** `connections.bound_credential` refuses a token that differs
+  from the one already bound in the process with `connections.CredentialInUse`, so a job fails
+  rather than overwrite another job's `HF_TOKEN`; the same token nests, and the environment is
+  restored when the last holder exits.
 - **`PLUGIN_API.createNode(providerId, request?, onNote?)`** (optional bridge member). An
   infrastructure plugin page's "Spin up" can run the host's node-create flow (missing settings,
   preflight, the Connection chooser, the create and its error dialog) instead of posting to
@@ -202,6 +212,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The worker no longer logs an `AttributeError` traceback at start-up for a plugin that
   subclasses `HubPlugin` or `InfrastructurePlugin` directly: `initialise_runtime` is a
   `ComputePlugin` hook, and is now only called when the plugin has it.
+- A worker starts without a home directory. `config_store` no longer reads `Path.home()` at
+  import, which on Windows raised when `USERPROFILE` was absent and killed every SDK-based worker
+  at start-up. `config_store.CONFIG_ROOT` is now an override (`None` by default) and
+  `config_store.config_root()` resolves `~/.3lc-plugin-configs` when a `PluginConfigStore` is
+  built; without a home and without an override that raises `ConfigRootUnavailable` (a
+  `RuntimeError`) naming `USERPROFILE` / `HOME`. `PluginHarness(config_root=...)` restores a
+  `None` override on exit.
 
 ## [0.5.0] - 2026-09-11
 

@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from tlc_plugin_sdk import JobContext, JobFailed, JobIdentity
+from tlc_plugin_sdk.connections import SecretToken
 
 
 def test_identity_defaults_to_unknown() -> None:
@@ -30,6 +31,13 @@ def test_identity_is_carried_when_given() -> None:
     ctx = JobContext("job-1", {}, Path("/tmp"), sink=lambda _e: None, cancel_event=threading.Event(), identity=identity)
     assert ctx.identity is identity
     assert ctx.identity.known
+
+
+def test_a_context_carries_its_credential_or_none() -> None:
+    assert _ctx([]).credential is None
+    token = SecretToken(provider="huggingface", secret="hf_value", connection_id="c-1")
+    ctx = JobContext("job-1", {}, Path("/tmp"), sink=lambda _e: None, cancel_event=threading.Event(), credential=token)
+    assert ctx.credential is token
 
 
 @pytest.mark.parametrize(
