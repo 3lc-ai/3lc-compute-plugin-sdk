@@ -208,6 +208,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The worker no longer logs an `AttributeError` traceback at start-up for a plugin that
   subclasses `HubPlugin` or `InfrastructurePlugin` directly: `initialise_runtime` is a
   `ComputePlugin` hook, and is now only called when the plugin has it.
+- A worker starts without a home directory. `config_store` no longer reads `Path.home()` at
+  import, which on Windows raised when `USERPROFILE` was absent and killed every SDK-based worker
+  at start-up. `config_store.CONFIG_ROOT` is now an override (`None` by default) and
+  `config_store.config_root()` resolves `~/.3lc-plugin-configs` when a `PluginConfigStore` is
+  built; without a home and without an override that raises `ConfigRootUnavailable` (a
+  `RuntimeError`) naming `USERPROFILE` / `HOME`. `PluginHarness(config_root=...)` restores a
+  `None` override on exit.
 
 ## [0.5.0] - 2026-09-11
 
