@@ -4,7 +4,8 @@
 
 The run body's host-owned ``_credential`` is popped before ``ctx.params`` exists; inside
 ``run_job`` it is ``ctx.credential`` and ``connections.current_credential()``, and a Hugging Face
-token is also ``HF_TOKEN``. When the job ends the environment is as it was.
+token is also ``HF_TOKEN``. When the job ends the environment is as it was. A worker binds one
+token at a time: a job whose token differs from the bound one fails.
 """
 
 from __future__ import annotations
@@ -91,3 +92,62 @@ def test_a_provider_without_an_env_var_gets_the_credential_only(
     assert plugin.seen["env"] is None
     assert plugin.seen["current"] == SecretToken(provider="example", secret=SECRET, connection_id="c-1")
     assert dict(os.environ) == before
+
+
+def _token(connection_id: str = "c-1", secret: str = SECRET) -> SecretToken:
+    return SecretToken(provider="huggingface", secret=secret, connection_id=connection_id)
+
+
+def test_a_different_token_is_refused_while_one_is_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_the_operators_own")
+    first = _token()
+    with connections.bound_credential(first):
+        with (
+            pytest.raises(connections.CredentialInUse, match="'c-1'"),
+            connections.bound_credential(_token("c-2", "hf_" + "u" * 34)),
+        ):
+            pytest.fail("a second token must not bind")
+        assert os.environ["HF_TOKEN"] == SECRET
+        assert connections.current_credential() is first
+    assert os.environ["HF_TOKEN"] == "hf_the_operators_own"
+    assert connections.current_credential() is None
+
+
+def test_the_same_token_nests_and_the_last_holder_restores(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    with connections.bound_credential(_token()):
+        with connections.bound_credential(_token()):
+            assert os.environ["HF_TOKEN"] == SECRET
+        assert os.environ["HF_TOKEN"] == SECRET
+    assert "HF_TOKEN" not in os.environ
+
+
+def test_a_new_token_binds_once_the_first_is_released(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    msg = "the job raised"
+    with pytest.raises(RuntimeError, match=msg), connections.bound_credential(_token()):
+        raise RuntimeError(msg)
+    assert "HF_TOKEN" not in os.environ
+    second = _token("c-2", "hf_" + "u" * 34)
+    with connections.bound_credential(second):
+        assert os.environ["HF_TOKEN"] == second.secret
+        assert connections.current_credential() is second
+    assert "HF_TOKEN" not in os.environ
+
+
+def test_a_job_whose_token_differs_from_the_bound_one_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    plugin = _Plugin()
+    worker = _Worker(plugin, "p", tmp_path / "state")
+    other = "hf_" + "u" * 34
+    with connections.bound_credential(_token("c-0", other)):
+        job = worker.start_job("j1", {"_credential": _wire()})
+        assert job.wait(5)
+        events = []
+        while not job.events.empty():
+            events.append(job.events.get_nowait())
+        assert os.environ["HF_TOKEN"] == other
+    assert events[-1]["event"] == "error" and "CredentialInUse" in events[-1]["message"], events
+    assert plugin.seen == {}
+    assert SECRET not in repr(events) and other not in repr(events)
+    assert "HF_TOKEN" not in os.environ

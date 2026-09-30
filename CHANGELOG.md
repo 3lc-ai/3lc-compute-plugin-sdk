@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SecretToken`, whose repr masks the value) and, for `huggingface`, as `HF_TOKEN`
   (`connections.ENV_VAR_BY_PROVIDER`); both are restored afterwards
   (`connections.bound_credential`). `JobContext` gains the keyword `credential`.
+- **One token per worker at a time.** `connections.bound_credential` refuses a token that differs
+  from the one already bound in the process with `connections.CredentialInUse`, so a job fails
+  rather than overwrite another job's `HF_TOKEN`; the same token nests, and the environment is
+  restored when the last holder exits.
 - **`PLUGIN_API.createNode(providerId, request?, onNote?)`** (optional bridge member). An
   infrastructure plugin page's "Spin up" can run the host's node-create flow (missing settings,
   preflight, the Connection chooser, the create and its error dialog) instead of posting to

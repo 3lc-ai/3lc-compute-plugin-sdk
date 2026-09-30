@@ -773,8 +773,9 @@ key, which the worker pops before `ctx.params` exists. For the duration of `run_
 `connection_id`, `secret`; its repr masks the value), and for a provider in
 `connections.ENV_VAR_BY_PROVIDER` also that environment variable (`huggingface` → `HF_TOKEN`, so
 libraries that read it need no change). Both are restored when `run_job` returns. Never log,
-persist or emit the value. The variable is process-wide: two jobs running at once in one worker
-would see each other's.
+persist or emit the value. The variable is process-wide, so a worker binds one token at a time: a
+job whose token differs from the one bound fails with `connections.CredentialInUse` rather than
+run with the wrong token (the same token binds again).
 
 **The legacy request-credential context.** The demo and hosted flows put a `credentials` object
 (top-level or under `workspace`) and `workspace.provider_configs` on `POST /infra/nodes` and
