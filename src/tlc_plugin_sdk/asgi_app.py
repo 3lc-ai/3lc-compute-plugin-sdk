@@ -163,10 +163,15 @@ def build_plugin_app(
         *_generic_handlers(plugin),
         *(extra_handlers or []),
     ]
-    from tlc_plugin_sdk.connections import connection_middleware
+    from tlc_plugin_sdk.connections import connection_middleware, credential_middleware
 
-    # Outermost first: an unauthenticated request is refused before any Connection is resolved.
-    middleware: list[Any] = [*([_bearer_guard(token)] if token else []), connection_middleware]
+    # Outermost first: an unauthenticated request is refused before any Connection is resolved
+    # or any granted credential is bound.
+    middleware: list[Any] = [
+        *([_bearer_guard(token)] if token else []),
+        connection_middleware,
+        credential_middleware,
+    ]
     # No generated OpenAPI/Swagger routes: a worker is an internal endpoint, and on a node the
     # schema would describe the job channel to anyone who reached the port.
     return Litestar(route_handlers=handlers, debug=debug, middleware=middleware, openapi_config=None)

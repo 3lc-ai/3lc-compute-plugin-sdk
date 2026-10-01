@@ -132,6 +132,10 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 # config stores, model catalogs, table reads — so saved configs have one history. A host
 # without remote-node support ignores the key.
 # node_routes = ["/preview", "/model-status"]
+# Services whose stored token (a SECRET Connection) this plugin may be given, and the custom
+# routes that receive it. See "Tokens on runs and routes (SECRET)" below.
+# credentials = [{ service = "huggingface", required = false }]
+# credential_routes = ["/preview", "/model-warmup"]
 # The plugin's SocketIO namespace is host-derived as "/<plugin-id>" and registered at
 # startup — it is NOT declarable in the manifest (a plugin emits via ctx; the host owns
 # the transport).
@@ -776,6 +780,59 @@ libraries that read it need no change). Both are restored when `run_job` returns
 persist or emit the value. The variable is process-wide, so a worker binds one token at a time: a
 job whose token differs from the one bound fails with `connections.CredentialInUse` rather than
 run with the wrong token (the same token binds again).
+
+#### Tokens on runs and routes (SECRET)
+
+A `SECRET` Connection's `provider` names the **service** its value is for (`huggingface`,
+`kaggle`, `wandb`, …), never a plugin: one person's Hugging Face token serves every plugin they
+allow to use it. Declare what your plugin asks for in `[runtime]`, so a Hub can offer the person a
+choice of Connection without knowing anything about your plugin:
+
+```toml
+[runtime]
+credentials = [{ service = "huggingface", required = true }]  # services; required = the plugin cannot work without one
+credential_routes = ["/preview", "/model-warmup"]               # custom routes that receive the token
+```
+
+`credential_routes` are path prefixes relative to your route root, with the same rules as
+`node_routes` (`"preview"`, `"/preview/"` and `"/preview"` all mean `/preview`, which covers
+`/preview/x` but not `/previewer`; `"/"` alone covers every custom route). Each `service` is a
+lower-case slug (`^[a-z0-9][a-z0-9._-]*$`).
+
+- **On a run** the Hub sends the chosen Connection as `credential_connection_id`; the host obtains
+  its value for the person submitting and the worker binds it for `run_job` (above).
+- **On a listed route** the Hub sends the chosen Connection id to the host, which obtains the value
+  for the person calling (cached briefly per person, Connection and plugin) and forwards it to
+  your worker in the host-owned `x-tlc-bound-credential` header
+  (`connections.BOUND_CREDENTIAL_HEADER`; the same `{connection_id, provider, secret}` object as a
+  run body's `_credential`). The SDK's worker middleware binds it around your handler exactly as
+  around `run_job`: `connections.current_credential()` is the request's `SecretToken` and the
+  service's environment variables are set, and both are restored when the handler returns. The
+  host strips any copy a caller sent, and sends it on no other route.
+
+Environment variables per service: `huggingface` → `HF_TOKEN`, `wandb` → `WANDB_API_KEY`
+(`connections.ENV_VAR_BY_PROVIDER`); `kaggle`'s value is the JSON object
+`{"username": "...", "key": "..."}`, set as `KAGGLE_USERNAME` + `KAGGLE_KEY`
+(`connections.ENV_VARS_FROM_JSON_BY_PROVIDER`; a value of another shape fails the job, and answers
+a route 424). A service not listed sets nothing: read `current_credential().secret`.
+
+**Concurrency.** `current_credential()` is scoped to the request (a context variable), so
+concurrent requests each see their own token, in `async` and `def` handlers alike. The environment
+variables are process-wide: while one token is bound (a running job's or a request's), a request
+with a *different* token is answered **409** rather than handed the other person's variables; the
+same token nests. Prefer passing `current_credential().secret` to your library explicitly
+(`hf_hub_download(..., token=...)`) over relying on the variable when your routes may serve several
+people at once. A request whose route is not listed, or that names no Connection, has no credential
+bound: fall back to whatever the plugin did before Connections, or answer that a token is needed.
+
+Test a route with a token through the harness by sending the header yourself:
+
+```python
+from tlc_plugin_sdk.connections import BOUND_CREDENTIAL_HEADER, SecretToken, encode_credential
+
+token = SecretToken(provider="huggingface", secret="hf_test", connection_id="c-1")
+response = harness.post("/preview", json={...}, headers={BOUND_CREDENTIAL_HEADER: encode_credential(token)})
+```
 
 **The legacy request-credential context.** The demo and hosted flows put a `credentials` object
 (top-level or under `workspace`) and `workspace.provider_configs` on `POST /infra/nodes` and

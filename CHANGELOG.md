@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A route's granted token.** A route the manifest lists under `[runtime] credential_routes`
+  receives the person's chosen SECRET Connection value from the host in the host-owned
+  `x-tlc-bound-credential` header (`connections.BOUND_CREDENTIAL_HEADER`; the run body's
+  `{connection_id, provider, secret}` shape). The worker's new `connections.credential_middleware`
+  binds it around the handler with `bound_credential`, so `current_credential()` and the service's
+  environment variables work in a route as in `run_job`, for that request only. A repeated or
+  malformed header answers 400, a value its service cannot use 424, and a different token while
+  one is bound in the worker 409 (the variables are process-wide; the same token nests).
+  `connections.encode_credential()` builds the header value for hosts and tests.
+- **Manifest `[runtime] credentials` and `credential_routes`.** `credentials = [{ service,
+  required }]` names the services a plugin may be given a token for; `credential_routes` the
+  custom routes that receive it (prefixes, `node_routes` rules). `harness.read_manifest()` validates
+  both (`Manifest.credentials` as `CredentialRequirement`s, `Manifest.credential_routes`;
+  `parse_credentials()` / `parse_credential_routes()`), and refuses routes without a service.
+- **More services' environment variables.** `wandb` → `WANDB_API_KEY` in
+  `connections.ENV_VAR_BY_PROVIDER`; `kaggle`'s JSON value `{"username", "key"}` →
+  `KAGGLE_USERNAME` + `KAGGLE_KEY` via the new `connections.ENV_VARS_FROM_JSON_BY_PROVIDER`
+  (another shape is `CredentialUnavailable`, never quoting the value).
+  `connections.credential_environment()` says what a token sets.
+- **`PLUGIN_API.chooseCredential(service)` / `PLUGIN_API.credential(service)`** (optional bridge
+  members): the host's Connection chooser for a declared service, and the remembered choice.
 - **A job's granted token.** The host-owned run-body key `_credential`
   (`connections.CREDENTIAL_KEY`, `{connection_id, provider, secret}`) is popped by the worker and
   exposed for `run_job`'s lifetime as `ctx.credential` / `connections.current_credential()`
