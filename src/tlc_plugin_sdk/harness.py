@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
@@ -41,7 +42,100 @@ if TYPE_CHECKING:
 
     from tlc_plugin_sdk.contract import HubPlugin
 
-__all__ = ["HarnessResponse", "Manifest", "PluginHarness", "forward_for", "read_manifest"]
+__all__ = [
+    "CredentialRequirement",
+    "HarnessResponse",
+    "Manifest",
+    "PluginHarness",
+    "forward_for",
+    "parse_credential_routes",
+    "parse_credentials",
+    "read_manifest",
+]
+
+_SERVICE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_SERVICE_MAX_LENGTH = 100
+
+
+@dataclass(frozen=True)
+class CredentialRequirement:
+    """One service a plugin may be given a SECRET Connection's value for (``[runtime] credentials``).
+
+    Attributes:
+        service: The service slug (``huggingface``, ``kaggle``, ``wandb``, …): what a SECRET
+            Connection's ``provider`` names.
+        required: The plugin cannot do its work without one.
+    """
+
+    service: str
+    required: bool = False
+
+
+def parse_credentials(raw: object) -> tuple[CredentialRequirement, ...]:
+    """Validate a manifest's ``[runtime] credentials``: a list of ``{service, required?}`` tables.
+
+    Args:
+        raw: The manifest value (``None`` when absent).
+
+    Returns:
+        The requirements, in declaration order.
+
+    Raises:
+        ValueError: When the value is not a list of such tables, a ``service`` is not a lower-case
+            slug (``^[a-z0-9][a-z0-9._-]*$``, at most 100 characters), ``required`` is not a
+            boolean, or a service is listed twice.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        msg = "[runtime] credentials is a list of { service, required } tables"
+        raise ValueError(msg)
+    requirements: list[CredentialRequirement] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            msg = f"[runtime] credentials entries are tables, got {entry!r}"
+            raise ValueError(msg)
+        service, required = entry.get("service"), entry.get("required", False)
+        if not isinstance(service, str) or len(service) > _SERVICE_MAX_LENGTH or not _SERVICE_PATTERN.match(service):
+            msg = f"[runtime] credentials: service {service!r} is not a lower-case slug"
+            raise ValueError(msg)
+        if not isinstance(required, bool):
+            msg = f"[runtime] credentials: required for {service!r} is true or false"
+            raise ValueError(msg)
+        if any(r.service == service for r in requirements):
+            msg = f"[runtime] credentials lists {service!r} twice"
+            raise ValueError(msg)
+        requirements.append(CredentialRequirement(service=service, required=required))
+    return tuple(requirements)
+
+
+def parse_credential_routes(raw: object) -> tuple[str, ...]:
+    """Validate and normalize a manifest's ``[runtime] credential_routes`` (as ``node_routes``).
+
+    ``"preview"``, ``"/preview/"`` and ``"/preview"`` all mean ``/preview``; ``"/"`` alone means
+    every custom route. Duplicates collapse.
+
+    Args:
+        raw: The manifest value (``None`` when absent).
+
+    Returns:
+        The normalized prefixes, in declaration order.
+
+    Raises:
+        ValueError: When the value is not a list of non-blank strings.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+        msg = '[runtime] credential_routes is a list of route prefixes ("/preview")'
+        raise ValueError(msg)
+    routes: list[str] = []
+    for item in raw:
+        text = item.strip().strip("/")
+        prefix = "/" + text if text else "/"
+        if prefix not in routes:
+            routes.append(prefix)
+    return tuple(routes)
 
 
 @dataclass(frozen=True)
@@ -54,12 +148,16 @@ class Manifest:
         kind: ``compute``, ``infrastructure`` or ``service`` (``kind``; ``compute`` when absent).
         source_dir: The directory the manifest was read from. Its parent is what makes the
             plugin's package importable when the plugin is not installed.
+        credentials: The services the plugin may be given a token for (``[runtime] credentials``).
+        credential_routes: The custom routes that receive it (``[runtime] credential_routes``).
     """
 
     id: str
     entrypoint: str
     kind: str
     source_dir: Path
+    credentials: tuple[CredentialRequirement, ...] = field(default=())
+    credential_routes: tuple[str, ...] = field(default=())
 
 
 def _toml_load(path: Path) -> dict[str, Any]:
@@ -85,11 +183,13 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
         plugin_dir: The directory holding the manifest (e.g. ``src/tlc_plugin_aws``).
 
     Returns:
-        The manifest's id, entrypoint and kind.
+        The manifest's id, entrypoint, kind and credential declarations.
 
     Raises:
         FileNotFoundError: When neither file holds a manifest.
-        ValueError: When the manifest lacks ``id`` or ``[runtime] entrypoint``.
+        ValueError: When the manifest lacks ``id`` or ``[runtime] entrypoint``, or declares
+            ``credentials`` / ``credential_routes`` of the wrong shape, or ``credential_routes``
+            without ``credentials``.
     """
     directory = Path(plugin_dir).resolve()
     for filename in ("plugin.toml", "pyproject.toml"):
@@ -109,11 +209,23 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
         if not plugin_id or not entrypoint:
             msg = f"{path}: a manifest needs 'id' and '[runtime] entrypoint'"
             raise ValueError(msg)
+        runtime_table = runtime if isinstance(runtime, dict) else {}
+        try:
+            credentials = parse_credentials(runtime_table.get("credentials"))
+            credential_routes = parse_credential_routes(runtime_table.get("credential_routes"))
+        except ValueError as exc:
+            msg = f"{path}: {exc}"
+            raise ValueError(msg) from exc
+        if credential_routes and not credentials:
+            msg = f"{path}: [runtime] credential_routes needs [runtime] credentials to say which service"
+            raise ValueError(msg)
         return Manifest(
             id=plugin_id,
             entrypoint=str(entrypoint),
             kind=str(table.get("kind", "") or "compute"),
             source_dir=directory,
+            credentials=credentials,
+            credential_routes=credential_routes,
         )
     msg = f"No plugin manifest (plugin.toml or [tool.tlc-compute] in pyproject.toml) in {directory}"
     raise FileNotFoundError(msg)

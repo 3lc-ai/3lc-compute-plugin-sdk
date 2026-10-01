@@ -333,6 +333,25 @@ export interface PluginApi {
   createNode?(providerId: string, request?: { [field: string]: unknown }, onNote?: (text: string) => void): Promise<object | false>;
 
   /**
+   * Let the person choose which of their SECRET Connections for `service` (a service slug the
+   * plugin's manifest lists under `[runtime] credentials`, e.g. `"huggingface"`) this plugin uses —
+   * allowing an existing Connection for this plugin, or adding a token, in the host's own dialog.
+   * Resolves the chosen Connection id, or `null` when the person cancels. The choice is remembered
+   * per plugin and service; the host then sends it with this plugin's runs and with its calls to the
+   * routes the manifest lists under `[runtime] credential_routes`, and the worker sees the value as
+   * `connections.current_credential()`. The fragment never sees the value.
+   *
+   * Optional: older hosts do not define it. Feature-detect.
+   */
+  chooseCredential?(service: string): Promise<string | null>;
+
+  /**
+   * The Connection id remembered for `service` (see `chooseCredential`), or `null` when none was
+   * chosen. Optional: older hosts do not define it.
+   */
+  credential?(service: string): string | null;
+
+  /**
    * The Dashboard link for a table or a run, built the way every Hub page builds it — the base this
    * browser is on, plus `object_service`, so the Dashboard opens against this deployment's data rather
    * than its own default. Prefer it over concatenating `getConfig('dashboard_url')`, which produces a
