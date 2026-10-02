@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tlc_plugin_sdk import JobContext, JobFailed, JobIdentity
+from tlc_plugin_sdk.connections import SecretToken
 
 
 def test_identity_defaults_to_unknown() -> None:
@@ -29,6 +31,13 @@ def test_identity_is_carried_when_given() -> None:
     ctx = JobContext("job-1", {}, Path("/tmp"), sink=lambda _e: None, cancel_event=threading.Event(), identity=identity)
     assert ctx.identity is identity
     assert ctx.identity.known
+
+
+def test_a_context_carries_its_credential_or_none() -> None:
+    assert _ctx([]).credential is None
+    token = SecretToken(provider="huggingface", secret="hf_value", connection_id="c-1")
+    ctx = JobContext("job-1", {}, Path("/tmp"), sink=lambda _e: None, cancel_event=threading.Event(), credential=token)
+    assert ctx.credential is token
 
 
 @pytest.mark.parametrize(
@@ -166,3 +175,41 @@ def test_worker_success_is_done_completed() -> None:
         ctx.progress(percent=100)
 
     assert _terminal_event(run_job) == {"event": "done", "status": "completed", "job_id": "j"}
+
+
+def _ctx_with(params: dict[str, Any]) -> JobContext:
+    return JobContext("job-1", params, Path("/tmp"), sink=lambda _e: None, cancel_event=threading.Event())
+
+
+def test_project_root_is_the_stamped_key_cleaned() -> None:
+    ctx = _ctx_with({"project_root_url": "s3://team/projects/"})
+    assert ctx.project_root_url == "s3://team/projects"
+    assert ctx.params["project_root_url"] == "s3://team/projects/"  # left in params for plugins reading it there
+
+
+def test_project_root_falls_back_to_the_workers_own_tlc_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A body from a host that predates the key: the worker's ``tlc`` says, once."""
+    import sys
+    import types
+
+    fake = types.ModuleType("tlc")
+    fake.config = types.SimpleNamespace(project_root_url="/Users/me/3LC/projects/")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tlc", fake)
+    ctx = _ctx_with({"project_root_url": ""})
+    assert ctx.project_root_url == "/Users/me/3LC/projects"
+    fake.config.project_root_url = "changed"  # cached: read once per job
+    assert ctx.project_root_url == "/Users/me/3LC/projects"
+
+
+def test_project_root_is_empty_only_when_nobody_can_say(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_tlc(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "tlc":
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_tlc)
+    assert _ctx_with({}).project_root_url == ""

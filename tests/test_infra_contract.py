@@ -19,6 +19,7 @@ from tlc_plugin_sdk.infrastructure import (
     NodeStateResponse,
     PreflightCheck,
     PreflightResponse,
+    ProjectStorage,
 )
 
 # ── Dataclass unit tests ─────────────────────────────────────────────────────
@@ -32,25 +33,27 @@ class TestCreateNodeRequest:
             "token": "tok",
             "env": {"K": "V"},
             "agent_port": 9900,
-            "ports": [8801, 8802],
+            "ports": [8888],
             "idle_ttl_s": 600,
             "flavor": "gpu",
             "owner": "user@x",
             "pricing": "spot",
             "compute_spec": " 3lc-compute==1.2 ",
             "wheelhouse": "/srv/wheels",
+            "project_storage": {"project_root_url": " s3://team/projects ", "project_scan_urls": ["s3://ex", ""]},
         })
         assert req.node_id == "n1"
         assert req.node_type == "A100"
         assert req.token == "tok"
         assert req.env == {"K": "V"}
         assert req.agent_port == 9900
-        assert req.ports == [8801, 8802]
+        assert req.ports == [8888]
         assert req.idle_ttl_s == 600.0
         assert req.owner == "user@x"
         assert req.pricing == "spot"
         assert req.compute_spec == "3lc-compute==1.2"
         assert req.wheelhouse == "/srv/wheels"
+        assert req.project_storage == ProjectStorage("s3://team/projects", ["s3://ex"])
 
     def test_from_dict_minimal(self) -> None:
         req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "node_type": "H100"})
@@ -65,6 +68,7 @@ class TestCreateNodeRequest:
         assert req.compute_spec == ""
         assert req.wheelhouse == ""
         assert req.pricing == ""
+        assert req.project_storage == ProjectStorage()  # an older host sends none
 
     def test_from_dict_gpu_type_compat(self) -> None:
         """The host may still send ``gpu_type`` — from_dict accepts both names."""
@@ -94,19 +98,31 @@ class TestCreateNodeRequest:
         assert req.agent_port == 8800
         assert req.idle_ttl_s == 1800.0
 
+    @pytest.mark.parametrize(("sent", "read"), [(0, 0.0), ("0", 0.0), (-1, -1.0), (0.0, 0.0)])
+    def test_an_idle_ttl_of_zero_or_less_is_kept_as_never(self, sent: object, read: float) -> None:
+        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "idle_ttl_s": sent})
+        assert req.idle_ttl_s == read
+        assert CreateNodeRequest.from_dict(req.to_dict()).idle_ttl_s == read
+        assert req.to_dict()["idle_ttl_s"] == read
+
+    @pytest.mark.parametrize("sent", ["soon", True, float("nan"), float("inf"), [], {}])
+    def test_an_unreadable_idle_ttl_is_the_default(self, sent: object) -> None:
+        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "idle_ttl_s": sent})
+        assert req.idle_ttl_s == 1800.0
+
 
 class TestCreateNodeResponse:
     def test_to_dict_minimal(self) -> None:
-        resp = CreateNodeResponse(provider_id="p1", agent_url="http://x:8800", worker_url_template="http://x:{port}")
+        resp = CreateNodeResponse(provider_id="p1", agent_url="http://x:8800")
         d = resp.to_dict()
-        assert d == {"provider_id": "p1", "agent_url": "http://x:8800", "worker_url_template": "http://x:{port}"}
+        assert d == {"provider_id": "p1", "agent_url": "http://x:8800"}
         assert "token" not in d
         assert "pricing" not in d
         assert "hourly_rate" not in d
 
     def test_to_dict_hourly_rate(self) -> None:
         """A quote is emitted as a number; zero is a real quote, ``None`` is no quote."""
-        base = {"provider_id": "p1", "agent_url": "http://x:8800", "worker_url_template": "http://x:{port}"}
+        base = {"provider_id": "p1", "agent_url": "http://x:8800"}
         assert CreateNodeResponse(**base, hourly_rate=1.21).to_dict()["hourly_rate"] == 1.21
         assert CreateNodeResponse(**base, hourly_rate=0).to_dict()["hourly_rate"] == 0.0
         assert "hourly_rate" not in CreateNodeResponse(**base, hourly_rate=None).to_dict()
@@ -115,7 +131,6 @@ class TestCreateNodeResponse:
         resp = CreateNodeResponse(
             provider_id="p1",
             agent_url="http://x:8800",
-            worker_url_template="http://x:{port}",
             token="tok",
             pricing="spot",
             detail="ok",
@@ -210,7 +225,6 @@ class _StubProvider(InfrastructurePlugin):
         return CreateNodeResponse(
             provider_id=f"stub-{request.node_type}",
             agent_url=f"http://stub:{request.agent_port}",
-            worker_url_template="http://stub:{port}",
         )
 
     def node_state(self, provider_id: str) -> NodeStateResponse:
@@ -229,6 +243,56 @@ def stub_client() -> TestClient[Litestar]:
     handlers = plugin.get_route_handlers()
     app = Litestar(route_handlers=handlers)
     return TestClient(app)
+
+
+def _checking_client(plugin: InfrastructurePlugin) -> TestClient[Litestar]:
+    from tlc_plugin_sdk.connections import connection_middleware
+
+    return TestClient(Litestar(route_handlers=plugin.get_route_handlers(), middleware=[connection_middleware]))
+
+
+class TestRequiresConnection:
+    def test_round_trips_and_is_omitted_when_false(self) -> None:
+        from tlc_plugin_sdk.infrastructure import CapabilitiesResponse
+
+        assert "requires_connection" not in CapabilitiesResponse(provider="p").to_dict()
+        wire = CapabilitiesResponse(provider="p", requires_connection=True).to_dict()
+        assert wire["requires_connection"] is True
+        assert CapabilitiesResponse.from_dict(wire).requires_connection is True
+        assert CapabilitiesResponse.from_dict({"provider": "p"}).requires_connection is False
+
+
+class TestConnectionCheck:
+    def test_default_reports_that_the_binding_resolved(self) -> None:
+        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+
+        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+        with _checking_client(_StubProvider()) as client:
+            resp = client.get("/infra/connection/check", headers=header)
+        assert (resp.status_code, resp.json()) == (200, {"identity": "", "checked": ["resolve"]})
+
+    def test_without_a_connection_there_is_nothing_to_check(self) -> None:
+        with _checking_client(_StubProvider()) as client:
+            resp = client.get("/infra/connection/check")
+        assert resp.status_code == 400
+        assert "x-3lc-connection" in resp.json()["detail"]
+
+    def test_a_provider_reports_who_the_connection_is(self) -> None:
+        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+        from tlc_plugin_sdk.infrastructure import ConnectionCheckResponse
+
+        class Checking(_StubProvider):
+            def connection_check(self) -> ConnectionCheckResponse:
+                return ConnectionCheckResponse(
+                    identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
+                )
+
+        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+        with _checking_client(Checking()) as client:
+            body = client.get("/infra/connection/check", headers=header).json()
+        assert ConnectionCheckResponse.from_dict(body) == ConnectionCheckResponse(
+            identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
+        )
 
 
 class TestDefaultRouteHandlers:
@@ -310,7 +374,7 @@ class TestDefaultRouteHandlers:
         plugin = ExtendedProvider()
         plugin.id = "extended"
         handlers = plugin.get_route_handlers()
-        assert len(handlers) == 6  # 5 infra + 1 custom
+        assert len(handlers) == 7  # 6 infra + 1 custom
         app = Litestar(route_handlers=handlers)
         with TestClient(app) as client:
             resp = client.get("/custom")

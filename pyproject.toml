@@ -101,6 +101,17 @@ ignore = ["N806", "N818", "SIM105", "SIM108", "RUF001", "RUF002", "RUF003"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+# ``secret()`` / ``option()`` return dataclass fields (like ``dataclasses.field``): calling them in a
+# settings dataclass default is the intended use, not a mutable default. A plugin repo that lints
+# with ruff adds the same entry.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "tlc_plugin_sdk.infrastructure.option",
+    "tlc_plugin_sdk.infrastructure.secret",
+    "tlc_plugin_sdk.shared.settings.option",
+    "tlc_plugin_sdk.shared.settings.secret",
+]
+
 [tool.ruff.format]
 preview = true
 docstring-code-format = true

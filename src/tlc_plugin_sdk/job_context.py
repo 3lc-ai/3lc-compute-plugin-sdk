@@ -22,9 +22,13 @@ from typing import TYPE_CHECKING, Any, NoReturn
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from tlc_plugin_sdk.connections import SecretToken
+
 #: The host-owned top-level run-body key that carries :class:`JobIdentity` to the worker.
 #: The worker pops it before ``ctx.params`` is built; a plugin never reads or sets it.
 IDENTITY_KEY = "_identity"
+#: The run-body key carrying the project root the job writes to; the host stamps it at submit.
+PROJECT_ROOT_KEY = "project_root_url"
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,10 @@ class JobContext:
         sink: Callable invoked with each emitted event dict.
         cancel_event: Set by the host/worker to request cooperative cancellation.
         identity: Who the job runs for (see :class:`JobIdentity`); empty when omitted.
+        credential: The credential the host granted this job, or ``None``; the same object
+            ``connections.current_credential()`` returns inside ``run_job``.
+
+    ``project_root_url`` (a property) is the root the job writes to — see there.
 
     """
 
@@ -115,15 +123,39 @@ class JobContext:
         sink: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
         identity: JobIdentity | None = None,
+        credential: SecretToken | None = None,
     ) -> None:
         self.job_id = job_id
         self.params = params or {}
         self.state_dir = state_dir
         self.identity = identity if identity is not None else JobIdentity()
+        self.credential = credential
         self._sink = sink
         self._cancel = cancel_event
+        self._project_root: str | None = None
 
     # ── plugin-facing API ────────────────────────────────────────────────
+    @property
+    def project_root_url(self) -> str:
+        """The project root this job writes to, without a trailing slash.
+
+        The host resolves it at submit (the person's choice, else the host's configured root) and
+        stamps it into the run body as ``project_root_url``; a plugin that creates tables or runs
+        passes it as ``root_url`` to the core library. A body from a host that predates the key
+        falls back to this worker's own ``tlc`` root, and to ``""`` only when ``tlc`` cannot say.
+        """
+        raw = self.params.get(PROJECT_ROOT_KEY)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().rstrip("/")
+        if self._project_root is None:
+            try:
+                import tlc
+
+                self._project_root = str(tlc.config.project_root_url).rstrip("/")
+            except Exception:
+                self._project_root = ""
+        return self._project_root
+
     @property
     def cancelled(self) -> bool:
         """Whether cancellation has been requested (poll this at checkpoints)."""

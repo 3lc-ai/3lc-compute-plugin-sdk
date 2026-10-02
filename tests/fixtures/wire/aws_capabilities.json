@@ -1,0 +1,113 @@
+{
+  "message": "CapabilitiesResponse",
+  "answer": {
+    "provider": "aws",
+    "missing_fields": [
+      {
+        "key": "tlc_api_key",
+        "required": true,
+        "label": "3LC API key",
+        "secret": true,
+        "placeholder": "",
+        "help": "The same key you use for 3LC on your machine; the node logs in to 3LC with it.",
+        "href": "https://account.3lc.ai/api-key"
+      }
+    ],
+    "gpu_types": [
+      "g5.xlarge",
+      "g6.xlarge"
+    ],
+    "flavors": [
+      "gpu",
+      "workspace"
+    ],
+    "pricing": [
+      "on_demand",
+      "spot"
+    ],
+    "lists_workspaces": true,
+    "workspace_credentials": [
+      {
+        "key": "aws_access_key_id",
+        "label": "AWS access key id",
+        "secret": true,
+        "placeholder": "AKIA…",
+        "help": "IAM → your user → Security credentials → Create access key. Needs EC2, IAM and S3 rights.",
+        "href": "https://console.aws.amazon.com/iam/home#/security_credentials"
+      },
+      {
+        "key": "aws_secret_access_key",
+        "label": "AWS secret access key",
+        "secret": true,
+        "placeholder": "",
+        "help": "Shown once, when the access key is created.",
+        "href": ""
+      },
+      {
+        "key": "region",
+        "label": "AWS region",
+        "secret": false,
+        "placeholder": "us-east-1",
+        "help": "Where the workspace, its bucket and its GPU nodes live.",
+        "href": ""
+      }
+    ],
+    "workspace_login": {
+      "kind": "aws-identity-center",
+      "label": "Sign in with AWS IAM Identity Center",
+      "help": "For organisations that use AWS IAM Identity Center. You sign in on your AWS access portal and approve a code.",
+      "fields": [
+        {
+          "key": "start_url",
+          "label": "IAM Identity Center start URL",
+          "placeholder": "https://your-org.awsapps.com/start",
+          "remember": true
+        },
+        {
+          "key": "region",
+          "label": "IAM Identity Center region",
+          "placeholder": "us-east-1",
+          "remember": true
+        }
+      ],
+      "credential_keys": [
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "region"
+      ]
+    },
+    "storage": {
+      "kind": "bucket",
+      "label": "S3 bucket",
+      "creatable": true,
+      "upload": true,
+      "browse": true,
+      "download": true,
+      "bundle": true,
+      "delete": true,
+      "transfer": true,
+      "rename": true
+    },
+    "workspace_sizes": [
+      "t3.medium",
+      "t3.small",
+      "t3.large"
+    ],
+    "region": "us-east-1",
+    "ready": false,
+    "missing": [
+      "tlc_api_key"
+    ]
+  },
+  "passthrough": [
+    "workspace_sizes"
+  ],
+  "item_passthrough": {
+    "workspace_credentials": []
+  },
+  "additive": [
+    "node_types",
+    "facets"
+  ]
+}
