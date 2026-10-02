@@ -4,8 +4,10 @@
 
 The host forwards a granted SECRET value on a ``credential_routes`` route in the host-owned
 ``x-tlc-bound-credential`` header; the worker's middleware binds it around the handler exactly as
-the worker binds a job's token around ``run_job``. Also: the per-service environment variables and
-the manifest's ``credentials`` / ``credential_routes`` declarations.
+the worker binds a job's token around ``run_job``. The token never reaches ``os.environ``: a
+concurrent request (a different person's, or one with no Connection) must not see it. Also: the
+per-service environment variables a plugin may hand a subprocess, and the manifest's
+``credentials`` / ``credential_routes`` declarations.
 """
 
 from __future__ import annotations
@@ -89,9 +91,11 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[PluginH
 
 
 @pytest.mark.parametrize("route", ["/threaded", "/async"])
-def test_a_bound_route_sees_its_token_and_env_for_the_request_only(harness: PluginHarness, route: str) -> None:
+def test_a_bound_route_sees_its_token_for_the_request_only_and_never_in_the_env(
+    harness: PluginHarness, route: str
+) -> None:
     answer = harness.get(route, headers=_header(_token())).json()
-    assert answer == {"credential": repr(_token()), "connection_id": "c-1", "env": SECRET}
+    assert answer == {"credential": repr(_token()), "connection_id": "c-1", "env": "hf_the_operators_own"}
     assert SECRET not in answer["credential"]
     assert os.environ["HF_TOKEN"] == "hf_the_operators_own"
     assert connections.current_credential() is None
@@ -109,24 +113,23 @@ def test_a_malformed_header_is_400(harness: PluginHarness, value: str) -> None:
     assert SECRET not in response.text
 
 
-def test_a_different_token_while_one_is_bound_is_409_and_the_same_one_nests(harness: PluginHarness) -> None:
+def test_a_different_token_while_one_is_bound_runs_with_its_own(harness: PluginHarness) -> None:
     with connections.bound_credential(_token()):
-        refused = harness.get("/async", headers=_header(_token(OTHER, "c-2")))
-        assert refused.status_code == 409
-        assert "c-1" not in refused.text and SECRET not in refused.text
-        assert harness.get("/async", headers=_header(_token())).json()["env"] == SECRET
-        assert os.environ["HF_TOKEN"] == SECRET
+        other = harness.get("/async", headers=_header(_token(OTHER, "c-2"))).json()
+        assert other["connection_id"] == "c-2" and other["env"] == "hf_the_operators_own"
+        assert harness.get("/async", headers=_header(_token())).json()["connection_id"] == "c-1"
+        assert os.environ["HF_TOKEN"] == "hf_the_operators_own"
     assert os.environ["HF_TOKEN"] == "hf_the_operators_own"
 
 
-def test_kaggle_json_sets_username_and_key_and_a_bad_value_is_424(
+def test_a_kaggle_json_value_sets_no_env_and_a_bad_value_is_424(
     harness: PluginHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("KAGGLE_USERNAME", raising=False)
     monkeypatch.delenv("KAGGLE_KEY", raising=False)
     value = json.dumps({"username": "ada", "key": "k" * 32})
     answer = harness.get("/kaggle", headers=_header(_token(value, provider="kaggle"))).json()
-    assert answer == {"username": "ada", "key": "k" * 32}
+    assert answer == {"username": None, "key": None}
     assert "KAGGLE_USERNAME" not in os.environ and "KAGGLE_KEY" not in os.environ
     bad = harness.get("/kaggle", headers=_header(_token("k" * 32, provider="kaggle")))
     assert bad.status_code == 424 and "k" * 32 not in bad.text
@@ -184,6 +187,50 @@ def test_concurrent_requests_each_see_only_their_own_token() -> None:
     assert seen["/holder"] == _token()
     assert seen["/bystander"] is None
     assert connections.current_credential() is None
+
+
+def test_a_request_without_a_credential_never_sees_a_concurrent_request_s_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Alice's bound request holds its token; Bob's unbound one, mid-flight, sees neither it nor HF_TOKEN.
+
+    Through the worker's real app (both middlewares), with Alice parked inside her handler while
+    Bob's request runs — the shape of two people using one shared worker.
+    """
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+
+    @get("/hold", sync_to_thread=True)
+    def hold() -> dict[str, Any]:
+        if getattr(connections.current_credential(), "connection_id", None) == "c-1":
+            entered.set()
+            release.wait(5)
+        return _seen()
+
+    class _Holder(HubPlugin):
+        def get_ui_fragment(self) -> str:
+            return ""
+
+        def get_route_handlers(self) -> list[Any]:
+            return [hold]
+
+    monkeypatch.setenv("HF_TOKEN", "hf_the_operators_own")
+    with PluginHarness(_Holder(), plugin_id="holder", config_root=tmp_path) as h:
+        result: dict[str, Any] = {}
+        alice = threading.Thread(target=lambda: result.update(alice=h.get("/hold", headers=_header(_token())).json()))
+        alice.start()
+        try:
+            assert entered.wait(5)
+            bob = h.get("/hold").json()
+            carol = h.get("/hold", headers=_header(_token(OTHER, "c-2")))
+        finally:
+            release.set()
+            alice.join(5)
+    assert bob == {"credential": None, "connection_id": None, "env": "hf_the_operators_own"}
+    assert carol.status_code == 200 and carol.json()["connection_id"] == "c-2"
+    assert carol.json()["env"] == "hf_the_operators_own"
+    assert result["alice"]["connection_id"] == "c-1" and result["alice"]["env"] == "hf_the_operators_own"
 
 
 class _KagglePlugin(ComputePlugin):

@@ -30,12 +30,15 @@ Kinds:
     A stored value (a Hugging Face token). Never sent in a header: the host obtains it for one job
     and puts it in the run body's host-owned :data:`CREDENTIAL_KEY`; the worker pops it and, for
     the duration of ``run_job``, exposes it as a :class:`SecretToken` from
-    :func:`current_credential` (and ``ctx.credential``) and, when the provider has one, as its
-    environment variable (:data:`ENV_VAR_BY_PROVIDER`: ``huggingface`` → ``HF_TOKEN``,
-    ``wandb`` → ``WANDB_API_KEY``; :data:`ENV_VARS_FROM_JSON_BY_PROVIDER`: a ``kaggle`` value
-    ``{"username", "key"}`` → ``KAGGLE_USERNAME`` + ``KAGGLE_KEY``). A route the plugin's manifest
-    lists under ``credential_routes`` receives the same value from the host in the host-owned
+    :func:`current_credential` (and ``ctx.credential``). A route the plugin's manifest lists under
+    ``credential_routes`` receives the same value from the host in the host-owned
     :data:`BOUND_CREDENTIAL_HEADER`; :func:`credential_middleware` binds it for that one request.
+    The SDK never writes the value into ``os.environ``: the environment is shared by every job and
+    request in the worker, including ones acting for other people. Hand the value to the
+    provider's client explicitly, or, for a tool that only reads its variables, to a subprocess's
+    ``env`` (:func:`credential_environment`: ``huggingface`` → ``HF_TOKEN``, ``wandb`` →
+    ``WANDB_API_KEY``, a ``kaggle`` value ``{"username", "key"}`` → ``KAGGLE_USERNAME`` +
+    ``KAGGLE_KEY``).
 
 The header is **host-owned**: the host sets it and must strip any copy a caller sent. A request
 without it resolves to nothing, and the plugin behaves exactly as before Connections.
@@ -52,8 +55,6 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import json
-import os
-import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -69,7 +70,6 @@ __all__ = [
     "AwsSession",
     "ConnectionBinding",
     "ConnectionUse",
-    "CredentialInUse",
     "CredentialUnavailable",
     "ResolvedCredential",
     "SecretToken",
@@ -105,24 +105,21 @@ BOUND_CREDENTIAL_HEADER = "x-tlc-bound-credential"
 ``{connection_id, provider, secret}``, the same shape as the run body's :data:`CREDENTIAL_KEY`."""
 
 ENV_VAR_BY_PROVIDER: dict[str, str] = {"huggingface": "HF_TOKEN", "wandb": "WANDB_API_KEY"}
-"""The environment variable a provider's own libraries read a token from, set while a job or bound
-route runs."""
+"""The environment variable a provider's own libraries read a token from (:func:`credential_environment`).
+
+Never set by the SDK: a plugin passes it to a subprocess it starts for that job or request."""
 
 ENV_VARS_FROM_JSON_BY_PROVIDER: dict[str, dict[str, str]] = {
     "kaggle": {"username": "KAGGLE_USERNAME", "key": "KAGGLE_KEY"},
 }
-"""Providers whose value is a JSON object: each field → the environment variable it is set as.
+"""Providers whose value is a JSON object: each field → its environment variable (:func:`credential_environment`).
 
 Every listed field must be a non-empty string in the value; anything else is
-:class:`CredentialUnavailable` when the credential is bound."""
+:class:`CredentialUnavailable` when the credential is bound (so a job or route fails early)."""
 
 
 class CredentialUnavailable(Exception):
     """A Connection could not be resolved into a credential (unknown kind, no resolver, a refusal)."""
-
-
-class CredentialInUse(RuntimeError):
-    """Another job's different token is bound in this process; the job must not run with either."""
 
 
 @dataclass(frozen=True)
@@ -383,7 +380,11 @@ def current_credential() -> ResolvedCredential | None:
 
 
 def credential_environment(credential: SecretToken) -> dict[str, str]:
-    """The environment variables a bound ``credential`` sets, by name.
+    """The environment variables a provider's tools read ``credential`` from, by name.
+
+    The SDK never sets them in its own process (``os.environ`` is shared by every job and request
+    in the worker). Pass them to a subprocess that acts for this one job or request:
+    ``subprocess.run(cmd, env={**os.environ, **credential_environment(token)})``.
 
     Args:
         credential: The token.
@@ -419,29 +420,16 @@ def credential_environment(credential: SecretToken) -> dict[str, str]:
     return environment
 
 
-class _ProcessBinding:
-    """The one token bound in this process, how many holders it has, and the env values it replaced."""
-
-    def __init__(self) -> None:
-        self.lock = threading.Lock()
-        self.credential: SecretToken | None = None
-        self.holders = 0
-        self.previous: dict[str, str | None] = {}
-
-
-_BINDING = _ProcessBinding()
-
-
 @contextlib.contextmanager
 def bound_credential(credential: SecretToken | None) -> Iterator[None]:
-    """Expose a token for the ``with`` block: :func:`current_credential` and its env var(s).
+    """Expose a token for the ``with`` block as :func:`current_credential`, in this context only.
 
     The worker wraps ``run_job`` in this on the job's own thread, and
-    :func:`credential_middleware` wraps a bound route's handler in it, so the context variable is
-    that job's or request's alone. The environment variables (:func:`credential_environment`) are
-    process-wide, so one token is bound per process at a time: binding the same token again nests,
-    a different one raises :class:`CredentialInUse` and changes nothing. The previous values of the
-    variables (or their absence) are restored when the last holder exits. ``None`` changes nothing.
+    :func:`credential_middleware` wraps a bound route's handler in it, so the token is that job's
+    or request's alone: a context variable, which concurrent requests, other jobs and threads the
+    plugin starts do not see. Nothing process-wide changes — in particular no environment
+    variable — so tokens of different Connections (and work with none) run side by side in one
+    worker without seeing each other's. ``None`` changes nothing.
 
     Args:
         credential: The token the host granted, or ``None``.
@@ -450,41 +438,18 @@ def bound_credential(credential: SecretToken | None) -> Iterator[None]:
         Nothing.
 
     Raises:
-        CredentialInUse: When a different token is bound in this process.
         CredentialUnavailable: When the token's value does not have its provider's shape
             (:data:`ENV_VARS_FROM_JSON_BY_PROVIDER`).
     """
     if credential is None:
         yield
         return
-    environment = credential_environment(credential)
-    with _BINDING.lock:
-        if _BINDING.credential is not None and _BINDING.credential != credential:
-            msg = (
-                f"Connection {_BINDING.credential.connection_id!r} is bound in this worker; "
-                f"work for {credential.connection_id!r} cannot run until it is released"
-            )
-            raise CredentialInUse(msg)
-        if _BINDING.holders == 0:
-            _BINDING.credential = credential
-            _BINDING.previous = {name: os.environ.get(name) for name in environment}
-            os.environ.update(environment)
-        _BINDING.holders += 1
+    credential_environment(credential)  # the value's shape is checked up front, as a route's 424
     token = _CREDENTIAL.set(credential)
     try:
         yield
     finally:
         _CREDENTIAL.reset(token)
-        with _BINDING.lock:
-            _BINDING.holders -= 1
-            if _BINDING.holders == 0:
-                for name, previous in _BINDING.previous.items():
-                    if previous is None:
-                        os.environ.pop(name, None)
-                    else:
-                        os.environ[name] = previous
-                _BINDING.credential = None
-                _BINDING.previous = {}
 
 
 def current_use() -> ConnectionUse | None:
@@ -580,12 +545,10 @@ def credential_middleware(app: Any) -> Any:
     ``credential_routes``, after the Config Service granted the person's chosen Connection to this
     plugin. No header: passes through untouched. A repeated header, or one that is not
     ``{connection_id, provider, secret}`` with a non-empty ``secret``, answers 400; a value its
-    provider cannot use (:func:`credential_environment`) 424; a worker that has a *different* token
-    bound right now (a running job's, or a concurrent request's) 409 — the environment variables
-    are process-wide, so two requests with different tokens cannot run at once in one worker. The
-    same token nests. Inside the handler, :func:`current_credential` is the request's own token
-    (context-variable scoped, so isolated from concurrent requests, also in ``def`` handlers run in
-    a thread) and the provider's environment variables are set; both are restored afterwards.
+    provider cannot use (:func:`credential_environment`) 424. Inside the handler,
+    :func:`current_credential` is the request's own token (context-variable scoped, so isolated
+    from concurrent requests and jobs, also in ``def`` handlers run in a thread), restored
+    afterwards. No environment variable is set (see :func:`bound_credential`).
 
     Args:
         app: The wrapped ASGI app.
@@ -619,11 +582,6 @@ def credential_middleware(app: Any) -> Any:
                 stack.enter_context(bound_credential(credential))
             except CredentialUnavailable as exc:
                 await _reply(send, 424, str(exc))
-                return
-            except CredentialInUse:
-                # Not the exception's words: they name the other holder's Connection.
-                detail = "Another Connection's credential is in use in this worker; try again when that work finishes"
-                await _reply(send, 409, detail)
                 return
             await app(scope, receive, send)
 

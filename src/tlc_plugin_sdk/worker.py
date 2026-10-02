@@ -329,8 +329,8 @@ class _Job:
 
     def _run(self) -> None:
         try:
-            # The job's own thread, so current_credential() is this job's alone; HF_TOKEN is
-            # process-wide while it runs.
+            # The job's own thread, so current_credential() is this job's alone (the SDK sets no
+            # environment variable: other jobs and requests in this worker must not see it).
             with _alias_overrides(self.ctx), bound_credential(self.ctx.credential):
                 self._plugin.run_job(self.ctx)
             status = "cancelled" if self.ctx.cancelled else "completed"
