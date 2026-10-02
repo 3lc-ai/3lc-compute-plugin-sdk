@@ -3,9 +3,9 @@
 """The worker hands a job the credential the host granted it, for ``run_job``'s lifetime only.
 
 The run body's host-owned ``_credential`` is popped before ``ctx.params`` exists; inside
-``run_job`` it is ``ctx.credential`` and ``connections.current_credential()``, and a Hugging Face
-token is also ``HF_TOKEN``. When the job ends the environment is as it was. A worker binds one
-token at a time: a job whose token differs from the bound one fails.
+``run_job`` it is ``ctx.credential`` and ``connections.current_credential()`` — never an
+environment variable, which every job and request in the worker would see. Jobs with different
+tokens run side by side, each with its own.
 """
 
 from __future__ import annotations
@@ -60,13 +60,13 @@ def _wire(provider: str = "huggingface") -> dict[str, str]:
     return {"connection_id": "c-1", "provider": provider, "secret": SECRET}
 
 
-def test_a_job_sees_its_credential_and_hf_token_for_its_lifetime_only(
+def test_a_job_sees_its_credential_for_its_lifetime_only_and_never_in_the_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_the_operators_own")
     plugin, events = _run(tmp_path, {"table_url": "s3://b/t", "_credential": _wire()})
     expected = SecretToken(provider="huggingface", secret=SECRET, connection_id="c-1")
-    assert plugin.seen["env"] == SECRET
+    assert plugin.seen["env"] == "hf_the_operators_own"
     assert plugin.seen["current"] == expected and plugin.seen["ctx"] is plugin.seen["current"]
     assert plugin.seen["in_params"] is False
     assert os.environ["HF_TOKEN"] == "hf_the_operators_own"
@@ -98,56 +98,57 @@ def _token(connection_id: str = "c-1", secret: str = SECRET) -> SecretToken:
     return SecretToken(provider="huggingface", secret=secret, connection_id=connection_id)
 
 
-def test_a_different_token_is_refused_while_one_is_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_different_token_binds_alongside_and_each_context_sees_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_the_operators_own")
-    first = _token()
+    first, second = _token(), _token("c-2", "hf_" + "u" * 34)
     with connections.bound_credential(first):
-        with (
-            pytest.raises(connections.CredentialInUse, match="'c-1'"),
-            connections.bound_credential(_token("c-2", "hf_" + "u" * 34)),
-        ):
-            pytest.fail("a second token must not bind")
-        assert os.environ["HF_TOKEN"] == SECRET
+        with connections.bound_credential(second):
+            assert connections.current_credential() is second
         assert connections.current_credential() is first
-    assert os.environ["HF_TOKEN"] == "hf_the_operators_own"
+        assert os.environ["HF_TOKEN"] == "hf_the_operators_own"
     assert connections.current_credential() is None
 
 
-def test_the_same_token_nests_and_the_last_holder_restores(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    with connections.bound_credential(_token()):
-        with connections.bound_credential(_token()):
-            assert os.environ["HF_TOKEN"] == SECRET
-        assert os.environ["HF_TOKEN"] == SECRET
-    assert "HF_TOKEN" not in os.environ
-
-
-def test_a_new_token_binds_once_the_first_is_released(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_exception_restores_the_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     msg = "the job raised"
     with pytest.raises(RuntimeError, match=msg), connections.bound_credential(_token()):
         raise RuntimeError(msg)
-    assert "HF_TOKEN" not in os.environ
-    second = _token("c-2", "hf_" + "u" * 34)
-    with connections.bound_credential(second):
-        assert os.environ["HF_TOKEN"] == second.secret
-        assert connections.current_credential() is second
+    assert connections.current_credential() is None
     assert "HF_TOKEN" not in os.environ
 
 
-def test_a_job_whose_token_differs_from_the_bound_one_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_concurrent_jobs_with_different_tokens_each_see_only_their_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job running with a token never leaks it to a concurrent job with another, or with none."""
+    import threading
+
     monkeypatch.delenv("HF_TOKEN", raising=False)
-    plugin = _Plugin()
-    worker = _Worker(plugin, "p", tmp_path / "state")
+    entered, release = threading.Event(), threading.Event()
+    seen: dict[str, Any] = {}
+
+    class _Concurrent(ComputePlugin):
+        def get_ui_fragment(self) -> str:
+            return ""
+
+        def run_job(self, ctx: JobContext) -> None:
+            if ctx.job_id == "holder":
+                entered.set()
+                release.wait(5)
+            seen[ctx.job_id] = (connections.current_credential(), os.environ.get("HF_TOKEN"))
+
+    worker = _Worker(_Concurrent(), "p", tmp_path / "state")
     other = "hf_" + "u" * 34
-    with connections.bound_credential(_token("c-0", other)):
-        job = worker.start_job("j1", {"_credential": _wire()})
-        assert job.wait(5)
-        events = []
-        while not job.events.empty():
-            events.append(job.events.get_nowait())
-        assert os.environ["HF_TOKEN"] == other
-    assert events[-1]["event"] == "error" and "CredentialInUse" in events[-1]["message"], events
-    assert plugin.seen == {}
-    assert SECRET not in repr(events) and other not in repr(events)
-    assert "HF_TOKEN" not in os.environ
+    holder = worker.start_job("holder", {"_credential": _wire()})
+    assert entered.wait(5)
+    second = worker.start_job(
+        "second", {"_credential": {"connection_id": "c-2", "provider": "huggingface", "secret": other}}
+    )
+    bystander = worker.start_job("bystander", {})
+    assert second.wait(5) and bystander.wait(5)
+    release.set()
+    assert holder.wait(5)
+    assert seen["holder"] == (_token(), None)
+    assert seen["second"] == (_token("c-2", other), None)
+    assert seen["bystander"] == (None, None)

@@ -774,12 +774,9 @@ identity.
 host obtains its value for that one job and passes it in the host-owned `_credential` run-body
 key, which the worker pops before `ctx.params` exists. For the duration of `run_job` it is
 `ctx.credential` and `connections.current_credential()` (a `SecretToken`: `provider`,
-`connection_id`, `secret`; its repr masks the value), and for a provider in
-`connections.ENV_VAR_BY_PROVIDER` also that environment variable (`huggingface` → `HF_TOKEN`, so
-libraries that read it need no change). Both are restored when `run_job` returns. Never log,
-persist or emit the value. The variable is process-wide, so a worker binds one token at a time: a
-job whose token differs from the one bound fails with `connections.CredentialInUse` rather than
-run with the wrong token (the same token binds again).
+`connection_id`, `secret`; its repr masks the value), restored when `run_job` returns. Never log,
+persist or emit the value. The SDK does **not** set it as an environment variable (see
+*Concurrency* below): hand it to your library explicitly.
 
 #### Tokens on runs and routes (SECRET)
 
@@ -806,23 +803,27 @@ lower-case slug (`^[a-z0-9][a-z0-9._-]*$`).
   your worker in the host-owned `x-tlc-bound-credential` header
   (`connections.BOUND_CREDENTIAL_HEADER`; the same `{connection_id, provider, secret}` object as a
   run body's `_credential`). The SDK's worker middleware binds it around your handler exactly as
-  around `run_job`: `connections.current_credential()` is the request's `SecretToken` and the
-  service's environment variables are set, and both are restored when the handler returns. The
-  host strips any copy a caller sent, and sends it on no other route.
+  around `run_job`: `connections.current_credential()` is the request's `SecretToken`, restored
+  when the handler returns. The host strips any copy a caller sent, and sends it on no other
+  route.
 
-Environment variables per service: `huggingface` → `HF_TOKEN`, `wandb` → `WANDB_API_KEY`
-(`connections.ENV_VAR_BY_PROVIDER`); `kaggle`'s value is the JSON object
-`{"username": "...", "key": "..."}`, set as `KAGGLE_USERNAME` + `KAGGLE_KEY`
+Environment variables per service, for a tool that reads only its variables:
+`connections.credential_environment(token)` returns them — `huggingface` → `HF_TOKEN`, `wandb` →
+`WANDB_API_KEY` (`connections.ENV_VAR_BY_PROVIDER`); `kaggle`'s value is the JSON object
+`{"username": "...", "key": "..."}` → `KAGGLE_USERNAME` + `KAGGLE_KEY`
 (`connections.ENV_VARS_FROM_JSON_BY_PROVIDER`; a value of another shape fails the job, and answers
-a route 424). A service not listed sets nothing: read `current_credential().secret`.
+a route 424, before your code runs). A service not listed returns `{}`: read
+`current_credential().secret`. Pass them to a subprocess that works for this one job or request
+(`subprocess.run(cmd, env={**os.environ, **credential_environment(token)})`), never into
+`os.environ`.
 
-**Concurrency.** `current_credential()` is scoped to the request (a context variable), so
-concurrent requests each see their own token, in `async` and `def` handlers alike. The environment
-variables are process-wide: while one token is bound (a running job's or a request's), a request
-with a *different* token is answered **409** rather than handed the other person's variables; the
-same token nests. Prefer passing `current_credential().secret` to your library explicitly
-(`hf_hub_download(..., token=...)`) over relying on the variable when your routes may serve several
-people at once. A request whose route is not listed, or that names no Connection, has no credential
+**Concurrency.** `current_credential()` is scoped to the job or request (a context variable), so
+concurrent requests and jobs each see their own token, in `async` and `def` handlers alike, and
+work with different Connections runs side by side in one worker. Nothing process-wide is set:
+`os.environ` is shared by every job and request in the worker — including those of other people
+on a shared host, and ones that name no Connection — so a token placed there would be used by any
+of them whose library reads its default environment. Pass `current_credential().secret` to your
+library explicitly (`hf_hub_download(..., token=...)`). A request whose route is not listed, or that names no Connection, has no credential
 bound: fall back to whatever the plugin did before Connections, or answer that a token is needed.
 
 Test a route with a token through the harness by sending the header yourself:
