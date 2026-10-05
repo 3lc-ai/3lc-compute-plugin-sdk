@@ -39,7 +39,6 @@ class TestCreateNodeRequest:
             "owner": "user@x",
             "pricing": "spot",
             "compute_spec": " 3lc-compute==1.2 ",
-            "wheelhouse": "/srv/wheels",
             "project_storage": {"project_root_url": " s3://team/projects ", "project_scan_urls": ["s3://ex", ""]},
         })
         assert req.node_id == "n1"
@@ -52,7 +51,6 @@ class TestCreateNodeRequest:
         assert req.owner == "user@x"
         assert req.pricing == "spot"
         assert req.compute_spec == "3lc-compute==1.2"
-        assert req.wheelhouse == "/srv/wheels"
         assert req.project_storage == ProjectStorage("s3://team/projects", ["s3://ex"])
 
     def test_from_dict_minimal(self) -> None:
@@ -66,9 +64,29 @@ class TestCreateNodeRequest:
         assert req.flavor == "gpu"
         assert req.owner == ""
         assert req.compute_spec == ""
-        assert req.wheelhouse == ""
         assert req.pricing == ""
         assert req.project_storage == ProjectStorage()  # an older host sends none
+
+    @pytest.mark.parametrize("spec", ["3lc-compute==1.2.0", "3lc-compute>=1.2,<1.3"])
+    def test_compute_spec_is_one_requirement_pin_or_range(self, spec: str) -> None:
+        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "compute_spec": f" {spec} "})
+        assert req.compute_spec == spec
+        assert CreateNodeRequest.from_dict(req.to_dict()).compute_spec == spec
+
+    def test_from_dict_ignores_keys_it_does_not_know(self) -> None:
+        """An older host's ``wheelhouse`` (or any other unknown key) is ignored, not an error."""
+        req = CreateNodeRequest.from_dict({
+            "node_id": "n1",
+            "token": "tok",
+            "node_type": "H100",
+            "compute_spec": "3lc-compute==1.2.0",
+            "wheelhouse": "/srv/wheels",
+            "something_new": {"x": 1},
+        })
+        assert req.compute_spec == "3lc-compute==1.2.0"
+        assert not hasattr(req, "wheelhouse")
+        assert "wheelhouse" not in req.to_dict()
+        assert "something_new" not in req.to_dict()
 
     def test_from_dict_gpu_type_compat(self) -> None:
         """The host may still send ``gpu_type`` — from_dict accepts both names."""

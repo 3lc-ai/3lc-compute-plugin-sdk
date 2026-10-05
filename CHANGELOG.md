@@ -220,13 +220,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Hub shows for the deployment this fragment's compute service belongs to; the optional
   `nodeHourlyCost?(node)` renders a node record's saved (or browser-cached) hourly quote as a
   USD/hour label, or "Cost unavailable". Both are `''`/undefined on hosts that predate them.
-- `CreateNodeRequest` carries `compute_spec` (the host's pinned requirement for the node
-  agent's own distribution, e.g. `3lc-compute==1.2`) and `wheelhouse` (a directory on the
-  controller or a URL where wheels for unpublished builds live). A provider that installs the
-  agent while creating a node installs `compute_spec`, from the wheelhouse when one is given;
-  both are `""` when the host has nothing to say.
+- `CreateNodeRequest.compute_spec`: the host's requirement for the node agent's own
+  distribution, an exact pin (`3lc-compute==1.2.0`) or a range (`3lc-compute>=1.2,<1.3`). A
+  provider that installs the agent while creating a node installs it as one requirement; it is
+  `""` when the host has nothing to say.
 
 ### Removed
+- `CreateNodeRequest.wheelhouse`, added earlier in this cycle and never in a release: a provider
+  no longer ships a directory of wheels to a node or points the node's installs at one. Wheels
+  for an unpublished build reach a node by the host's own channel to the node agent.
+  `CreateNodeRequest.from_dict()` ignores a `wheelhouse` key from a host that still sends it.
 - The worker's `GET /project-root` route from `data_source_route_handlers()`: the root a job writes
   to is the host's to say, and is carried in the run body.
 

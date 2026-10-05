@@ -322,14 +322,12 @@ def _idle_ttl(value: Any) -> float:
 class CreateNodeRequest:
     """What the host sends when it asks a provider to create a node.
 
-    ``compute_spec`` is the pip requirement for the node agent's own distribution, pinned to
-    the host's version (``3lc-compute==1.2``): a provider that installs the agent as part of
-    creating the node installs exactly this. ``wheelhouse`` is where the host says wheels for
-    unpublished builds can be found — a directory on the controller, or a URL to a flat
-    index — for the agent install and for every plugin venv the node builds. A provider that
-    can ship a directory to the node does so; one that cannot honours a URL and ignores a
-    directory. Either is ``""`` when the host has none. ``project_storage`` is the deployment's
-    node-reachable project storage (:class:`ProjectStorage`).
+    ``compute_spec`` is the pip requirement for the node agent's own distribution, matched to
+    the host's version — an exact pin (``3lc-compute==1.2.0``) or a range
+    (``3lc-compute>=1.2,<1.3``): a provider that installs the agent as part of creating the node
+    installs exactly this, as one requirement. It is ``""`` when the host has none.
+    ``project_storage`` is the deployment's node-reachable project storage
+    (:class:`ProjectStorage`).
 
     ``agent_port`` is where the node agent listens; ``ports`` are the browser-facing app ports
     (a notebook server, for example) the provider exposes besides ``agent_port``. Workers on the
@@ -357,14 +355,13 @@ class CreateNodeRequest:
     owner: str = ""
     pricing: str = ""
     compute_spec: str = ""
-    wheelhouse: str = ""
     project_storage: ProjectStorage = field(default_factory=ProjectStorage)
     storage_id: str = ""
     workspace: WorkspaceRequest = field(default_factory=WorkspaceRequest)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CreateNodeRequest:
-        """Parse from the JSON body the host sends."""
+        """Parse from the JSON body the host sends; keys it does not know are ignored."""
         return cls(
             node_id=_stripped(data.get("node_id")),
             node_type=_str(data.get("node_type") or data.get("gpu_type")),
@@ -377,7 +374,6 @@ class CreateNodeRequest:
             owner=_str(data.get("owner")),
             pricing=_str(data.get("pricing")),
             compute_spec=_stripped(data.get("compute_spec")),
-            wheelhouse=_stripped(data.get("wheelhouse")),
             project_storage=ProjectStorage.from_dict(data.get("project_storage")),
             storage_id=_str(data.get("storage_id")),
             workspace=WorkspaceRequest.from_dict(data.get("workspace")),
@@ -400,7 +396,6 @@ class CreateNodeRequest:
             "storage_id": self.storage_id,
             "project_storage": self.project_storage.to_dict(),
             "compute_spec": self.compute_spec,
-            "wheelhouse": self.wheelhouse,
         }
         if self.pricing:
             d["pricing"] = self.pricing
