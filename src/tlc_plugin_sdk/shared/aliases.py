@@ -19,6 +19,7 @@ Three concerns:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -101,8 +102,11 @@ def copy_folder_to_url(
         url.write_bytes(path.read_bytes())
         return size, False
 
+    # Each upload runs in a copy of the caller's context, so a job's or request's Connection
+    # (``connections.current_credential()``) holds in the pool threads as it does here.
+    context = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for path, fut in [(p, pool.submit(put, p)) for p in files]:
+        for path, fut in [(p, pool.submit(context.copy().run, put, p)) for p in files]:
             try:
                 size, was_skipped = fut.result()
             except Exception as exc:  # surfaced once, below

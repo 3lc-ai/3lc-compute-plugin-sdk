@@ -18,6 +18,8 @@ from typing import Any
 
 import pytest
 
+from tlc_plugin_sdk import connections
+from tlc_plugin_sdk.connections import SecretToken, bound_credential
 from tlc_plugin_sdk.shared import aliases
 from tlc_plugin_sdk.shared.alias_ui import alias_ui_script
 from tlc_plugin_sdk.shared.data_source_ui import data_source_ui_script
@@ -101,6 +103,25 @@ def test_copy_folder_to_url_second_run_skips_what_is_there(tmp_path: Path) -> No
     stats = aliases.copy_folder_to_url(str(src), str(dst))
     assert stats["files"] == 3 and stats["skipped"] == 2
     assert (dst / "train" / "b.jpg").exists()
+
+
+def test_copy_folder_to_url_uploads_with_the_callers_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[object] = []
+
+    class _RecordingUrl(_LocalUrl):
+        def write_bytes(self, data: bytes) -> None:
+            seen.append(connections.current_credential())
+            super().write_bytes(data)
+
+    monkeypatch.setattr(sys.modules["tlc"], "Url", _RecordingUrl)
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    _tree(src)
+    token = SecretToken(provider="huggingface", secret="hf_x", connection_id="conn-1")
+    with bound_credential(token):
+        aliases.copy_folder_to_url(str(src), str(dst), workers=2)
+    assert seen == [token, token, token]
 
 
 def test_copy_folder_to_url_rejects_a_missing_folder(tmp_path: Path) -> None:
