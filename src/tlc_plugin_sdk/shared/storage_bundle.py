@@ -27,6 +27,7 @@ link; anything older is forgotten on the next call.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import shutil
 import tempfile
@@ -137,14 +138,20 @@ class BundleRegistry:
 
         ``name`` is the archive's name; ``""`` names it :func:`default_bundle_name` of ``url``. A
         subclass that normalises the URL first passes the name through unchanged, so the default
-        is taken from the normalised URL.
+        is taken from the normalised URL. The bundle's thread sees the caller's context variables
+        as they were at the call, so the request's Connection
+        (:func:`tlc_plugin_sdk.connections.current_credential`) holds inside the provider calls.
         """
         self._prune()
         name = _safe_name(name) or _safe_name(default_bundle_name(url)) or "download"
         bundle = Bundle(id=uuid.uuid4().hex[:12], url=url, name=name)
         with self._lock:
             self._bundles[bundle.id] = bundle
-        threading.Thread(target=self._run, args=(bundle,), name=f"bundle-{bundle.id}", daemon=True).start()
+        # The thread runs in a copy of the caller's context: a plugin's provider calls read the
+        # request's Connection (``connections.current_credential()``) from it, and a bare thread
+        # would start with none and fall back to the deployment's own identity.
+        context = contextvars.copy_context()
+        threading.Thread(target=context.run, args=(self._run, bundle), name=f"bundle-{bundle.id}", daemon=True).start()
         return bundle.public()
 
     def status(self, bundle_id: str) -> dict[str, Any] | None:

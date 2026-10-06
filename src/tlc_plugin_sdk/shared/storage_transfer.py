@@ -29,6 +29,7 @@ registry for :data:`TRANSFER_TTL_S` so a page can still read the outcome.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -287,7 +288,12 @@ class TransferRegistry:
     def start(
         self, src_url: str, dst_url: str, items: list[str], *, mode: str = "copy", rename_to: str = ""
     ) -> dict[str, Any]:
-        """Begin the transfer; returns its first status. Planning runs on the job's own thread."""
+        """Begin the transfer; returns its first status. Planning runs on the job's own thread.
+
+        The job's threads (planning and every parallel copy) see the caller's context variables as
+        they were at the call, so the request's Connection
+        (:func:`tlc_plugin_sdk.connections.current_credential`) holds inside the provider calls.
+        """
         if mode not in MODES:
             msg = f"'{mode}' is not a transfer mode; use copy or move"
             raise TransferError(msg)
@@ -297,8 +303,15 @@ class TransferRegistry:
         transfer = Transfer(id=uuid.uuid4().hex[:12], src_url=src_url, dst_url=dst_url, mode=mode)
         with self._lock:
             self._transfers[transfer.id] = transfer
+        # The job's threads run in a copy of the caller's context: a plugin's provider calls read
+        # the request's Connection (``connections.current_credential()``) from it, and a bare
+        # thread would start with none and fall back to the deployment's own identity.
+        context = contextvars.copy_context()
         threading.Thread(
-            target=self._run, args=(transfer, list(items), rename_to), name=f"transfer-{transfer.id}", daemon=True
+            target=context.run,
+            args=(self._run, transfer, list(items), rename_to),
+            name=f"transfer-{transfer.id}",
+            daemon=True,
         ).start()
         return transfer.public()
 
@@ -362,8 +375,11 @@ class TransferRegistry:
                     transfer.files_done += 1
                     transfer.bytes_done += size
 
+            # Pool threads start with an empty context too: each copy runs in its own copy of this
+            # thread's (one Context cannot be entered by two threads at once).
+            context = contextvars.copy_context()
             with ThreadPoolExecutor(max_workers=self._workers, thread_name_prefix=f"transfer-{transfer.id}") as pool:
-                list(pool.map(one, pairs))
+                list(pool.map(lambda pair: context.copy().run(one, pair), pairs))
             if transfer._cancel.is_set():
                 self._finish(
                     transfer, "cancelled", f"{len(copied)} of {len(pairs)} objects were copied before the cancel"

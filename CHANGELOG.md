@@ -234,6 +234,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to is the host's to say, and is carried in the run body.
 
 ### Fixed
+- **Storage jobs keep the request's Connection.** `BundleRegistry.start` and
+  `TransferRegistry.start` run their background work — the bundle's thread, a transfer's planning
+  thread and each of its parallel copies — in a copy of the caller's context, so
+  `connections.current_connection()` / `current_credential()` inside the provider calls are the
+  starting request's. Before, those threads started with none, and a bundle or transfer started
+  through a `KEYLESS` Connection fell back to the deployment's own identity or failed for want of
+  a credential. `shared.aliases.copy_folder_to_url` likewise runs each parallel upload in the
+  caller's context.
 - `CreateNodeRequest.from_dict` keeps `idle_ttl_s: 0` (and negatives) — "never turn off on idle" —
   instead of reading it as 1800; only a missing, unreadable or non-finite value defaults.
 - The worker no longer logs an `AttributeError` traceback at start-up for a plugin that
