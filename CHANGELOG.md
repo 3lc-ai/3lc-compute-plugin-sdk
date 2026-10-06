@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The data-source widget's bucket browse names its Connection.** The ``/api/infra/storage``
+  listing tags each bucket with the Connection it was listed through; the shared widget now keeps
+  that tag and forwards ``connection_id`` to the provider's ``/list`` route, so Browse… works on a
+  host whose storage is reached through Connections (it used to be refused with "choose the
+  Connection this location belongs to"). When a provider has several Connections, the Location
+  dropdown shows the Connection name to tell twin buckets apart, and a provider stays listed even
+  when one of its Connections' listings errored.
+
 ### Added
 - **A route's granted token.** A route the manifest lists under `[runtime] credential_routes`
   receives the person's chosen SECRET Connection value from the host in the host-owned

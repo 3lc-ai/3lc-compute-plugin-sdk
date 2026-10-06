@@ -41,8 +41,10 @@ The widget requires the plugin to serve the ``/browse`` and (optionally)
 Browsing is not only the compute's own disk: the panel's location bar lists every
 bucket the compute service knows (its generic ``/api/infra/storage`` surface, the same
 locations as the Hub's Storage page), and browsing one of them goes through the
-provider's ``/list`` route. Picking a bucket folder writes its URL (``s3://…``) into the
-field, which plugins already accept. Volumes and node disks are not offered here: a
+provider's ``/list`` route **through the Connection the bucket was listed through** —
+the listing tags each bucket with its ``connection_id``, and the widget names it on
+every later call, as a host with a Config Service requires. Picking a bucket folder
+writes its URL (``s3://…``) into the field, which plugins already accept. Volumes and node disks are not offered here: a
 plugin running on the controller cannot read them. Without an infrastructure plugin
 (or on a host without that surface) the bar shows only "This compute", as before.
 """
@@ -190,12 +192,18 @@ DATA_SOURCE_UI_JS = (
     "      .then(function(r) { return r.ok ? r.json() : { storage: [], providers: [] }; })\n"
     "      .then(function(out) {\n"
     "        var byPlugin = {};\n"
-    "        (out.providers || []).forEach(function(p) { byPlugin[p.plugin_id] = p; });\n"
+    "        // Provider rows are per Connection: prefer one that can browse over one whose\n"
+    "        // listing errored for another Connection, so a single bad grant doesn't hide a provider.\n"
+    "        (out.providers || []).forEach(function(p) {"
+    " if (!byPlugin[p.plugin_id] || p.browse) byPlugin[p.plugin_id] = p; });\n"
     "        var list = (out.storage || []).filter(function(s) {\n"
     "          // Only bucket URLs: a plugin on the controller reads s3://-style URLs, not volumes or node disks.\n"
     "          return s.kind === 'bucket' && s.url && (byPlugin[s.plugin_id] || {}).browse;\n"
     "        }).map(function(s) {\n"
+    "          // Each bucket was listed through a Connection; every later call about it names that\n"
+    "          // Connection (empty on a host whose storage is its own identity).\n"
     "          return { kind: 'bucket', plugin_id: s.plugin_id, url: String(s.url).replace(/\\/$/, ''),\n"
+    "                   connection_id: s.connection_id || '', connection_name: s.connection_name || '',\n"
     "                   name: s.name || s.id, label: (byPlugin[s.plugin_id] || {}).label || 'bucket', root: "
     "!!s.project_root };\n"
     "        });\n"
@@ -280,6 +288,9 @@ DATA_SOURCE_UI_JS = (
     "    var at = prefixUrl.replace(/\\/$/, '');\n"
     "    var url = computeUrl + '/api/infra/storage/' + encodeURIComponent(_loc.plugin_id) + '/list?url=' + "
     "encodeURIComponent(at + '/');\n"
+    "    // Name the Connection this bucket was listed through — a host with a Config Service\n"
+    "    // refuses a storage call that names none.\n"
+    "    if (_loc.connection_id) url += '&connection_id=' + encodeURIComponent(_loc.connection_id);\n"
     "    var re = glob ? _globToRegex(glob) : null;\n"
     "    API.authFetch(url)\n"
     "      .then(function(r) { return r.json().then(function(j) { if (!r.ok) throw new Error(j.detail || ('HTTP ' + "
@@ -305,13 +316,21 @@ DATA_SOURCE_UI_JS = (
     "    // machine, its disk.\n"
     "    var locs = (window._tlcDsLocations || {}).list || [];\n"
     "    if (locs.length) {\n"
+    "      // A provider with several Connections lists the same bucket more than once: the\n"
+    "      // Connection name is what tells the twins apart, so show it only then.\n"
+    "      var connsOf = {};\n"
+    "      locs.forEach(function(l) { if (l.connection_id) { (connsOf[l.plugin_id] = connsOf[l.plugin_id] || "
+    "{})[l.connection_id] = 1; } });\n"
     "      h += '<div class=\"tlc-ds-loc\"><label>Location</label><select data-ds-loc>';\n"
     "      if (_here) h += '<option value=\"local\"' + (_loc.kind === 'local' ? ' selected' : '') + "
     "'>This computer</option>';\n"
     "      locs.forEach(function(l, i) {\n"
-    "        h += '<option value=\"' + i + '\"' + (_loc.kind === 'bucket' && _loc.url === l.url ? ' selected' : '') + "
-    "'>'\n"
-    "           + _esc(l.label + ' · ' + l.name + (l.root ? ' (project root)' : '')) + '</option>';\n"
+    "        var picked = _loc.kind === 'bucket' && _loc.url === l.url"
+    " && (_loc.connection_id || '') === (l.connection_id || '');\n"
+    "        var viaConn = Object.keys(connsOf[l.plugin_id] || {}).length > 1 && l.connection_name;\n"
+    "        h += '<option value=\"' + i + '\"' + (picked ? ' selected' : '') + '>'\n"
+    "           + _esc(l.label + ' · ' + l.name + (viaConn ? ' — ' + l.connection_name : '')"
+    " + (l.root ? ' (project root)' : '')) + '</option>';\n"
     "      });\n"
     "      h += '</select></div>';\n"
     "    }\n"
