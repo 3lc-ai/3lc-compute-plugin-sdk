@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when one of its Connections' listings errored.
 
 ### Added
+- **`PLUGIN_API.mountNodes(element, options?)`** (optional bridge member). An infrastructure plugin
+  page can draw the host's own node list for its provider: state, cost, startup history, auto-off,
+  rename, Terminate/Dismiss and the provider's History ledger. It is the component the Hub's
+  Deployments page draws, so provider pages stop carrying copies of it. Returns
+  `{refresh(), destroy()}`. Feature-detect it; older hosts do not define it.
 - **A route's granted token.** A route the manifest lists under `[runtime] credential_routes`
   receives the person's chosen SECRET Connection value from the host in the host-owned
   `x-tlc-bound-credential` header (`connections.BOUND_CREDENTIAL_HEADER`; the run body's
