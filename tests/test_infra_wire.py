@@ -111,8 +111,8 @@ ROUND_TRIPS: list[tuple[Any, set[str]]] = [
         },
     ),
     (
-        CreateNodeResponse("p", "http://a", "t", "spot", "d", 1.5, {"object_service_url": "u"}, "owner"),
-        {"provider_id", "agent_url", "token", "pricing", "detail", "hourly_rate", "services", "managed_by"},
+        CreateNodeResponse("p", "http://a", "t", "spot", "d", 1.5, {"object_service_url": "u"}, "owner", "eu-west-1"),
+        {"provider_id", "agent_url", "token", "pricing", "detail", "hourly_rate", "services", "managed_by", "location"},
     ),
     (
         NodeStateResponse("pending", "d", ["a"], "b", False),

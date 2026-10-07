@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when one of its Connections' listings errored.
 
 ### Added
+- **`CreateNodeResponse.location`**: where a node lives, in the provider's words (a cloud region, a
+  zone, a site). The host saves it on the node record and in its history, and the Hub shows it beside
+  the node's type. Optional; `""` shows nothing.
 - **`PLUGIN_API.mountNodes(element, options?)`** (optional bridge member). An infrastructure plugin
   page can draw the host's own node list for its provider: state, cost, startup history, auto-off,
   rename, Terminate/Dismiss and the provider's History ledger. It is the component the Hub's
