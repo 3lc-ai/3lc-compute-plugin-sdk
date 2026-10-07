@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`CreateNodeResponse.location`**: where a node lives, in the provider's words (a cloud region, a
   zone, a site). The host saves it on the node record and in its history, and the Hub shows it beside
   the node's type. Optional; `""` shows nothing.
+- **`PLUGIN_API.mountNodes(element, options?)`** (optional bridge member). An infrastructure plugin
+  page can draw the host's own node list for its provider: state, cost, startup history, auto-off,
+  rename, Terminate/Dismiss and the provider's History ledger. It is the component the Hub's
+  Deployments page draws, so provider pages stop carrying copies of it. Returns
+  `{refresh(), destroy()}`. Feature-detect it; older hosts do not define it.
 - **A route's granted token.** A route the manifest lists under `[runtime] credential_routes`
   receives the person's chosen SECRET Connection value from the host in the host-owned
   `x-tlc-bound-credential` header (`connections.BOUND_CREDENTIAL_HEADER`; the run body's

@@ -485,6 +485,13 @@ PLUGIN_API = {
   owns `plugin_id` and `connection_id`. It resolves the node, or `false` when cancelled or refused.
   Feature-detect it and fall back to `POST /api/infra/nodes` on hosts that predate it; that direct
   post carries no Connection, so a host that requires one refuses it.
+- **`mountNodes(element, options?)`** (optional) draws the host's node list for an infrastructure
+  plugin page. It shows this compute's nodes of your provider with state, cost, startup history,
+  auto-off, rename and Terminate, and below them the provider's History ledger. It is the same
+  component the Hub's Deployments page shows, so a provider page lists its nodes without a renderer
+  of its own. It refreshes itself while visible and stops when the element leaves the page; call
+  the returned `refresh()` after your own Spin up. Feature-detect it, and point to Deployments on
+  hosts that predate it.
 - **`location`** (SDK 0.2+) exposes the host's shared location renderers (`TlcLocationApi`):
   chips and labels for the project roots / scan URLs that tables, runs, and projects from
   `PLUGIN_API.data` resolve to (their `location` / `locations` fields, also 0.2). Every renderer

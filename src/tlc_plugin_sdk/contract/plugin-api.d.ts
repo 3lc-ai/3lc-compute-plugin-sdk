@@ -333,6 +333,21 @@ export interface PluginApi {
   createNode?(providerId: string, request?: { [field: string]: unknown }, onNote?: (text: string) => void): Promise<object | false>;
 
   /**
+   * Draw the host's own node list in `element`, for an infrastructure plugin page: this compute's
+   * nodes of `pluginId` (this plugin when omitted), each with its state, hardware and cost, startup
+   * history, per-node auto-off, rename and Terminate/Dismiss, and below them the provider's History
+   * ledger, which includes nodes that are long gone. It is the same component the Hub's Deployments page
+   * draws, refreshed every few seconds while the tab is visible, and it stops once `element` leaves
+   * the page. `openNodes` (default true) and `openHistory` (default false) set which of its two
+   * collapsible cards start open. Returns a handle whose `refresh()` repaints now (after the page's
+   * own Spin up, say) and whose `destroy()` stops it.
+   *
+   * Optional: older hosts do not define it; a page that finds it absent can point to the Hub's
+   * Deployments page, where the same nodes are listed.
+   */
+  mountNodes?(element: HTMLElement, options?: { pluginId?: string; openNodes?: boolean; openHistory?: boolean }): { refresh(): void; destroy(): void };
+
+  /**
    * Let the person choose which of their SECRET Connections for `service` (a service slug the
    * plugin's manifest lists under `[runtime] credentials`, e.g. `"huggingface"`) this plugin uses —
    * allowing an existing Connection for this plugin, or adding a token, in the host's own dialog.
