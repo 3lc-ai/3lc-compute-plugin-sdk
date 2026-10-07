@@ -424,6 +424,10 @@ class CreateNodeResponse:
     hourly_rate: float | None = None
     services: dict[str, str] = field(default_factory=dict)
     managed_by: str = ""
+    #: Where the node lives, in the provider's own words: a cloud region (``eu-west-1``), a zone,
+    #: a site. The host saves it on the node record and in its history, and the Hub shows it beside
+    #: the node's type; ``""`` shows nothing.
+    location: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CreateNodeResponse:
@@ -437,6 +441,7 @@ class CreateNodeResponse:
             hourly_rate=_opt_float(data.get("hourly_rate")),
             services={k: v for k, v in _mapping(data.get("services")).items() if isinstance(v, str)},
             managed_by=_str(data.get("managed_by")),
+            location=_str(data.get("location")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -456,6 +461,8 @@ class CreateNodeResponse:
             d["services"] = dict(self.services)
         if self.managed_by:
             d["managed_by"] = self.managed_by
+        if self.location:
+            d["location"] = self.location
         return d
 
 
