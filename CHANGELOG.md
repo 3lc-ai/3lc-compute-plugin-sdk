@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+- **`shared.alias_override_ui`, the "Read this data from somewhere else for this run" card.** The Hub
+  now plans a run's data and asks where anything the run target cannot reach is, on the compute host
+  as on a node, so the card is redundant: drop it from your fragment. It stays importable and
+  unchanged on older Hubs; on a Hub whose `PLUGIN_API` has `planRun`, `_tlcAliasOverrideHtml` returns
+  `''` and `_tlcFetchAndPopulateOverrides` hides the card without fetching. Removed at 1.0.
+
 ### Fixed
+- **The data-source picker's `mode: 'dir'` is a folder picker.** "Select This Folder" was drawn only
+  for `mode: 'folder'`, so a plugin passing `'dir'` could not pick a folder; `'dir'` now means
+  `'folder'`.
+- **The alias card no longer offers a copy before a folder is chosen.** An empty folder was treated
+  as local, so the checked copy offer showed on an empty form.
 - **The data-source widget's bucket browse names its Connection.** The ``/api/infra/storage``
   listing tags each bucket with the Connection it was listed through; the shared widget now keeps
   that tag and forwards ``connection_id`` to the provider's ``/list`` route, so Browse… works on a
@@ -17,6 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when one of its Connections' listings errored.
 
 ### Added
+- **Manifest `[runtime] data_inputs` and `data_outputs`.** Dotted keys into the run body naming the
+  data a run reads and the places it writes, for the host to plan and check against the run target.
+  `harness.read_manifest()` validates both (`Manifest.data_inputs`, `Manifest.data_outputs`;
+  `parse_data_keys()`) and refuses a wrong shape. See the guide's "Data inputs and run targets".
+- **The data-source picker follows the run target** (`PLUGIN_API.getRunTarget` /
+  `onRunTargetChange`). For a node run the first location is the node's own disk,
+  "<label> (node)", browsed through the host's `/api/infra/nodes/{id}/files`; the buckets follow,
+  each saying whether that node can read it when its storage probe covers the bucket; there is no
+  "This computer" and no Upload. For a run on the compute host its disk is "This computer" only when
+  the compute URL is a loopback address, otherwise it is offered under the Hub's name for the host.
+  A value the target cannot reach gets a note under the field (a folder picked on this computer and
+  then a node chosen; a typed path the node's path check says is missing; a bucket the node cannot
+  read). A Hub without `getRunTarget` gets the picker as before.
+- Browser contract (`plugin-api.d.ts`): `getRunTarget()` returns `PluginRunTarget`, gaining the Hub's
+  `label` for the target and a node's `files_root`; the optional `planRun?(body)` previews the host's
+  data plan for a run body (`PluginRunPlan`, `PluginRunPlanRef`). The shared-widget globals are
+  declared as shipped: `_tlcBindAliasAutoUpdate` with all six parameters, and
+  `_tlcAliasReviewCopy`, `_tlcProjectLocationHtml`, `_tlcBindProjectLocation`, `_tlcGetProjectRoot`,
+  `_tlcSelectedProjectRoot`, `_tlcDefaultProjectRoot`, `_tlcStorageOf`, `_tlcRootLabel`,
+  `_tlcRunTarget` and `_tlcComputeIsHere`.
 - **`CreateNodeResponse.location`**: where a node lives, in the provider's words (a cloud region, a
   zone, a site). The host saves it on the node record and in its history, and the Hub shows it beside
   the node's type. Optional; `""` shows nothing.
@@ -150,6 +182,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node's storage credential. Empty from an older host.
 
 ### Changed
+- **The alias card's copy offer is opt-in.** It is offered only to a plugin that passes
+  `{copyOffer: true}` to `_tlcBindAliasAutoUpdate` (a plugin that copies the folder when the form
+  sends `alias_copy_to_root`); before, every plugin got a checked offer, which a plugin that never
+  copies sent as an instruction nothing acted on. The offer is withdrawn while the run target is a
+  node (a node cannot read the folder), and its wording names the folder, the machine it is on and
+  the copy's destination. A local project root is labelled "This computer" only when the browser is
+  on the compute host, otherwise by the Hub's name for the host.
 - **Requires the staged 3lc core.** The base requirement is `3lc[pandas]>=3.5.0.dev149866,<4.0.0`, locked to
   that build and resolved from the explicit `staging` index until the core is released on PyPI. A plugin locking
   against this SDK routes `3lc` to the same index (sources are not transitive). CI and the docs build read the
