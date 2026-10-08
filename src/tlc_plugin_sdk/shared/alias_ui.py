@@ -17,12 +17,14 @@ Usage in a plugin's ``get_ui_fragment()``::
 
 from __future__ import annotations
 
+from tlc_plugin_sdk.shared.run_target_ui import RUN_TARGET_JS
+
 # The JS helper functions are defined once and shared by all plugins.
 # Each plugin calls _tlcAliasSettingsHtml(idPrefix, projectValue, folderValue)
 # to render the alias section, and _tlcGetAliasValues(idPrefix) to read values.
 
 # fmt: off
-ALIAS_UI_JS = (
+ALIAS_UI_JS = RUN_TARGET_JS + (
     "// ── Shared URL Alias UI ─────────────────────────────────\n"
     "(function(){var st=document.createElement('style');st.textContent="
     "'.tlc-tip{position:relative}'"
@@ -137,15 +139,19 @@ ALIAS_UI_JS = (
     "}\n"
     "// Kept for a plugin script that still calls it by the old name; the plugin id no longer matters.\n"
     "function _tlcProjectRootUrl(pluginId) { return _tlcDefaultProjectRoot(); }\n"
-    "function _tlcStorageOf(pathOrUrl) {\n"
-    "  // 'local', or 'scheme://bucket' — what decides whether two places share storage.\n"
-    "  var m = /^([a-z][a-z0-9+.-]*):\\/\\/([^/]+)/i.exec(String(pathOrUrl || '').trim());\n"
-    "  return m ? (m[1].toLowerCase() + '://' + m[2]) : 'local';\n"
+    "// The compute host, named the way the person sees it: \"This computer\" only when the browser runs on it\n"
+    "// (a loopback compute URL); else the Hub's name for it while runs stay on it, else \"The compute host\".\n"
+    "function _tlcHostName() {\n"
+    "  var API = window.PLUGIN_API;\n"
+    "  var base = API && API.getConfig ? API.getConfig('compute_service_url') : '';\n"
+    "  if (_tlcComputeIsHere(base)) return 'This computer';\n"
+    "  var t = _tlcRunTarget();\n"
+    "  return (t && t.target === 'local' && t.label) || 'The compute host';\n"
     "}\n"
     "// What a root IS, not which lookup found it: a compute whose own project root is a bucket was\n"
-    "// offering it as \"This computer — s3://…\" (Paul, 2026-09-07).\n"
+    "// offering it as \"This computer — s3://…\" (Paul, 2026-09-07). A local root is on the compute host.\n"
     "function _tlcRootLabel(url) {\n"
-    "  if (_tlcStorageOf(url) === 'local') return 'This computer — ' + url;\n"
+    "  if (_tlcStorageOf(url) === 'local') return _tlcHostName() + ' — ' + url;\n"
     "  var scheme = (String(url).split('://')[0] || '').toLowerCase();\n"
     "  var kind = scheme === 's3' ? 'S3 bucket'\n"
     "    : scheme === 'gs' ? 'Cloud Storage bucket'\n"
@@ -153,36 +159,44 @@ ALIAS_UI_JS = (
     "    : 'Bucket';\n"
     "  return kind + ' — ' + url;\n"
     "}\n"
-    "// Offer the copy only when the data is on this machine and the table goes to a bucket — the one\n"
-    "// case where a GPU node or the Dashboard could not reach the data. Two places on the same bucket, or\n"
-    "// two buckets, never ask: a node reads any bucket it has credentials for. The copy lands at\n"
-    "// <root>/<project>/data/<token>/.\n"
+    "// Offer to copy the data next to the table, and point the alias at the copy. Only when all of these hold:\n"
+    "// - the plugin asked for it (opts.copyOffer === true): it copies the folder during the run when the form\n"
+    "//   sends alias_copy_to_root, which not every plugin does (one that fetches its own data never needs to);\n"
+    "// - a folder is chosen (an empty one is not chosen yet) and it is on the compute host;\n"
+    "// - the table goes to a bucket, so a GPU node or the Dashboard could not reach the data where it is;\n"
+    "// - the run stays on the compute host: a node run cannot read a folder there at all, so there is\n"
+    "//   nothing to copy from (the Hub's run dialog says so).\n"
+    "// Two places on the same bucket, or two buckets, never ask: a node reads any bucket it has credentials for.\n"
+    "// The copy lands at <root>/<project>/data/<token>/.\n"
     "// rootOverride (optional): the root the person chose for the project (see _tlcProjectLocationHtml);\n"
     "// without it the host's default root — what the run gets when nothing is chosen — is asked for.\n"
-    "// opts.copyOffer === false: the plugin fetches the data itself and puts it where the alias points,\n"
-    "// so this offer would be a second, competing copy (a Hugging Face import: the data is on the Hub,\n"
-    "// never on this machine).\n"
     "function _tlcAliasReviewCopy(idPrefix, projectName, folderValue, pluginId, rootOverride, opts) {\n"
     "  var box = document.getElementById(idPrefix + '-alias-copy');\n"
     "  if (!box) return;\n"
-    "  if (opts && opts.copyOffer === false) { box.style.display = 'none'; box.dataset.target = ''; return; }\n"
-    "  // An empty folder means it is found at import time (CSV image columns): treat it as local.\n"
+    "  // The root arrives later; only the latest review may show the offer.\n"
+    "  var seq = String((parseInt(box.dataset.reviewSeq || '0', 10) || 0) + 1);\n"
+    "  box.dataset.reviewSeq = seq;\n"
+    "  function hide() { box.style.display = 'none'; box.dataset.target = ''; }\n"
     "  var folder = String(folderValue || '').trim();\n"
-
+    "  var t = _tlcRunTarget();\n"
+    "  if (!(opts && opts.copyOffer === true) || !folder || (t && t.target === 'node')) { hide(); return; }\n"
     "  var rootPromise = rootOverride ? Promise.resolve(String(rootOverride).replace(/\\/$/, ''))"
     " : _tlcDefaultProjectRoot();\n"
     "  rootPromise.then(function(root) {\n"
+    "    if (box.dataset.reviewSeq !== seq) return;\n"
     "    var offer = root && _tlcStorageOf(root) !== 'local' && _tlcStorageOf(folder) === 'local';\n"
-    "    if (!offer) { box.style.display = 'none'; box.dataset.target = ''; return; }\n"
+    "    if (!offer) { hide(); return; }\n"
     "    var tokenEl = document.getElementById(idPrefix + '-alias-token');\n"
     "    var token = (tokenEl && tokenEl.value.trim()) || _tlcDefaultAliasToken(projectName || 'data');\n"
     "    var target = root + '/' + (projectName || 'project') + '/data/' + token.toLowerCase();\n"
+    "    var host = _tlcHostName();\n"
+    "    host = host.charAt(0).toLowerCase() + host.slice(1);\n"
     "    box.dataset.target = target;\n"
     "    document.getElementById(idPrefix + '-alias-copy-title').textContent =\n"
     "      'Copy the data next to the table, and point the alias at the copy';\n"
-    "    document.getElementById(idPrefix + '-alias-copy-detail').textContent = 'The table goes to ' + root\n"
-    "      + ', the data is on this machine. It is copied to ' + target + ' during the import; <' + token\n"
-    "      + '> then resolves there for GPU nodes, the Dashboard and this machine alike.';\n"
+    "    document.getElementById(idPrefix + '-alias-copy-detail').textContent = 'Copies ' + folder + ' (on ' + host\n"
+    "      + ') to ' + target + ' during the import, because the table goes to ' + root + '. <' + token\n"
+    "      + '> then resolves to the copy for GPU nodes, the Dashboard and ' + host + ' alike.';\n"
     "    box.style.display = '';\n"
     "  });\n"
     "}\n"
@@ -191,9 +205,11 @@ ALIAS_UI_JS = (
     "// any more, and the Details disclosure binds itself in the markup above.\n"
     "function _tlcBindAliasToggle(idPrefix) { return idPrefix; }\n"
     "\n"
-    "// pluginId (optional): enables the copy-next-to-the-table offer; without it none is made.\n"
+    "// pluginId: kept for the signature; nothing reads it.\n"
     "// rootInputId (optional): the 'Create project in' select (_tlcProjectLocationHtml); its value is the root\n"
     "// the table will be written to, and the copy offer follows it.\n"
+    "// opts (optional): {copyOffer: true} for a plugin that copies the folder when the form asks it to (see\n"
+    "// _tlcAliasReviewCopy); without it no copy is offered.\n"
     "function _tlcBindAliasAutoUpdate("
     "idPrefix, projectInputId, folderInputId, pluginId, rootInputId, opts) {\n"
     "  var projInput = document.getElementById(projectInputId);\n"
@@ -231,6 +247,9 @@ ALIAS_UI_JS = (
     "  [projInput, folderInput, aliasFolderInput, rootInput].forEach(function(el) {\n"
     "    if (el) { el.addEventListener('input', review); el.addEventListener('change', review); }\n"
     "  });\n"
+    "  // And the run target: no offer while the run goes to a node.\n"
+    "  var API = window.PLUGIN_API;\n"
+    "  if (API && typeof API.onRunTargetChange === 'function') API.onRunTargetChange(review);\n"
     "  review();\n"
     "}\n"
     "\n"
@@ -348,10 +367,11 @@ PROJECT_LOCATION_JS = (
     "    function describe() {\n"
     "      if (!help) return;\n"
     "      var isCloud = _tlcStorageOf(sel.value) !== 'local';   // what the root is, not where it came from\n"
+    "      var host = _tlcHostName();\n"
     "      var text = isCloud\n"
-    "        ? 'The table is written to the bucket; GPU nodes and the Dashboard read it there. "
-    "Data on this computer is copied next to it (see the alias below).'\n"
-    "        : 'The table stays on this computer, in its 3LC projects folder.';\n"
+    "        ? 'The table is written to the bucket; GPU nodes and the Dashboard read it there.'\n"
+    "        : 'The table stays on ' + host.charAt(0).toLowerCase() + host.slice(1)"
+    " + ', in its 3LC projects folder.';\n"
     "      // A root the deployment does not scan is allowed, but invisible: say so rather than refuse.\n"
     "      if (sel.value && known.length && !scanned[sel.value]) text += "
     "' This deployment does not scan this location, so the Dashboard will not list the project until it does.';\n"
@@ -407,7 +427,9 @@ def alias_ui_script() -> str:
     - ``_tlcAliasSettingsHtml(prefix, project, folder)`` to render HTML
     - ``_tlcBindAliasToggle(prefix)`` after inserting the HTML
     - ``_tlcBindAliasAutoUpdate(prefix, projectInputId, folderInputId, pluginId, rootInputId, opts)``
-      — ``opts = {copyOffer: false}`` for a plugin that fetches its own data and copies it itself
+      — ``opts = {copyOffer: true}`` for a plugin that copies a folder on the compute host next to a
+      bucket table when the form sends ``alias_copy_to_root``; without it no copy is offered. The
+      offer is never made for an empty folder or while the run target is a node
     - ``_tlcGetAliasValues(prefix)`` at submit time
     - ``_tlcProjectLocationHtml(prefix)`` + ``_tlcBindProjectLocation(prefix, pluginId)`` for the
       "Create project in" choice (the host's default root first, then the deployment's other

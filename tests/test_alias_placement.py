@@ -9,6 +9,7 @@ points at the copy while this session keeps resolving to the local folder.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -310,3 +311,85 @@ def test_one_root_is_stated_rather_than_offered_as_a_choice() -> None:
     )[0]
     assert "options.length === 1" in tail
     assert "sel.style.display = single ? 'none' : ''" in tail  # hidden, not removed: it carries the value
+
+
+_FAKE_DOM = (Path(__file__).parent / "fixtures" / "fake_dom.js").read_text(encoding="utf-8")
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+
+
+def _copy_offer(tmp_path: Path, folder: str, opts: object, *, target: object = None, compute: str = "") -> Any:
+    """Review the copy offer for ``folder`` against a bucket root and return what the card shows.
+
+    ``target`` is what ``PLUGIN_API.getRunTarget()`` answers (``None``: a Hub without it); ``compute``
+    the compute URL the Hub reports.
+    """
+    run_target = "" if target is None else "api.getRunTarget = function () { return " + json.dumps(target) + "; };\n"
+    harness = tmp_path / "alias.js"
+    harness.write_text(
+        _FAKE_DOM
+        + "\n"
+        + alias_ui_script()
+        + "\nvar api = fakeApi({}, {config: {compute_service_url: "
+        + json.dumps(compute)
+        + "}});\n"
+        + run_target
+        + "window.PLUGIN_API = api;\n"
+        + "['p-alias-copy', 'p-alias-copy-title', 'p-alias-copy-detail', 'p-alias-token', 'p-alias-folder',"
+        + " 'p-alias-copy-enabled'].forEach(addEl);\n"
+        + "_els['p-alias-copy-enabled'].checked = true; _els['p-alias-token'].value = 'FIRE';\n"
+        + "_tlcAliasReviewCopy('p', 'Fire', "
+        + json.dumps(folder)
+        + ", 'importer', 's3://b/projects', "
+        + json.dumps(opts)
+        + ");\n"
+        + "tick().then(function () { var box = _els['p-alias-copy'];\n"
+        + "  process.stdout.write(JSON.stringify({shown: box.style.display !== 'none', target: box.dataset.target,"
+        + " detail: _els['p-alias-copy-detail'].textContent, values: _tlcGetAliasValues('p'),"
+        + " label: _tlcRootLabel('/srv/projects')})); });\n"
+    )
+    done = subprocess.run(["node", str(harness)], check=True, capture_output=True, text=True)
+    return json.loads(done.stdout)
+
+
+@needs_node
+def test_the_copy_is_offered_only_to_a_plugin_that_asks_for_it(tmp_path: Path) -> None:
+    offered = _copy_offer(tmp_path, "/Users/me/fire", {"copyOffer": True}, compute="http://localhost:5020")
+    assert offered["shown"] and offered["target"] == "s3://b/projects/Fire/data/fire"
+    assert offered["values"]["alias_copy_to_root"] is True
+    assert offered["values"]["alias_copy_target"] == "s3://b/projects/Fire/data/fire"
+    # The wording names what is copied, from where, and to where.
+    assert offered["detail"].startswith(
+        "Copies /Users/me/fire (on this computer) to s3://b/projects/Fire/data/fire during the import,"
+        " because the table goes to s3://b/projects."
+    )
+    # A plugin that never copies (no opts, or copyOffer false) is not offered one: it would send a
+    # checked box nothing acts on.
+    for opts in (None, {}, {"copyOffer": False}):
+        quiet = _copy_offer(tmp_path, "/Users/me/fire", opts)
+        assert not quiet["shown"] and quiet["values"]["alias_copy_to_root"] is False, opts
+
+
+@needs_node
+def test_an_empty_folder_is_not_chosen_yet(tmp_path: Path) -> None:
+    out = _copy_offer(tmp_path, "  ", {"copyOffer": True})
+    assert not out["shown"] and out["target"] == "" and out["values"]["alias_copy_to_root"] is False
+
+
+@needs_node
+def test_no_copy_is_offered_while_the_run_goes_to_a_node(tmp_path: Path) -> None:
+    node = {"target": "node", "node_id": "n1", "ready": True, "label": "godfire"}
+    assert not _copy_offer(tmp_path, "/Users/me/fire", {"copyOffer": True}, target=node)["shown"]
+    local = {"target": "local", "ready": True, "label": "This machine"}
+    assert _copy_offer(tmp_path, "/Users/me/fire", {"copyOffer": True}, target=local)["shown"]
+
+
+@needs_node
+def test_a_local_root_is_this_computer_only_when_the_browser_is_on_the_compute_host(tmp_path: Path) -> None:
+    here = _copy_offer(tmp_path, "", None, compute="http://127.0.0.1:5020")
+    assert here["label"] == "This computer — /srv/projects"
+    named = _copy_offer(
+        tmp_path, "", None, compute="https://compute.example", target={"target": "local", "label": "Your deployment"}
+    )
+    assert named["label"] == "Your deployment — /srv/projects"
+    away = _copy_offer(tmp_path, "", None, compute="https://compute.example")
+    assert away["label"] == "The compute host — /srv/projects"
