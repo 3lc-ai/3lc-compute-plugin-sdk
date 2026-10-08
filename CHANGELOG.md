@@ -150,6 +150,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node's storage credential. Empty from an older host.
 
 ### Changed
+- **Requires the staged 3lc core.** The base requirement is `3lc[pandas]>=3.5.0.dev149866,<4.0.0`, locked to
+  that build and resolved from the explicit `staging` index until the core is released on PyPI. A plugin locking
+  against this SDK routes `3lc` to the same index (sources are not transitive). CI and the docs build read the
+  index with the staging credentials, and CI also runs on `config-service-poc`.
 - **`secret()` takes `label=""` by default.** An unlabelled secret is masked, redacted and
   scrubbed but never prompted for (not in `missing_fields` or `missing`), so it needs no
   `required=False`. Prompts follow the settings dataclass's field order.
