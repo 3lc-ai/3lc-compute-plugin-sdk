@@ -50,11 +50,13 @@ __all__ = [
     "forward_for",
     "parse_credential_routes",
     "parse_credentials",
+    "parse_data_keys",
     "read_manifest",
 ]
 
 _SERVICE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SERVICE_MAX_LENGTH = 100
+_DATA_KEY_PATTERN = re.compile(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*")
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,39 @@ def parse_credential_routes(raw: object) -> tuple[str, ...]:
     return tuple(routes)
 
 
+def parse_data_keys(raw: object, name: str) -> tuple[str, ...]:
+    """Validate a manifest's ``[runtime] data_inputs`` or ``data_outputs``: dotted keys into the run body.
+
+    Each key names a value in the JSON body of the plugin's run (or a route's body) — ``"folder"``,
+    ``"source.table_url"`` — whose string (or list of strings) is data the run reads (``data_inputs``)
+    or a place it writes (``data_outputs``). The host plans and checks those values for the run target.
+    Duplicates collapse.
+
+    Args:
+        raw: The manifest value (``None`` when absent).
+        name: ``data_inputs`` or ``data_outputs``, for the error message.
+
+    Returns:
+        The keys, in declaration order.
+
+    Raises:
+        ValueError: When the value is not a list of dotted keys (``[A-Za-z0-9_]+`` segments joined by ``.``).
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        msg = f'[runtime] {name} is a list of dotted keys into the run body ("folder", "source.table_url")'
+        raise ValueError(msg)
+    keys: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not _DATA_KEY_PATTERN.fullmatch(item):
+            msg = f"[runtime] {name}: {item!r} is not a dotted key (letters, digits and _, joined by '.')"
+            raise ValueError(msg)
+        if item not in keys:
+            keys.append(item)
+    return tuple(keys)
+
+
 @dataclass(frozen=True)
 class Manifest:
     """The fields of a plugin manifest the harness needs.
@@ -150,6 +185,8 @@ class Manifest:
             plugin's package importable when the plugin is not installed.
         credentials: The services the plugin may be given a token for (``[runtime] credentials``).
         credential_routes: The custom routes that receive it (``[runtime] credential_routes``).
+        data_inputs: Dotted keys into the run body naming data the run reads (``[runtime] data_inputs``).
+        data_outputs: Dotted keys naming places the run writes to (``[runtime] data_outputs``).
     """
 
     id: str
@@ -158,6 +195,8 @@ class Manifest:
     source_dir: Path
     credentials: tuple[CredentialRequirement, ...] = field(default=())
     credential_routes: tuple[str, ...] = field(default=())
+    data_inputs: tuple[str, ...] = field(default=())
+    data_outputs: tuple[str, ...] = field(default=())
 
 
 def _toml_load(path: Path) -> dict[str, Any]:
@@ -183,13 +222,13 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
         plugin_dir: The directory holding the manifest (e.g. ``src/tlc_plugin_aws``).
 
     Returns:
-        The manifest's id, entrypoint, kind and credential declarations.
+        The manifest's id, entrypoint, kind, credential declarations and data keys.
 
     Raises:
         FileNotFoundError: When neither file holds a manifest.
         ValueError: When the manifest lacks ``id`` or ``[runtime] entrypoint``, or declares
-            ``credentials`` / ``credential_routes`` of the wrong shape, or ``credential_routes``
-            without ``credentials``.
+            ``credentials`` / ``credential_routes`` / ``data_inputs`` / ``data_outputs`` of the wrong
+            shape, or ``credential_routes`` without ``credentials``.
     """
     directory = Path(plugin_dir).resolve()
     for filename in ("plugin.toml", "pyproject.toml"):
@@ -213,6 +252,8 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
         try:
             credentials = parse_credentials(runtime_table.get("credentials"))
             credential_routes = parse_credential_routes(runtime_table.get("credential_routes"))
+            data_inputs = parse_data_keys(runtime_table.get("data_inputs"), "data_inputs")
+            data_outputs = parse_data_keys(runtime_table.get("data_outputs"), "data_outputs")
         except ValueError as exc:
             msg = f"{path}: {exc}"
             raise ValueError(msg) from exc
@@ -226,6 +267,8 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
             source_dir=directory,
             credentials=credentials,
             credential_routes=credential_routes,
+            data_inputs=data_inputs,
+            data_outputs=data_outputs,
         )
     msg = f"No plugin manifest (plugin.toml or [tool.tlc-compute] in pyproject.toml) in {directory}"
     raise FileNotFoundError(msg)

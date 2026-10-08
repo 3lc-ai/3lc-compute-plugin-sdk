@@ -162,3 +162,39 @@ def test_from_manifest_imports_an_uninstalled_source_checkout(
     out = capsys.readouterr()
     assert json.loads(out.out)["plugin"] == "probe-pkg"
     assert "200 GET /health" in out.err.splitlines()
+
+
+def _data_manifest(tmp_path: Path, runtime: str) -> Path:
+    (tmp_path / "plugin.toml").write_text('id = "probe"\n[runtime]\nentrypoint = "probe:Probe"\n' + runtime)
+    return tmp_path
+
+
+def test_the_manifest_declares_its_data_keys(tmp_path: Path) -> None:
+    manifest = read_manifest(
+        _data_manifest(
+            tmp_path,
+            'data_inputs = ["folder", "source.table_url", "folder"]\ndata_outputs = ["output_path"]\n',
+        )
+    )
+    assert manifest.data_inputs == ("folder", "source.table_url")  # duplicates collapse
+    assert manifest.data_outputs == ("output_path",)
+    bare = read_manifest(_data_manifest(tmp_path, ""))
+    assert bare.data_inputs == () and bare.data_outputs == ()
+
+
+@pytest.mark.parametrize(
+    ("runtime", "match"),
+    [
+        ('data_inputs = "folder"\n', "data_inputs is a list of dotted keys"),
+        ('data_inputs = [""]\n', "not a dotted key"),
+        ('data_inputs = ["a..b"]\n', "not a dotted key"),
+        ('data_inputs = [".a"]\n', "not a dotted key"),
+        ('data_inputs = ["a.b."]\n', "not a dotted key"),
+        ('data_inputs = ["image-folder"]\n', "not a dotted key"),
+        ('data_inputs = ["folder\\n"]\n', "not a dotted key"),
+        ("data_outputs = [1]\n", "data_outputs: 1 is not a dotted key"),
+    ],
+)
+def test_a_wrong_data_key_is_named(tmp_path: Path, runtime: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        read_manifest(_data_manifest(tmp_path, runtime))
