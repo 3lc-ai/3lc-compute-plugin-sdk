@@ -144,13 +144,16 @@ section is the condensed working order.
 
 **URL aliases** (if the plugin creates tables from image folders):
 - `from tlc_plugin_sdk.shared.aliases import register_alias`; call
-  `register_alias(project_name, image_folder, alias_token)` after table creation.
+  `register_alias(project_name, image_folder, alias_token, remote_path=..., root_url=...)` before
+  the rows are written, persisting the durable folder (`alias_folder`), not a declared input the
+  host may rewrite for a node run (guide → "Data inputs and run targets").
 - Shared UI component: `from tlc_plugin_sdk.shared.alias_ui import alias_ui_script`; inject
   into the fragment with `inject_scripts()` (never `str.replace` — see
   `tlc_plugin_sdk/shared/ui_inject.py` for why).
 - In the UI: `_tlcAliasSettingsHtml(prefix, project, folder)` renders the form;
   `_tlcBindAliasToggle(prefix)` + `_tlcBindAliasAutoUpdate(prefix, projectInputId,
-  folderInputId)` bind it; `_tlcGetAliasValues(prefix)` at submit time; after programmatic
+  folderInputId, pluginId, rootInputId, opts)` bind it (`opts = {copyOffer: true}` only if the
+  plugin copies the folder when the form sends `alias_copy_to_root`); `_tlcGetAliasValues(prefix)` at submit time; after programmatic
   form fills call `_tlcSyncAliasFromForm(prefix, projectId, folderId)`.
 
 **SocketIO** (if real-time updates are needed):

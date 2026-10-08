@@ -136,6 +136,11 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 # routes that receive it. See "Tokens on runs and routes (SECRET)" below.
 # credentials = [{ service = "huggingface", required = false }]
 # credential_routes = ["/preview", "/model-warmup"]
+# The run-body keys that carry data the run reads, and places it writes (dotted keys into the
+# JSON body). The host plans and checks those values for the run target before the run. See
+# "Data inputs and run targets" below.
+# data_inputs = ["folder", "source.table_url"]
+# data_outputs = ["output_path"]
 # The plugin's SocketIO namespace is host-derived as "/<plugin-id>" and registered at
 # startup — it is NOT declarable in the manifest (a plugin emits via ctx; the host owns
 # the transport).
@@ -435,7 +440,7 @@ PLUGIN_API = {
 
   // Config values
   getConfig: function(key) { ... },
-  // Keys: "dashboard_url", "compute_service_url", "object_service_url"
+  // Keys: "dashboard_url", "compute_service_url", "object_service_url", "deployment_name"
 
   // API clients (authenticated)
   compute: TlcApi.computeService,     // Compute service methods
@@ -445,6 +450,12 @@ PLUGIN_API = {
   location: TlcLocation,              // Location renderers (chips/labels for project roots) — SDK 0.2+
 
   computeFetch: TlcApi.computeFetch,  // authFetch joined to the compute-service base URL
+
+  // Where runs go (optional; feature-detect each)
+  getRunTarget: function() { ... },   // {target: 'local'|'node', node_id?, ready, label?, files_root?}
+  onRunTargetChange: function(cb) { },// cb() whenever the "Run on:" choice or its readiness changes
+  checkDataForRunTarget: function(tableUrl) { ... },  // Promise<{ok, notes}>
+  planRun: function(body) { ... },    // Promise<plan>: the host's data plan for a run body
 
   // Vendor libraries (each null if the host didn't load it). Stability tiers (frozen):
   libs: {
@@ -465,9 +476,22 @@ PLUGIN_API = {
 
 **Notes on the bridge surface** (full signatures in `plugin-api.d.ts`):
 
-- **`getConfig(key)`** recognizes exactly three keys — `compute_service_url`, `dashboard_url`,
-  `object_service_url`. Any other key returns `''`. `compute_service_url` is the GPU/CPU-routed
-  service for *this* plugin.
+- **`getConfig(key)`** recognizes exactly four keys — `compute_service_url`, `dashboard_url`,
+  `object_service_url`, `deployment_name`. Any other key returns `''`. `compute_service_url` is the
+  GPU/CPU-routed service for *this* plugin.
+- **`getRunTarget()`** (optional) is the Hub's "Run on:" choice: `target` is `'local'` (the compute
+  host's own workers) or `'node'` (with its `node_id`); `ready` is false while a node's worker is
+  being prepared; `label` is the Hub's name for the target (the node's label, or its name for the
+  compute host — "This machine" on a laptop, "Your deployment (…)" on a cloud workspace) and
+  `files_root` the folder a node's disk is browsed under. `label` and `files_root` are absent on
+  older frontends, and the member itself on frontends without remote-node support. Pair it with
+  **`onRunTargetChange(callback)`**, which fires on every change (listeners are cleared when the
+  fragment unmounts). The shared data-source picker and alias card already follow both; see
+  [Data inputs and run targets](#data-inputs-and-run-targets).
+- **`planRun(body)`** (optional) returns the host's data plan for a run body against the current
+  target — which data the run reads and writes, where each piece is, and what the run would need
+  answered — without side effects. The Hub runs the same plan before every run and asks the person
+  itself, so a fragment needs it only for a preview.
 - **`authFetch(url, opts)`** is the most-used member: it waits for auth to resolve, injects the
   `Authorization` header and a JSON `Accept`, and aborts after `opts.timeout` ms (default 10000,
   a custom non-standard option deleted before the real `fetch`) unless you pass your own `signal`.
@@ -1171,9 +1195,9 @@ payload's `warnings`, never as a failed transfer. A plugin that deletes raw stor
 calls `notify_storage_deletes(urls, removed_folders=...)` from the same module for the same
 effect.
 
-**Paths or URLs, one vocabulary** (import and export plugins): people point at this machine
-(`/data/coco`) or at a bucket (`s3://bucket/data/coco`), and the shared data-source picker
-offers both. `tlc_plugin_sdk.shared.url_utils` (`is_url`, `join_path_or_url`, `parent_of`,
+**Paths or URLs, one vocabulary** (import and export plugins): people point at a folder on the
+machine the run reads from (`/data/coco`) or at a bucket (`s3://bucket/data/coco`), and the shared
+data-source picker offers both for the current run target. `tlc_plugin_sdk.shared.url_utils` (`is_url`, `join_path_or_url`, `parent_of`,
 `iter_files`, `read_bytes`, …) lets a plugin treat the two alike — URLs go through `tlc.Url`
 and its adapters, the same transport and credentials that read and write tables, so no extra
 cloud SDKs.
@@ -1199,6 +1223,75 @@ consumer. Neither affects a local Unix-socket worker. Every worker also answers 
 (`{"active_jobs": n}`, read before a remote worker's machine is torn down) and
 `POST /jobs/cancel-all` (what a host calls after a restart it could not re-attach to);
 plugins implement neither.
+
+---
+
+## Data inputs and run targets
+
+A run reads data and writes data, and the run target decides what it can reach: a folder on the
+compute host is not on a node, and a node may not have credentials for every bucket. The host
+plans that before each run, so the person is asked once, in the Hub, instead of the job failing
+on its first image.
+
+### Declare the keys that carry data
+
+```toml
+[runtime]
+data_inputs  = ["folder", "source_table_url"]  # data the run READS
+data_outputs = ["output_path"]                  # places the run WRITES (not the table root)
+```
+
+Each entry is a dotted key into the JSON body your fragment posts to `/run` (or to a route listed
+in `node_routes`): `"folder"`, `"source.table_url"`. The value there is a string, or a list of
+strings; an empty value is skipped. A value that is a 3LC table URL (it contains `/tables/`) is
+planned as a table — the aliases its rows use — and anything else as a folder, file, prefix or URL.
+`harness.read_manifest()` validates both lists (`Manifest.data_inputs`, `Manifest.data_outputs`).
+A plugin that declares neither gets the older behaviour: the host plans only table URLs it finds in
+body keys whose name contains "table".
+
+Leave out the project root: the host stamps that itself (`ctx.project_root_url`).
+
+### A declared input is "where to read it for this run"
+
+Before a run the host plans every declared value and asks the person about anything the target
+cannot reach where it is: read a bucket in place or copy it to the node first, data that is already
+on the node, a folder to use instead. It may then **rewrite the value in the run body** — to a
+staged copy on the node, or the path the person gave. So a declared input means where to read the
+data *for this run*, not where it lives:
+
+- **Persist durable locations from your own field.** A plugin that registers an alias keeps the
+  lasting location in its own form field (the shared alias card's `alias_folder`), never the
+  rewritten input. Read the data from the input; persist the alias from `alias_folder`.
+- **Register the alias before writing rows.** Call
+  `register_alias(project, image_folder=<the folder you read>, remote_path=<alias_folder, when it
+  differs>, root_url=ctx.project_root_url)` before the table writer runs: rows written first keep
+  absolute paths, and an absolute path from a node is useless everywhere else.
+- **A folder on the compute host cannot run on a node.** The host refuses such a run with a sentence
+  saying to put the data in a bucket (or name where it is on the node); it does not copy a host
+  folder to a node. Tables whose aliases point at host folders keep their own
+  path: the host syncs that data through the project's bucket.
+
+The Hub's run dialog replaces the per-plugin "read this data from somewhere else" card
+(`shared.alias_override_ui`, deprecated): drop the card from your fragment. On a Hub that asks
+(its `PLUGIN_API` has `planRun`) the card draws nothing.
+
+### The shared widgets follow the run target
+
+- **The data-source picker** (`shared.data_source_ui`) reads `PLUGIN_API.getRunTarget()` and
+  re-reads it on `onRunTargetChange`. For a node run its first location is the node's own disk,
+  "<label> (node)", browsed through the host under the folder the node's agent allows; the buckets
+  follow, each saying whether that node can read it when the node's storage check covers it. A node
+  run offers no "This computer" and no Upload (an upload lands on the compute host). For a run on
+  the compute host its disk is "This computer" only when the compute URL is a loopback address — the
+  browser and the compute are the same machine — and otherwise carries the Hub's name for the host.
+  A value the target cannot reach (a folder picked on this computer before switching to a node, a
+  typed path the node does not have, a bucket the node cannot read) gets a note under the field. On
+  a Hub without `getRunTarget` the picker behaves as before.
+- **The alias card** (`shared.alias_ui`) offers to copy a folder next to a bucket table only when the
+  plugin asks for it — `_tlcBindAliasAutoUpdate(prefix, projectId, folderId, pluginId, rootId,
+  {copyOffer: true})` — because only a plugin that copies when the form sends `alias_copy_to_root`
+  should show a checked box for it. The offer needs a chosen folder (an empty one is not chosen yet),
+  and is withdrawn while the run goes to a node.
 
 ---
 
@@ -1667,7 +1760,7 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 - [ ] Custom CSS uses `var(--*)` variables, not hardcoded colors
 - [ ] Job progress follows the generic schema (no plugin-specific fields in frontend)
 - [ ] If GPU-bound: `requires_gpu = true` in `[runtime]`; long work is `run_job(ctx)` — never grab a queue
-- [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`). The alias is not optional — the shared widget no longer offers to turn it off (a table written without one is full of absolute paths that resolve on one machine only); the token and folder stay editable under Details, and data inside the project is aliased relative to the table so the token survives a move
+- [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`). The alias is not optional — the shared widget no longer offers to turn it off (a table written without one is full of absolute paths that resolve on one machine only); the token and folder stay editable under Details, and data inside the project is aliased relative to the table so the token survives a move. Register the alias before writing rows, from the durable folder (`alias_folder`), not a declared input the host may rewrite for the run (see [Data inputs and run targets](#data-inputs-and-run-targets))
 - [ ] UI follows the page structure and card conventions from "Styling & UI Conventions" above
 - [ ] Hero section with icon, title, description, and 3 feature badges
 - [ ] Config bar if plugin has saved configurations
