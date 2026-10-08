@@ -272,6 +272,61 @@ export interface PluginGuide {
   dispose(): void;
 }
 
+/** Where jobs from this page run: the host-owned "Run on:" choice (`PluginApi.getRunTarget`). */
+export interface PluginRunTarget {
+  /** `'local'`: the compute host's own workers. `'node'`: a remote node. */
+  target: 'local' | 'node';
+  /** The node's id, for a node target. */
+  node_id?: string;
+  /** False while a chosen node's worker is still being prepared. */
+  ready: boolean;
+  /**
+   * The Hub's name for the target: the node's label, or its name for the compute host
+   * ("This machine", "Your deployment (…)"). Absent on older frontends.
+   */
+  label?: string;
+  /** The folder the node's agent lets the Hub browse, for a node target, when the host knows it. */
+  files_root?: string;
+}
+
+/** One piece of data a planned run reads or writes (`PluginRunPlan.refs`). */
+export interface PluginRunPlanRef {
+  /** `"alias:<TOKEN>@<source>"` or `"field:<dotted key>"`. */
+  id: string;
+  kind: 'alias' | 'field';
+  /** The alias token, for an alias ref. */
+  token?: string;
+  /** The dotted run-body key, for a field ref. */
+  field?: string;
+  /** Every table that uses this ref, for an alias ref. */
+  tables?: string[];
+  /** Where the data resolves today: a bucket URL, a path on the host or the node, or ''. */
+  source: string;
+  where: 'bucket' | 'host' | 'node' | 'web' | 'missing';
+  /** How the run gets it: as it is, a choice to make, a sync to the node, a path to ask for, or not at all. */
+  reach: 'in_place' | 'choose' | 'sync' | 'ask_path' | 'refused';
+  /** The answers the Hub may offer: a subset of `stream`, `copy`, `on_node`, `path`. */
+  options: Array<'stream' | 'copy' | 'on_node' | 'path'>;
+  bytes?: number;
+  digest?: string;
+  already_staged?: boolean;
+  node_path?: string;
+  /** A sentence for people. */
+  detail: string;
+}
+
+/** What the host says a run's data needs before it can run on the current target (`PluginApi.planRun`). */
+export interface PluginRunPlan {
+  target: { kind: 'host' | 'node'; node_id: string; label: string };
+  refs: PluginRunPlanRef[];
+  /** Sentences for what cannot be crossed (e.g. a host folder on a node run). */
+  boundaries: string[];
+  warnings: string[];
+  /** No boundary, and no ref that needs an answer. */
+  ready: boolean;
+  legacy: boolean;
+}
+
 /**
  * The single host -> fragment JS contract. The frontend injects this as
  * `window.PLUGIN_API` when it mounts a plugin fragment; a fragment should reach
@@ -398,9 +453,12 @@ export interface PluginApi {
    * Where jobs from this page currently execute: the host-owned "Run on:" choice.
    * `{target: 'local', ready: true}` on hosts without remote GPU nodes, when
    * "This machine" is selected, or on older frontends (feature-detect the member).
-   * `ready` is false while a chosen node's worker is still being prepared.
+   * `ready` is false while a chosen node's worker is still being prepared. `label`
+   * is the Hub's name for the target and `files_root` the folder a node's disk is
+   * browsed under; both are absent on older frontends. The shared data-source picker
+   * and alias card follow this (see the plugin guide's "Data inputs and run targets").
    */
-  getRunTarget?(): { target: 'local' | 'node'; node_id?: string; ready: boolean };
+  getRunTarget?(): PluginRunTarget;
 
   /**
    * Register a callback fired whenever the "Run on:" choice or its readiness
@@ -427,6 +485,16 @@ export interface PluginApi {
    * skip that when this is set, so the note is not shown twice. Absent on older hosts.
    */
   hostChecksTableInputs?: boolean;
+
+  /**
+   * Plan a run body against the current run target, side-effect free: which data the run
+   * reads and writes (the manifest's `data_inputs` / `data_outputs` and the aliases of the
+   * tables it names), where each piece is, and what the run would need answered. The Hub
+   * does this itself before every run and asks the person; a fragment calls it only to
+   * preview. Its presence also means the Hub asks where a run's data is, so the deprecated
+   * override card draws nothing. Absent on older frontends.
+   */
+  planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;
 
   /** Reference to `TlcApi.computeService` (currently only `getHealth()`). */
   compute: TlcComputeService;
@@ -609,22 +677,88 @@ declare global {
 
   // Injected by the shared alias / data-source / config UI scripts (idPrefix scopes
   // each widget instance to its own DOM). Legacy — see the note above.
+  /** Deprecated (`shared.alias_override_ui`): '' on a Hub with `PLUGIN_API.planRun`. */
   function _tlcAliasOverrideHtml(idPrefix: string): string;
+  /**
+   * Show or hide the copy-next-to-the-table offer. Offered only with `opts.copyOffer === true`,
+   * a non-empty folder on the compute host, a bucket root, and a run target that is not a node.
+   */
+  function _tlcAliasReviewCopy(
+    idPrefix: string,
+    projectName: string,
+    folderValue: string,
+    pluginId?: string,
+    rootOverride?: string,
+    opts?: { copyOffer?: boolean },
+  ): void;
   function _tlcAliasSettingsHtml(idPrefix: string, projectValue: string, folderValue: string): string;
-  function _tlcBindAliasAutoUpdate(idPrefix: string, projectInputId: string, folderInputId: string): void;
+  /**
+   * Keep the alias token and folder in step with the form, and the copy offer with the folder,
+   * the project, the "Create project in" select (`rootInputId`) and the run target.
+   * `pluginId` is not read. `opts.copyOffer: true` opts in to the copy offer.
+   */
+  function _tlcBindAliasAutoUpdate(
+    idPrefix: string,
+    projectInputId: string,
+    folderInputId?: string | null,
+    pluginId?: string,
+    rootInputId?: string | null,
+    opts?: { copyOffer?: boolean },
+  ): void;
+  /** Deprecated (`shared.alias_override_ui`). */
   function _tlcBindAliasOverrideToggle(idPrefix: string): void;
   function _tlcBindAliasToggle(idPrefix: string): void;
-  function _tlcBindDataSource(idPrefix: string, computeUrl: string, pluginId: string, config?: any): void;
-  function _tlcDataSourceHtml(idPrefix: string, config?: any): string;
+  /** Bind the "Create project in" select; resolves the selected root once the roots are known. */
+  function _tlcBindProjectLocation(idPrefix: string, pluginId?: string): Promise<string>;
+  /**
+   * Bind a data-source field. `config.mode`: `'file'` (default) or `'folder'` (`'dir'` reads as
+   * `'folder'`); `config.purpose`: `'input'` (default) or `'output'`; `config.accept`: a glob list.
+   * The locations follow `PLUGIN_API.getRunTarget()`.
+   */
+  function _tlcBindDataSource(
+    idPrefix: string,
+    computeUrl: string,
+    pluginId: string,
+    config?: { accept?: string; mode?: 'file' | 'folder' | 'dir'; purpose?: 'input' | 'output' },
+  ): void;
+  /** True when the compute URL is a loopback address: the compute host is this browser's machine. */
+  function _tlcComputeIsHere(computeUrl: string): boolean;
+  function _tlcDataSourceHtml(
+    idPrefix: string,
+    config?: { placeholder?: string; accept?: string; allowUpload?: boolean },
+  ): string;
   function _tlcDefaultAliasToken(projectName: string): string;
+  /** The compute host's default project root (`GET /api/deployment/storage`), '' when it cannot say. */
+  function _tlcDefaultProjectRoot(): Promise<string>;
+  /** Deprecated (`shared.alias_override_ui`): hides the card on a Hub with `PLUGIN_API.planRun`. */
   function _tlcFetchAndPopulateOverrides(idPrefix: string, tableUrl: string, savedOverrides?: any): void;
+  /** Deprecated (`shared.alias_override_ui`). */
   function _tlcGetAliasOverrides(idPrefix: string): any;
   function _tlcGetAliasValues(idPrefix: string): any;
   function _tlcGetDataSourceValue(idPrefix: string): string;
+  /** The root to send as an override: '' when the selection is the host's default. */
+  function _tlcGetProjectRoot(idPrefix: string): string;
   function _tlcPluginConfig(opts?: any): any;
+  /** The "Create project in" field's HTML; bind it with `_tlcBindProjectLocation`. */
+  function _tlcProjectLocationHtml(idPrefix: string): string;
+  /** Deprecated (`shared.alias_override_ui`). */
   function _tlcRestoreAliasOverrides(idPrefix: string, saved?: any): void;
+  /** What a project root is, for a label: "S3 bucket — s3://…", or the compute host's name for a path. */
+  function _tlcRootLabel(url: string): string;
+  /** `PLUGIN_API.getRunTarget()` normalized (a node choice without an id is local), or null without one. */
+  function _tlcRunTarget(): {
+    target: 'local' | 'node';
+    node_id: string;
+    ready: boolean;
+    label: string;
+    files_root: string;
+  } | null;
+  /** Where the table will be written, whichever option is selected ('' before the roots are known). */
+  function _tlcSelectedProjectRoot(idPrefix: string): string;
   function _tlcSetAliasRoot(idPrefix: string, rootPath: string): void;
   function _tlcSetDataSourceValue(idPrefix: string, value: string): void;
+  /** `'local'`, or `'scheme://bucket'`: what decides whether two places share storage. */
+  function _tlcStorageOf(pathOrUrl: string): string;
   function _tlcSyncAliasFromForm(idPrefix: string, projectId: string, folderId: string): void;
 
   interface Window {
