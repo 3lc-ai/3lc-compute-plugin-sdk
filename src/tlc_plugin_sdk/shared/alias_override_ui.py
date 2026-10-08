@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 r"""Shared UI component for URL alias overrides.
 
-Generates the HTML + JS block that plugins embed in their UI fragments.
-This ensures a consistent alias override UI across every plugin that
-consumes existing 3LC tables.
+.. deprecated::
+    The Hub asks where a run's data is itself: before a run it plans the data the run reads (the
+    plugin's declared ``data_inputs`` and the aliases of the tables it names) and asks about
+    anything the run target cannot reach, on the compute host as on a node. A plugin no longer
+    needs this card; drop it from the fragment. It stays importable so an older plugin keeps
+    loading, and renders nothing on a Hub that does the asking (one whose ``PLUGIN_API`` has
+    ``planRun``). It goes at 1.0.
 
+Generates the HTML + JS block that plugins embed in their UI fragments.
 The override section is automatically hidden when all alias paths are
 already local to the compute service (i.e. accessible on disk).
 
@@ -24,7 +29,15 @@ from __future__ import annotations
 ALIAS_OVERRIDE_UI_JS = (
     "// \u2500\u2500 Shared URL Alias Override UI \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
     "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+    "// Deprecated: a Hub whose PLUGIN_API has planRun asks where a run's data is itself, so the card is not\n"
+    "// drawn there — two questions about the same data would disagree.\n"
+    "function _tlcHubAsksForData() {\n"
+    "  var API = window.PLUGIN_API;\n"
+    "  return !!(API && typeof API.planRun === 'function');\n"
+    "}\n"
+    "\n"
     "function _tlcAliasOverrideHtml(idPrefix) {\n"
+    "  if (_tlcHubAsksForData()) return '';\n"
     "  var s = 'margin-top:12px;padding:12px;border:1px solid var(--border)';\n"
     "  s += ';border-radius:6px;background:var(--bg)';\n"
     "  var html = '<div class=\"tlc-alias-override\" id=\"' + idPrefix"
@@ -70,6 +83,11 @@ ALIAS_OVERRIDE_UI_JS = (
     "function _tlcFetchAndPopulateOverrides(idPrefix, tableUrl, savedOverrides) {\n"
     "  var list = document.getElementById(idPrefix + '-alias-override-list');\n"
     "  var container = document.getElementById(idPrefix + '-alias-override-container');\n"
+    "  if (_tlcHubAsksForData()) {\n"
+    "    if (container) container.style.display = 'none';\n"
+    "    if (list) list.innerHTML = '';\n"
+    "    return;\n"
+    "  }\n"
     "  if (!list) return;\n"
     "  if (!tableUrl) {\n"
     "    list.innerHTML = '<span style=\"font-size:11px;color:var(--text-muted)\">"
@@ -161,6 +179,9 @@ ALIAS_OVERRIDE_UI_JS = (
 
 def alias_override_ui_script() -> str:
     """Return the shared alias override UI JavaScript block.
+
+    Deprecated: the Hub asks where a run's data is itself (see the module docstring); on such a Hub
+    ``_tlcAliasOverrideHtml`` returns ``''`` and ``_tlcFetchAndPopulateOverrides`` hides the card.
 
     Include this once in a ``<script>`` tag.  Then call:
 
