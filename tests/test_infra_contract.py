@@ -312,6 +312,41 @@ class TestConnectionCheck:
             identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
         )
 
+    def test_host_root_context_preserves_missing_empty_and_changed_values(self) -> None:
+        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+        from tlc_plugin_sdk.infrastructure import ConnectionCheckRequest, ConnectionCheckResponse
+
+        seen: list[str | None] = []
+
+        class Checking(_StubProvider):
+            def connection_check_with_context(self, request: ConnectionCheckRequest) -> ConnectionCheckResponse:
+                seen.append(request.project_root_url)
+                return ConnectionCheckResponse()
+
+        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+        with _checking_client(Checking()) as client:
+            for params in (
+                {},
+                {"project_root_url": ""},
+                {"project_root_url": "s3://bucket/a b"},
+                {"project_root_url": "s3://bucket/new"},
+            ):
+                assert client.get("/infra/connection/check", params=params, headers=header).status_code == 200
+        assert seen == [None, "", "s3://bucket/a b", "s3://bucket/new"]
+
+    def test_old_hook_still_runs_with_host_context(self) -> None:
+        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+        from tlc_plugin_sdk.infrastructure import ConnectionCheckResponse
+
+        class OlderProvider(_StubProvider):
+            def connection_check(self) -> ConnectionCheckResponse:
+                return ConnectionCheckResponse(identity="old-hook")
+
+        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+        with _checking_client(OlderProvider()) as client:
+            response = client.get("/infra/connection/check", params={"project_root_url": "s3://b/p"}, headers=header)
+        assert response.status_code == 200 and response.json()["identity"] == "old-hook"
+
 
 class TestDefaultRouteHandlers:
     def test_capabilities(self, stub_client: TestClient[Litestar]) -> None:

@@ -33,6 +33,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     FACET_STORAGE,
     FACET_WORKSPACES,
     CapabilitiesResponse,
+    ConnectionCheckRequest,
     ConnectionCheckResponse,
     CreateNodeRequest,
     CreateNodeResponse,
@@ -136,6 +137,15 @@ class InfrastructurePlugin(HubPlugin):
         already a 424 before this runs).
         """
         return ConnectionCheckResponse(checked=["resolve"])
+
+    def connection_check_with_context(self, request: ConnectionCheckRequest) -> ConnectionCheckResponse:
+        """Check a Connection with the host's current diagnostic targets.
+
+        The default delegates to ``connection_check()`` so existing provider overrides continue
+        to work unchanged. Override this hook when checks need the host's project-root context.
+        Do not fall back to worker-local configuration when a target is unavailable.
+        """
+        return self.connection_check()
 
     def node_diagnostics(self, provider_id: str) -> NodeStateResponse:
         """The node's state with startup diagnostics (``GET /infra/nodes/{id}?diagnostics=true``).

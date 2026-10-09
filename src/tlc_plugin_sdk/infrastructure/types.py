@@ -34,6 +34,7 @@ __all__ = [
     "FACET_WORKSPACES",
     "BundleRequest",
     "CapabilitiesResponse",
+    "ConnectionCheckRequest",
     "ConnectionCheckResponse",
     "CpuCatalog",
     "CreateNodeRequest",
@@ -577,6 +578,20 @@ class PreflightResponse:
 
 
 @dataclass
+class ConnectionCheckRequest:
+    """Host context for a Connection diagnostic, read afresh for each request.
+
+    Attributes:
+        project_root_url: The host's effective project root at verification time. ``None`` means
+            unavailable or omitted by an older host; ``""`` means explicitly no root. A provider
+            must not substitute its worker-local configuration for this value. This is a probe
+            target, not an authorization grant or a change to any job's destination.
+    """
+
+    project_root_url: str | None = None
+
+
+@dataclass
 class ConnectionCheckResponse:
     """What checking the request's Connection found (``GET /infra/connection/check``).
 
@@ -585,24 +600,32 @@ class ConnectionCheckResponse:
 
     Attributes:
         identity: Who the Connection acts as (an ARN), or ``""`` when the provider did not ask.
-        checked: What was checked, in order (``["resolve", "get_caller_identity"]``).
+        checked: What succeeded, in order (``["resolve", "get_caller_identity"]``).
+        checks: Optional diagnostic samples. A false result with level ``warn`` is inconclusive;
+            ``error`` means refused. These do not change whether the Connection identity resolved.
     """
 
     identity: str = ""
     checked: list[str] = field(default_factory=lambda: ["resolve"])
+    checks: list[PreflightCheck] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ConnectionCheckResponse:
         """Parse a provider's answer."""
         checked = data.get("checked")
+        checks = data.get("checks")
         return cls(
             identity=_str(data.get("identity")),
             checked=[_str(c) for c in checked if _str(c)] if isinstance(checked, (list, tuple)) else [],
+            checks=[PreflightCheck.from_dict(c) for c in checks] if isinstance(checks, (list, tuple)) else [],
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the JSON body the host reads."""
-        return {"identity": self.identity, "checked": list(self.checked)}
+        out: dict[str, Any] = {"identity": self.identity, "checked": list(self.checked)}
+        if self.checks:
+            out["checks"] = [check.to_dict() for check in self.checks]
+        return out
 
 
 def preflight_query(node_type: str = "", datacenter: str = "") -> dict[str, str]:

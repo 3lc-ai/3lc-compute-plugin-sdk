@@ -7,7 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Connections
+- Connection diagnostics accept host project-root context through `ConnectionCheckRequest` and
+  `connection_check_with_context`; existing `connection_check()` overrides remain supported.
+- Connection verification may return per-operation diagnostic checks using the preflight check shape.
+- Credential declarations accept an optional plain-text `value_hint`; the author guide describes
+  how to explain the value the Connection form expects. The harness validates and preserves it.
+- Jobs expose service-keyed tokens through `ctx.credentials`, `ctx.get_credential(service)` and
+  `connections.current_credential(service)`, preserving the legacy singleton API and isolating
+  credentials by job. Worker health advertises support for the multi-token wire contract.
+
+### Changed
+
+#### Data movement
+
+- Model checkpoints upload to cloud run folders through the supported URL write API, avoiding a failed upload and node-local fallback.
+
+- **Reviewed project destinations stay consistent.** Run plans report their resolved root; preparation and submission refuse a changed destination and ask for a fresh review. Accepted jobs keep the stamped root through execution.
+
+- **`shared.alias_override_ui`, the "Read this data from somewhere else for this run" card.** The Hub
+  now plans a run's data and asks where anything the run target cannot reach is, on the compute host
+  as on a node, so the card is redundant: drop it from your fragment. It stays importable and
+  unchanged on older Hubs; on a Hub whose `PLUGIN_API` has `planRun`, `_tlcAliasOverrideHtml` returns
+  `''` and `_tlcFetchAndPopulateOverrides` hides the card without fetching. Removed at 1.0.
+- **The data-source picker's `mode: 'dir'` is a folder picker.** "Select This Folder" was drawn only
+  for `mode: 'folder'`, so a plugin passing `'dir'` could not pick a folder; `'dir'` now means
+  `'folder'`.
+- **Manifest `[runtime] data_inputs` and `data_outputs`.** Dotted keys into the run body naming the
+  data a run reads and the places it writes, for the host to plan and check against the run target.
+  `harness.read_manifest()` validates both (`Manifest.data_inputs`, `Manifest.data_outputs`;
+  `parse_data_keys()`) and refuses a wrong shape. See the guide's "Data inputs and run targets".
+- **The data-source picker follows the run target** (`PLUGIN_API.getRunTarget` /
+  `onRunTargetChange`). For a node run the first location is the node's own disk,
+  labelled with the machine and offered folder, browsed through the host's `/api/infra/nodes/{id}/files`; the buckets follow,
+  each saying whether that node can read it when its storage probe covers the bucket; there is no
+  "This computer" and no Upload. Host and node folders follow the explicit operator browse policy;
+  the compute URL affects the legacy display label, not permission to browse.
+  A value the target cannot reach gets a note under the field (a folder picked on this computer and
+  then a node chosen; a typed path the node's path check says is missing; a bucket the node cannot
+  read). A Hub without `getRunTarget` gets the picker as before.
+- Browser contract (`plugin-api.d.ts`): `getRunTarget()` returns `PluginRunTarget`, gaining the Hub's
+  `label` for the target and a node's `files_root`; the optional `planRun?(body)` previews the host's
+  data plan for a run body (`PluginRunPlan`, `PluginRunPlanRef`). The shared-widget globals are
+  declared as shipped: `_tlcBindAliasAutoUpdate` with all six parameters, and
+  `_tlcAliasReviewCopy`, `_tlcProjectLocationHtml`, `_tlcBindProjectLocation`, `_tlcGetProjectRoot`,
+  `_tlcSelectedProjectRoot`, `_tlcDefaultProjectRoot`, `_tlcStorageOf`, `_tlcRootLabel`,
+  `_tlcRunTarget` and `_tlcComputeIsHere`.
+- **Alias portability and suggestions.** Suggested names follow the source root until edited (clear to reset). The shared card and registration reject local disk defaults for cloud projects before writes; a temporary local execution path with a durable cloud alias remains valid.
+- **Alias settings describe the source; they do not relocate it.** The alias name and source root remain editable, with an always-visible mapping. Folder selections refresh the source immediately; manual edits and detected parent roots are preserved appropriately. Permanent transfers belong in Storage; temporary staging stays in the common run planner. Legacy copy helpers remain inert for older fragments.
+- **Folder browsing is explicit.** The picker labels each offered folder with its machine. Host `/browse` requires configured roots and rejects paths outside them; unset or invalid roots no longer expose home. Update plugin workers and configure `TLC_DATA_SOURCE_ROOTS` when adopting this policy.
+
+
 ### Fixed
+
 - **The data-source widget's bucket browse names its Connection.** The ``/api/infra/storage``
   listing tags each bucket with the Connection it was listed through; the shared widget now keeps
   that tag and forwards ``connection_id`` to the provider's ``/list`` route, so Browse… works on a
@@ -17,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when one of its Connections' listings errored.
 
 ### Added
+
 - **`CreateNodeResponse.location`**: where a node lives, in the provider's words (a cloud region, a
   zone, a site). The host saves it on the node record and in its history, and the Hub shows it beside
   the node's type. Optional; `""` shows nothing.
@@ -150,6 +205,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node's storage credential. Empty from an older host.
 
 ### Changed
+
 - **Requires the staged 3lc core.** The base requirement is `3lc[pandas]>=3.5.0.dev149866,<4.0.0`, locked to
   that build and resolved from the explicit `staging` index until the core is released on PyPI. A plugin locking
   against this SDK routes `3lc` to the same index (sources are not transitive). CI and the docs build read the

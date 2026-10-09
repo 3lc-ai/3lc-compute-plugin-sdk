@@ -48,13 +48,15 @@ def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
         # ``sdk_version`` is the worker half of a handshake: a venv worker imports its
         # *own* install of this SDK, so the host cannot know which contract is live inside
         # the venv unless the worker says so. The host compares it against its own on
-        # MAJOR.MINOR and flags skew on the plugin card. One contract axis, one field.
+        # MAJOR.MINOR and flags skew on the plugin card. Additive wire capabilities are
+        # advertised separately so a staged rollout never sends secrets to an older worker.
         from tlc_plugin_sdk import SDK_CONTRACT_VERSION
 
         return {
             "ok": True,
             "plugin": getattr(plugin, "id", "?"),
             "sdk_version": SDK_CONTRACT_VERSION,
+            "capabilities": ["job_credentials_by_service"],
         }
 
     # def + sync_to_thread: get_ui_fragment()/compute() are synchronous and may do
