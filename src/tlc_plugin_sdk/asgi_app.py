@@ -3,7 +3,7 @@
 """Build a plugin's HTTP surface as a Litestar ASGI app.
 
 This is the single route-authoring pattern: a plugin exposes its custom routes as
-relative Litestar route handlers via :meth:`ComputePlugin.get_route_handlers`, and
+relative Litestar route handlers via :meth:`HubPlugin.get_route_handlers`, and
 the worker (``tlc_plugin_sdk.worker``) serves the app with uvicorn on a Unix socket
 (or TCP, for a remote worker); the host reverse-proxies to it.
 
@@ -34,13 +34,13 @@ from tlc_plugin_sdk.shared.ui_inject import inject_scripts
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
 
-    from tlc_plugin_sdk.contract import ComputePlugin
+    from tlc_plugin_sdk.contract import HubPlugin
 
 
 logger = logging.getLogger(__name__)
 
 
-def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
+def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
     """The host-reserved generic routes, bound to ``plugin`` (served by the worker)."""
 
     @get("/health", sync_to_thread=False)
@@ -48,13 +48,15 @@ def _generic_handlers(plugin: ComputePlugin) -> list[BaseRouteHandler]:
         # ``sdk_version`` is the worker half of a handshake: a venv worker imports its
         # *own* install of this SDK, so the host cannot know which contract is live inside
         # the venv unless the worker says so. The host compares it against its own on
-        # MAJOR.MINOR and flags skew on the plugin card. One contract axis, one field.
+        # MAJOR.MINOR and flags skew on the plugin card. Additive wire capabilities are
+        # advertised separately so a staged rollout never sends secrets to an older worker.
         from tlc_plugin_sdk import SDK_CONTRACT_VERSION
 
         return {
             "ok": True,
             "plugin": getattr(plugin, "id", "?"),
             "sdk_version": SDK_CONTRACT_VERSION,
+            "capabilities": ["job_credentials_by_service"],
         }
 
     # def + sync_to_thread: get_ui_fragment()/compute() are synchronous and may do
@@ -135,7 +137,7 @@ def _bearer_guard(token: str) -> Any:
 
 
 def build_plugin_app(
-    plugin: ComputePlugin,
+    plugin: HubPlugin,
     *,
     extra_handlers: list[BaseRouteHandler] | None = None,
     debug: bool = False,
@@ -163,7 +165,15 @@ def build_plugin_app(
         *_generic_handlers(plugin),
         *(extra_handlers or []),
     ]
-    middleware: list[Any] = [_bearer_guard(token)] if token else []
+    from tlc_plugin_sdk.connections import connection_middleware, credential_middleware
+
+    # Outermost first: an unauthenticated request is refused before any Connection is resolved
+    # or any granted credential is bound.
+    middleware: list[Any] = [
+        *([_bearer_guard(token)] if token else []),
+        connection_middleware,
+        credential_middleware,
+    ]
     # No generated OpenAPI/Swagger routes: a worker is an internal endpoint, and on a node the
     # schema would describe the job channel to anyone who reached the port.
     return Litestar(route_handlers=handlers, debug=debug, middleware=middleware, openapi_config=None)
@@ -176,7 +186,7 @@ RESERVED_WORKER_PATHS: frozenset[str] = frozenset({"/health", "/ui", "/compute",
 RESERVED_WORKER_PREFIXES: tuple[str, ...] = ("/jobs",)
 
 
-def _without_reserved(handlers: list[Any], plugin: ComputePlugin) -> list[Any]:
+def _without_reserved(handlers: list[Any], plugin: HubPlugin) -> list[Any]:
     kept: list[Any] = []
     for handler in handlers:
         paths = {"/" + str(p).strip("/") for p in (getattr(handler, "paths", None) or ())}

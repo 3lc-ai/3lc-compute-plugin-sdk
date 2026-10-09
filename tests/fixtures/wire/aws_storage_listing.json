@@ -1,0 +1,46 @@
+{
+  "message": "StorageListing",
+  "answer": {
+    "kind": "bucket",
+    "label": "S3 bucket",
+    "creatable": true,
+    "upload": true,
+    "browse": true,
+    "download": true,
+    "bundle": true,
+    "delete": true,
+    "transfer": true,
+    "rename": true,
+    "storage": [
+      {
+        "id": "team-projects",
+        "kind": "bucket",
+        "name": "team-projects",
+        "region": "us-east-1",
+        "url": "s3://team-projects",
+        "size_gb": null
+      },
+      {
+        "id": "team-raw",
+        "kind": "bucket",
+        "name": "team-raw",
+        "region": "eu-north-1",
+        "url": "s3://team-raw",
+        "size_gb": null
+      }
+    ],
+    "regions": [
+      {
+        "id": "us-east-1",
+        "name": "us-east-1"
+      },
+      {
+        "id": "eu-north-1",
+        "name": "eu-north-1"
+      }
+    ]
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}

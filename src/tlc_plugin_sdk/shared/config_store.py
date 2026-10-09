@@ -35,8 +35,39 @@ from typing import Generic, TypeVar
 
 logger = logging.getLogger(__name__)
 
-# Standardized root for all plugins' saved job configs.
-CONFIG_ROOT = Path.home() / ".3lc-plugin-configs"
+#: Override for the root of all plugins' saved job configs; ``None`` means ``~/.3lc-plugin-configs``
+#: (see :func:`config_root`). A harness sets it for its lifetime.
+CONFIG_ROOT: Path | None = None
+
+
+class ConfigRootUnavailable(RuntimeError):
+    """The config root follows the home directory and the process has none."""
+
+
+def config_root() -> Path:
+    """The root of all plugins' saved job configs: ``CONFIG_ROOT``, else ``~/.3lc-plugin-configs``.
+
+    Resolved per call, not at import: a worker whose environment carries no home directory still
+    imports and serves, and only a store it actually builds fails.
+
+    Returns:
+        The config root.
+
+    Raises:
+        ConfigRootUnavailable: When there is no override and the home directory cannot be resolved.
+    """
+    if CONFIG_ROOT is not None:
+        return CONFIG_ROOT
+    try:
+        home = Path.home()
+    except RuntimeError as exc:
+        msg = (
+            "Cannot place plugin configs: no home directory (set USERPROFILE on Windows, HOME elsewhere, "
+            "or point tlc_plugin_sdk.shared.config_store.CONFIG_ROOT at a directory)"
+        )
+        raise ConfigRootUnavailable(msg) from exc
+    return home / ".3lc-plugin-configs"
+
 
 T = TypeVar("T")
 
@@ -49,10 +80,13 @@ class PluginConfigStore(Generic[T]):
             ``created`` / ``last_run`` fields). Instances are (de)serialized via
             :func:`dataclasses.asdict` and ``config_cls(**known_fields)``.
         plugin_id: The plugin's manifest id; configs live under
-            ``~/.3lc-plugin-configs/<plugin_id>/``.
+            ``~/.3lc-plugin-configs/<plugin_id>/`` (:func:`config_root`).
         legacy_dir: Optional back-compat directory. If the standardized
             directory has no configs yet and ``legacy_dir`` holds some, they are
             moved on construction (one-time, idempotent).
+
+    Raises:
+        ConfigRootUnavailable: When the config root cannot be resolved (see :func:`config_root`).
 
     """
 
@@ -61,7 +95,7 @@ class PluginConfigStore(Generic[T]):
             msg = f"PluginConfigStore requires a dataclass config type, got {config_cls!r}"
             raise TypeError(msg)
         self._cls = config_cls
-        self._dir = CONFIG_ROOT / plugin_id
+        self._dir = config_root() / plugin_id
         # Configs hold provider keys and tokens: owner-only directory and files.
         self._dir.mkdir(parents=True, exist_ok=True)
         _restrict(self._dir, 0o700)

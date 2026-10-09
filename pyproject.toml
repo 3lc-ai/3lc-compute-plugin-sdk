@@ -43,7 +43,7 @@ classifiers = [
 dependencies = [
     "uvicorn>=0.34.0",
     "litestar>=2.22.0,<3.0.0",
-    "3lc[pandas]>=3.3.0,<4.0.0",
+    "3lc[pandas]>=3.5.0.dev149866,<4.0.0",
 ]
 
 [project.urls]
@@ -85,9 +85,18 @@ artifacts = [
 [tool.uv]
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'", "sys_platform == 'win32'"]
 
-# 3lc resolves from public PyPI — its home since the 3.2 rust release — so no index pin is
-# needed (same as the host, 3lc-compute, and 3lc-examples). LOCAL DEV: for an unreleased 3lc,
-# override UNCOMMITTED via [tool.uv.sources] with an editable path source to your 3lc checkout.
+# The core this SDK requires is a staged build, not yet on PyPI: it resolves from the private
+# `staging` index (CloudRepo `prereleases`) with UV_INDEX_STAGING_USERNAME / _PASSWORD set. The
+# index is `explicit`, so only 3lc comes from it. Sources are not transitive: a plugin locking
+# against this SDK routes 3lc to the same index itself. Drop the source line once the core it
+# needs is released on PyPI.
+[[tool.uv.index]]
+name = "staging"
+url = "https://pypi.3lc.ai/repositories/prereleases/"
+explicit = true
+
+[tool.uv.sources]
+"3lc" = { index = "staging" }
 
 [tool.ruff]
 line-length = 120
@@ -100,6 +109,17 @@ ignore = ["N806", "N818", "SIM105", "SIM108", "RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+# ``secret()`` / ``option()`` return dataclass fields (like ``dataclasses.field``): calling them in a
+# settings dataclass default is the intended use, not a mutable default. A plugin repo that lints
+# with ruff adds the same entry.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "tlc_plugin_sdk.infrastructure.option",
+    "tlc_plugin_sdk.infrastructure.secret",
+    "tlc_plugin_sdk.shared.settings.option",
+    "tlc_plugin_sdk.shared.settings.secret",
+]
 
 [tool.ruff.format]
 preview = true

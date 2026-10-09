@@ -29,6 +29,7 @@ registry for :data:`TRANSFER_TTL_S` so a page can still read the outcome.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -196,6 +197,7 @@ class TransferRegistry:
         workers: int = 16,
         max_files: int = MAX_TRANSFER_FILES,
         notify_change: Callable[[str, str], None] = _notify_discovery,
+        describe_error: Callable[[Exception], str] | None = None,
     ) -> None:
         """
         Args:
@@ -208,6 +210,11 @@ class TransferRegistry:
             workers: Copies in flight at once.
             max_files: Refuse a transfer larger than this (the CLI is the tool then).
             notify_change: Notify 3LC discovery after successful writes/deletes, including partial transfers.
+            describe_error: ``exception -> sentence`` for a failed transfer's ``error`` and each
+                failure's ``reason`` (default: the exception's text). The registry itself has no
+                secrets to scrub with: an infrastructure plugin's routes set it to the plugin's
+                ``describe_error`` when it is unset, and scrub the answer of one given here with
+                the plugin's secrets.
         """
         self._list = list_objects
         self._head = head_object
@@ -216,6 +223,7 @@ class TransferRegistry:
         self._workers = max(1, workers)
         self._max_files = max_files
         self._notify_change = notify_change
+        self.describe_error = describe_error
         self._transfers: dict[str, Transfer] = {}
         self._lock = threading.Lock()
 
@@ -280,7 +288,12 @@ class TransferRegistry:
     def start(
         self, src_url: str, dst_url: str, items: list[str], *, mode: str = "copy", rename_to: str = ""
     ) -> dict[str, Any]:
-        """Begin the transfer; returns its first status. Planning runs on the job's own thread."""
+        """Begin the transfer; returns its first status. Planning runs on the job's own thread.
+
+        The job's threads (planning and every parallel copy) see the caller's context variables as
+        they were at the call, so the request's Connection
+        (:func:`tlc_plugin_sdk.connections.current_credential`) holds inside the provider calls.
+        """
         if mode not in MODES:
             msg = f"'{mode}' is not a transfer mode; use copy or move"
             raise TransferError(msg)
@@ -290,8 +303,15 @@ class TransferRegistry:
         transfer = Transfer(id=uuid.uuid4().hex[:12], src_url=src_url, dst_url=dst_url, mode=mode)
         with self._lock:
             self._transfers[transfer.id] = transfer
+        # The job's threads run in a copy of the caller's context: a plugin's provider calls read
+        # the request's Connection (``connections.current_credential()``) from it, and a bare
+        # thread would start with none and fall back to the deployment's own identity.
+        context = contextvars.copy_context()
         threading.Thread(
-            target=self._run, args=(transfer, list(items), rename_to), name=f"transfer-{transfer.id}", daemon=True
+            target=context.run,
+            args=(self._run, transfer, list(items), rename_to),
+            name=f"transfer-{transfer.id}",
+            daemon=True,
         ).start()
         return transfer.public()
 
@@ -347,7 +367,7 @@ class TransferRegistry:
                     self._copy(src, dst)
                 except Exception as exc:
                     with lock:
-                        transfer.failures.append({"path": src, "reason": str(exc)[:200]})
+                        transfer.failures.append({"path": src, "reason": self._error_text(exc)[:200]})
                     return
                 with lock:
                     copied.append(pair)
@@ -355,8 +375,11 @@ class TransferRegistry:
                     transfer.files_done += 1
                     transfer.bytes_done += size
 
+            # Pool threads start with an empty context too: each copy runs in its own copy of this
+            # thread's (one Context cannot be entered by two threads at once).
+            context = contextvars.copy_context()
             with ThreadPoolExecutor(max_workers=self._workers, thread_name_prefix=f"transfer-{transfer.id}") as pool:
-                list(pool.map(one, pairs))
+                list(pool.map(lambda pair: context.copy().run(one, pair), pairs))
             if transfer._cancel.is_set():
                 self._finish(
                     transfer, "cancelled", f"{len(copied)} of {len(pairs)} objects were copied before the cancel"
@@ -374,7 +397,7 @@ class TransferRegistry:
                     except Exception as exc:
                         transfer.failures.append({
                             "path": src,
-                            "reason": f"copied, but not removed from the source: {exc!s:.160}",
+                            "reason": f"copied, but not removed from the source: {self._error_text(exc):.160}",
                         })
             if transfer.failures:
                 verb = "moved" if transfer.mode == "move" else "copied"
@@ -383,7 +406,18 @@ class TransferRegistry:
             self._finish(transfer, "done", "")
         except Exception as exc:
             logger.exception("Transfer %s (%s → %s) failed", transfer.id, transfer.src_url, transfer.dst_url)
-            self._finish(transfer, "failed", str(exc)[:400])
+            self._finish(transfer, "failed", self._error_text(exc)[:400])
+
+    def _error_text(self, exc: Exception) -> str:
+        # Never raises: a describer that fails or answers a non-str must not strand the job.
+        if self.describe_error is not None:
+            try:
+                text = str(self.describe_error(exc) or "")
+            except Exception:
+                text = ""
+            if text:
+                return text
+        return str(exc)
 
     def _finish(self, transfer: Transfer, state: str, error: str) -> None:
         # The worker has joined every copy thread before finishing. Notify even

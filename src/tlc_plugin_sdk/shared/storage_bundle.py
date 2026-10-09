@@ -27,6 +27,7 @@ link; anything older is forgotten on the next call.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import shutil
 import tempfile
@@ -102,6 +103,7 @@ class BundleRegistry:
         arcname: Callable[[str, str], str] | None = None,
         max_bytes: int = MAX_BUNDLE_BYTES,
         max_files: int = MAX_BUNDLE_FILES,
+        describe_error: Callable[[Exception], str] | None = None,
     ) -> None:
         """
         Args:
@@ -113,6 +115,10 @@ class BundleRegistry:
             arcname: ``(url, key) -> path inside the zip``; default strips the prefix of ``url``.
             max_bytes: Refuse a folder larger than this (a CLI copy is the right tool then).
             max_files: Refuse a folder with more objects than this.
+            describe_error: ``exception -> sentence`` for a failed bundle's ``error`` (default: the
+                exception's text). The registry itself has no secrets to scrub with: an
+                infrastructure plugin's routes set it to the plugin's ``describe_error`` when it
+                is unset, and scrub the answer of one given here with the plugin's secrets.
 
         """
         self._list = list_objects
@@ -121,18 +127,31 @@ class BundleRegistry:
         self._arcname = arcname
         self._max_bytes = max_bytes
         self._max_files = max_files
+        self.describe_error = describe_error
         self._bundles: dict[str, Bundle] = {}
         self._lock = threading.Lock()
 
     # ── public ────────────────────────────────────────────────────────────
 
-    def start(self, *, url: str, name: str) -> dict[str, Any]:
-        """Begin bundling ``url``; returns the bundle's first status (``state: listing``)."""
+    def start(self, *, url: str, name: str = "") -> dict[str, Any]:
+        """Begin bundling ``url``; returns the bundle's first status (``state: listing``).
+
+        ``name`` is the archive's name; ``""`` names it :func:`default_bundle_name` of ``url``. A
+        subclass that normalises the URL first passes the name through unchanged, so the default
+        is taken from the normalised URL. The bundle's thread sees the caller's context variables
+        as they were at the call, so the request's Connection
+        (:func:`tlc_plugin_sdk.connections.current_credential`) holds inside the provider calls.
+        """
         self._prune()
-        bundle = Bundle(id=uuid.uuid4().hex[:12], url=url, name=_safe_name(name) or "download")
+        name = _safe_name(name) or _safe_name(default_bundle_name(url)) or "download"
+        bundle = Bundle(id=uuid.uuid4().hex[:12], url=url, name=name)
         with self._lock:
             self._bundles[bundle.id] = bundle
-        threading.Thread(target=self._run, args=(bundle,), name=f"bundle-{bundle.id}", daemon=True).start()
+        # The thread runs in a copy of the caller's context: a plugin's provider calls read the
+        # request's Connection (``connections.current_credential()``) from it, and a bare thread
+        # would start with none and fall back to the deployment's own identity.
+        context = contextvars.copy_context()
+        threading.Thread(target=context.run, args=(self._run, bundle), name=f"bundle-{bundle.id}", daemon=True).start()
         return bundle.public()
 
     def status(self, bundle_id: str) -> dict[str, Any] | None:
@@ -157,6 +176,17 @@ class BundleRegistry:
             return sum(1 for b in self._bundles.values() if b.state not in ("done", "failed", "cancelled"))
 
     # ── internals ─────────────────────────────────────────────────────────
+
+    def _error_text(self, exc: Exception) -> str:
+        # Never raises: a describer that fails or answers a non-str must not strand the job.
+        if self.describe_error is not None:
+            try:
+                text = str(self.describe_error(exc) or "")
+            except Exception:
+                text = ""
+            if text:
+                return text
+        return str(exc)
 
     def _prune(self) -> None:
         cutoff = time.time() - BUNDLE_TTL_S
@@ -186,7 +216,7 @@ class BundleRegistry:
             self._finish(bundle, "done", "")
         except Exception as exc:
             logger.exception("Bundle %s of %s failed", bundle.id, bundle.url)
-            self._finish(bundle, "failed", str(exc)[:400])
+            self._finish(bundle, "failed", self._error_text(exc)[:400])
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -251,6 +281,11 @@ def _default_arcname(url: str, key: str) -> str:
     rel = key[len(prefix) :].lstrip("/") if prefix and key.startswith(prefix) else key
     top = prefix.rsplit("/", 1)[-1] if prefix else url.split("://", 1)[-1].split("/", 1)[0]
     return f"{top}/{rel}" if rel else top
+
+
+def default_bundle_name(url: str) -> str:
+    """The archive name for a folder when none is given: the URL's last segment (``s3://b/data/fire`` → ``fire``)."""
+    return str(url or "").rstrip("/").rsplit("/", 1)[-1]
 
 
 def _safe_name(name: str) -> str:

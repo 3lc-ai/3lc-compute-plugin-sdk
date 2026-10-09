@@ -17,281 +17,213 @@ Usage in a plugin's ``get_ui_fragment()``::
 
 from __future__ import annotations
 
+from tlc_plugin_sdk.shared.run_target_ui import RUN_TARGET_JS
+
 # The JS helper functions are defined once and shared by all plugins.
 # Each plugin calls _tlcAliasSettingsHtml(idPrefix, projectValue, folderValue)
 # to render the alias section, and _tlcGetAliasValues(idPrefix) to read values.
 
 # fmt: off
-ALIAS_UI_JS = (
-    "// ── Shared URL Alias UI ─────────────────────────────────\n"
-    "(function(){var st=document.createElement('style');st.textContent="
-    "'.tlc-tip{position:relative}'"
-    "+'.tlc-tip .tlc-tip-text{display:none;position:absolute;bottom:calc(100% + 8px);"
-    "left:50%;transform:translateX(-50%);width:260px;padding:8px 10px;"
-    "background:var(--bg-card,#1a2332);color:var(--text-muted,#94a3b8);"
-    "font-size:11px;font-weight:400;line-height:1.5;border-radius:6px;"
-    "border:1px solid var(--border,#2a3a4a);box-shadow:0 4px 12px rgba(0,0,0,.3);"
-    "z-index:1000;pointer-events:none;white-space:normal}'"
-    "+'.tlc-tip:hover .tlc-tip-text{display:block}';"
-    "document.head.appendChild(st)})();\n"
-    "\n"
-    "function _tlcDefaultAliasToken(projectName) {\n"
-    "  var token = projectName.toUpperCase()"
-    ".replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');\n"
+ALIAS_UI_JS = RUN_TARGET_JS + (
+    '// ── Shared URL Alias UI ─────────────────────────────────\n'
+    "(function(){var st=document.createElement('style');st.textContent='.tlc-tip{position:relative}'+'.tlc-tip "
+    '.tlc-tip-text{display:none;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);w'
+    'idth:260px;padding:8px 10px;background:var(--bg-card,#1a2332);color:var(--text-muted,#94a3b8);font-size:11'
+    'px;font-weight:400;line-height:1.5;border-radius:6px;border:1px solid var(--border,#2a3a4a);box-shadow:0 4'
+    "px 12px rgba(0,0,0,.3);z-index:1000;pointer-events:none;white-space:normal}'+'.tlc-tip:hover .tlc-tip-text"
+    "{display:block}';document.head.appendChild(st)})();\n"
+    '\n'
+    'function _tlcDefaultAliasToken(projectName) {\n'
+    "  var token = projectName.toUpperCase().replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '"
+    "');\n"
     "  if (!token || !/^[A-Z]/.test(token)) token = 'PROJECT_' + token;\n"
-    "  return token;\n"
-    "}\n"
-    "\n"
-    "function _tlcAliasSettingsHtml(idPrefix, projectValue, folderValue) {\n"
-    "  var token = projectValue ? _tlcDefaultAliasToken(projectValue) : '';\n"
-    "  var s = 'margin-top:12px;padding:10px 12px;border:1px solid var(--border)';\n"
-    "  s += ';border-radius:6px;background:var(--bg)';\n"
-    "  var html = '<div class=\"tlc-alias-settings\" style=\"' + s + '\">';\n"
-    "  html += '<div style=\"display:flex;align-items:center;gap:6px\">';\n"
-    "  html += '<label style=\"display:flex;align-items:center;gap:6px;"
-    "font-size:12px;font-weight:600;cursor:pointer;flex:1\">';\n"
-    # An alias is always registered: a table that hardcodes absolute paths only works on the machine
-    # that wrote it, and nobody chooses that on purpose (Paul, 2026-09-07). The name and the folder
-    # stay editable under Details; only the on/off switch is gone.
-    "  html += 'URL alias';\n"
-    "  html += '<span class=\"tlc-tip\" style=\"display:inline-flex;align-items:center;"
-    "justify-content:center;width:15px;height:15px;border-radius:50%;"
-    "background:var(--border);color:var(--text-muted);font-size:10px;"
-    "font-weight:700;cursor:help;flex-shrink:0;position:relative\">"
-    "?<span class=\"tlc-tip-text\">URL aliases make image paths portable "
-    "across machines. Instead of hardcoding absolute paths, the table "
-    "stores &lt;ALIAS&gt;/images \\u2014 so the same table works on any "
-    "machine where the alias is configured. Recommended for all new "
-    "tables.</span></span>';\n"
-    "  html += '</label>';\n"
-    "  html += '<button type=\"button\" id=\"' + idPrefix + '-alias-toggle\" "
-    "style=\"background:none;border:none;color:var(--text-muted);cursor:pointer;"
-    "font-size:10px;padding:2px 6px\" "
-    "onclick=\"var f=document.getElementById(\\'' + idPrefix + '-alias-fields\\');"
-    "var open=f.style.display!==\\'none\\';f.style.display=open?\\'none\\':\\'\\';"
-    "this.textContent=open?\\'Details ▸\\':\\'Details ▾\\'\">Details ▸</button>';\n"
+    '  return token;\n'
+    '}\n'
+    '\n'
+    'function _tlcSuggestedAliasToken(folder, project) {\n'
+    "  var name = String(folder || '').trim().replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').pop();\n"
+    "  return name ? _tlcDefaultAliasToken(name) : (project ? _tlcDefaultAliasToken(project) : '');\n"
+    '}\n'
+    '\n'
+    'function _tlcAliasSettingsHtml(idPrefix, projectValue, folderValue) {\n'
+    '  function esc(value) {\n'
+    "    return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')\n"
+    '      .replace(/>/g, \'&gt;\').replace(/"/g, \'&quot;\');\n'
+    '  }\n'
+    '  var token = _tlcSuggestedAliasToken(folderValue, projectValue);\n'
+    '  var html = \'<div class="tlc-alias-settings" style="margin-top:12px;padding:12px;border:1px solid var(--b'
+    'order);border-radius:6px;background:var(--bg)">\';\n'
+    '  html += \'<strong style="display:block;font-size:12px;margin-bottom:8px">URL alias</strong>\';\n'
+    '  html += \'<label class="form-label" for="\' + idPrefix + \'-alias-token">Alias name</label>\';\n'
+    '  html += \'<input type="text" id="\' + idPrefix + \'-alias-token" class="form-control" value="\' + esc(token)'
+    ' + \'" placeholder="From source folder">\';\n'
+    '  html += \'<div class="form-help">Suggested from the source folder. Edit to keep a custom name; clear to r'
+    "estore the suggestion. Use A–Z, 0–9 and underscores.</div>';\n"
+    '  html += \'<label class="form-label" style="margin-top:8px" for="\' + idPrefix + \'-alias-folder">Source roo'
+    "t</label>';\n"
+    '  html += \'<input type="text" id="\' + idPrefix + \'-alias-folder" class="form-control" value="\' + esc(folde'
+    'rValue) + \'" placeholder="From the selected data">\';\n'
+    '  html += \'<div class="form-help">Follows the selected source. Use a parent folder when paths need to be r'
+    "elative to it.</div>';\n"
+    '  html += \'<div id="\' + idPrefix + \'-alias-mapping" role="status" style="margin-top:8px;font-size:12px;ove'
+    'rflow-wrap:anywhere"></div>\';\n'
+    '  html += \'<div id="\' + idPrefix + \'-alias-location-error" role="alert" style="display:none;margin-top:8px'
+    ';color:var(--danger,#dc3545)"></div>\';\n'
+    '  html += \'<div class="form-help">Files stay at their source. Other machines need access to that location.'
+    " To relocate data, use Storage before selecting it here.</div>';\n"
     "  html += '</div>';\n"
-    "  html += '<div id=\"' + idPrefix + '-alias-fields\" style=\"display:none;"
-    "margin-top:8px\">';\n"
-    "  html += '<div style=\"display:grid;"
-    "grid-template-columns:1fr 1fr;gap:8px\">';\n"
-    "  html += '<div class=\"form-group\" style=\"margin-bottom:0\">';\n"
-    "  html += '<label class=\"form-label\" style=\"font-size:11px\">"
-    "Alias Token</label>';\n"
-    "  html += '<input type=\"text\" id=\"' + idPrefix + '-alias-token\"';\n"
-    "  html += ' class=\"form-control\" style=\"font-size:11px\"';\n"
-    "  html += ' value=\"' + (token || '') + '\"';\n"
-    "  html += ' placeholder=\"PROJECT_NAME\">';\n"
-    "  html += '<div style=\"font-size:10px;color:var(--text-muted);"
-    "margin-top:2px\">';\n"
-    "  html += 'Must be UPPER_SNAKE_CASE (A-Z, 0-9, _)</div>';\n"
-    "  html += '</div>';\n"
-    "  html += '<div class=\"form-group\" style=\"margin-bottom:0\">';\n"
-    "  html += '<label class=\"form-label\" style=\"font-size:11px\">"
-    "Alias Folder</label>';\n"
-    "  html += '<input type=\"text\" id=\"' + idPrefix + '-alias-folder\"';\n"
-    "  html += ' class=\"form-control\" style=\"font-size:11px\"';\n"
-    "  html += ' value=\"' + (folderValue || '') + '\"';\n"
-    "  html += ' placeholder=\"Auto-detected from input\">';\n"
-    "  html += '<div style=\"font-size:10px;color:var(--text-muted);"
-    "margin-top:2px\">';\n"
-    "  html += 'Folder that the alias points to</div>';\n"
-    "  html += '</div>';\n"
-    "  html += '</div>';\n"
-    "  html += '</div>';\n"
-    "  // Data and table on different storage: offer to copy the data next to the project root and\n"
-    "  // point the alias there. Shown only when it applies (see _tlcAliasReviewCopy).\n"
-    "  html += '<div id=\"' + idPrefix + '-alias-copy\" style=\"display:none;margin-top:10px;padding:9px 11px;';\n"
-    "  html += 'border:1px solid var(--border);border-radius:6px;background:var(--bg-card)\">';\n"
-    "  html += '<label style=\"display:flex;align-items:flex-start;gap:8px;font-size:12px;cursor:pointer\">';\n"
-    "  html += '<input type=\"checkbox\" id=\"' + idPrefix + '-alias-copy-enabled\" checked "
-    "style=\"margin-top:2px\">';\n"
-    "  html += '<span><span id=\"' + idPrefix + '-alias-copy-title\" style=\"font-weight:600\"></span>';\n"
-    "  html += '<div id=\"' + idPrefix + '-alias-copy-detail\" "
-    "style=\"font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.45;word-break:break-all\"></div></span>';\n"
-    "  html += '</label>';\n"
-    "  html += '</div>';\n"
-    "  html += '</div>';\n"
-    "  return html;\n"
-    "}\n"
-    "\n"
-    "// Where THIS plugin writes tables: its worker's effective tlc project root, asked over the plugin's\n"
-    "// own /project-root route (a shared SDK handler). Never the infrastructure plugin's bucket root —\n"
-    "// that is where GPU nodes write, and a local controller still writes to its local projects folder.\n"
-    "// Fetched once per plugin per page; '' when unknown, which means: make no offer.\n"
-    "function _tlcProjectRootUrl(pluginId) {\n"
-    "  var API = window.PLUGIN_API;\n"
-    "  var base = API && API.getConfig ? String(API.getConfig('compute_service_url') || '').replace(/\\/$/, '') : '';\n"
-    "  if (!API || !base || !pluginId) return Promise.resolve('');\n"
-    "  window._tlcProjectRootPromises = window._tlcProjectRootPromises || {};\n"
-    "  if (window._tlcProjectRootPromises[pluginId]) return window._tlcProjectRootPromises[pluginId];\n"
-    "  var rootUrl = base + '/api/plugins/' + encodeURIComponent(pluginId) + '/project-root';\n"
-    "  var p = API.authFetch(rootUrl)\n"
-    "    .then(function(r) { return r.ok ? r.json() : {}; })\n"
-    "    .then(function(c) { return String((c && c.url) || '').replace(/\\/$/, ''); })\n"
+    '  return html;\n'
+    '}\n'
+    '\n'
+    "// The project root a job writes to when nothing is chosen: the compute host's own configured root,\n"
+    "// which the host stamps into every run body. Asked once per page; '' when the host cannot say (an\n"
+    '// older host answers 404), which means: make no offer.\n'
+    'function _tlcDefaultProjectRoot() {\n'
+    '  if (window._tlcDefaultRootPromise) return window._tlcDefaultRootPromise;\n'
+    '  var API = window.PLUGIN_API;\n'
+    "  var base = API && API.getConfig ? String(API.getConfig('compute_service_url') || '').replace(/\\/$/, '') "
+    ": '';\n"
+    "  if (!API || !base) return Promise.resolve('');\n"
+    "  var p = API.authFetch(base + '/api/deployment/storage/')\n"
+    '    .then(function(r) { return r.ok ? r.json() : {}; })\n'
+    "    .then(function(c) { return String((c && c.project_root_url) || '').replace(/\\/$/, ''); })\n"
     "    .catch(function() { return ''; })\n"
-    "    .then(function(root) {\n"
-    "      // Remember answers, never failures: a compute that was restarting must be asked again next time.\n"
-    "      if (!root) delete window._tlcProjectRootPromises[pluginId];\n"
-    "      return root;\n"
-    "    });\n"
-    "  window._tlcProjectRootPromises[pluginId] = p;\n"
-    "  return p;\n"
-    "}\n"
-    "function _tlcStorageOf(pathOrUrl) {\n"
-    "  // 'local', or 'scheme://bucket' — what decides whether two places share storage.\n"
-    "  var m = /^([a-z][a-z0-9+.-]*):\\/\\/([^/]+)/i.exec(String(pathOrUrl || '').trim());\n"
-    "  return m ? (m[1].toLowerCase() + '://' + m[2]) : 'local';\n"
-    "}\n"
-    "// What a root IS, not which lookup found it: a compute whose own project root is a bucket was\n"
-    "// offering it as \"This computer — s3://…\" (Paul, 2026-09-07).\n"
-    "function _tlcRootLabel(url) {\n"
-    "  if (_tlcStorageOf(url) === 'local') return 'This computer — ' + url;\n"
+    '    .then(function(root) {\n'
+    '      // Remember answers, never failures: a compute that was restarting must be asked again next time.\n'
+    '      if (!root) delete window._tlcDefaultRootPromise;\n'
+    '      return root;\n'
+    '    });\n'
+    '  window._tlcDefaultRootPromise = p;\n'
+    '  return p;\n'
+    '}\n'
+    '// Kept for a plugin script that still calls it by the old name; the plugin id no longer matters.\n'
+    'function _tlcProjectRootUrl(pluginId) { return _tlcDefaultProjectRoot(); }\n'
+    '// The compute host, named the way the person sees it: "This computer" only when the browser runs on it\n'
+    '// (a loopback compute URL); else the Hub\'s name for it while runs stay on it, else "The compute host".\n'
+    'function _tlcHostName() {\n'
+    '  var API = window.PLUGIN_API;\n'
+    "  var base = API && API.getConfig ? API.getConfig('compute_service_url') : '';\n"
+    "  if (_tlcComputeIsHere(base)) return 'This computer';\n"
+    '  var t = _tlcRunTarget();\n'
+    "  return (t && t.target === 'local' && t.label) || 'The compute host';\n"
+    '}\n'
+    '// What a root IS, not which lookup found it: a compute whose own project root is a bucket was\n'
+    '// offering it as "This computer — s3://…" (Paul, 2026-09-07). A local root is on the compute host.\n'
+    'function _tlcRootLabel(url) {\n'
+    "  if (_tlcStorageOf(url) === 'local') return _tlcHostName() + ' — ' + url;\n"
     "  var scheme = (String(url).split('://')[0] || '').toLowerCase();\n"
     "  var kind = scheme === 's3' ? 'S3 bucket'\n"
     "    : scheme === 'gs' ? 'Cloud Storage bucket'\n"
     "    : (scheme === 'az' || scheme === 'abfs' || scheme === 'abfss') ? 'Azure container'\n"
     "    : 'Bucket';\n"
     "  return kind + ' — ' + url;\n"
-    "}\n"
-    "// Offer the copy only when the data is on this machine and the table goes to a bucket — the one\n"
-    "// case where a GPU node or the Dashboard could not reach the data. Two places on the same bucket, or\n"
-    "// two buckets, never ask: a node reads any bucket it has credentials for. The copy lands at\n"
-    "// <root>/<project>/data/<token>/.\n"
-    "// rootOverride (optional): the root the person chose for the project (see _tlcProjectLocationHtml);\n"
-    "// without it the plugin's own default root is asked for.\n"
-    "// opts.copyOffer === false: the plugin fetches the data itself and puts it where the alias points,\n"
-    "// so this offer would be a second, competing copy (a Hugging Face import: the data is on the Hub,\n"
-    "// never on this machine).\n"
-    "function _tlcAliasReviewCopy(idPrefix, projectName, folderValue, pluginId, rootOverride, opts) {\n"
-    "  var box = document.getElementById(idPrefix + '-alias-copy');\n"
-    "  if (!box) return;\n"
-    "  if (opts && opts.copyOffer === false) { box.style.display = 'none'; box.dataset.target = ''; return; }\n"
-    "  // An empty folder means it is found at import time (CSV image columns): treat it as local.\n"
-    "  var folder = String(folderValue || '').trim();\n"
-
-    "  var rootPromise = rootOverride ? Promise.resolve(String(rootOverride).replace(/\\/$/, ''))"
-    " : _tlcProjectRootUrl(pluginId);\n"
-    "  rootPromise.then(function(root) {\n"
-    "    var offer = root && _tlcStorageOf(root) !== 'local' && _tlcStorageOf(folder) === 'local';\n"
-    "    if (!offer) { box.style.display = 'none'; box.dataset.target = ''; return; }\n"
-    "    var tokenEl = document.getElementById(idPrefix + '-alias-token');\n"
-    "    var token = (tokenEl && tokenEl.value.trim()) || _tlcDefaultAliasToken(projectName || 'data');\n"
-    "    var target = root + '/' + (projectName || 'project') + '/data/' + token.toLowerCase();\n"
-    "    box.dataset.target = target;\n"
-    "    document.getElementById(idPrefix + '-alias-copy-title').textContent =\n"
-    "      'Copy the data next to the table, and point the alias at the copy';\n"
-    "    document.getElementById(idPrefix + '-alias-copy-detail').textContent = 'The table goes to ' + root\n"
-    "      + ', the data is on this machine. It is copied to ' + target + ' during the import; <' + token\n"
-    "      + '> then resolves there for GPU nodes, the Dashboard and this machine alike.';\n"
-    "    box.style.display = '';\n"
-    "  });\n"
-    "}\n"
-    "\n"
-    "// Kept as a no-op so a plugin that calls it keeps working: there is no on/off switch to bind\n"
-    "// any more, and the Details disclosure binds itself in the markup above.\n"
-    "function _tlcBindAliasToggle(idPrefix) { return idPrefix; }\n"
-    "\n"
-    "// pluginId (optional): enables the copy-next-to-the-table offer; without it none is made.\n"
-    "// rootInputId (optional): the 'Create project in' select (_tlcProjectLocationHtml); its value is the root\n"
-    "// the table will be written to, and the copy offer follows it.\n"
-    "function _tlcBindAliasAutoUpdate("
-    "idPrefix, projectInputId, folderInputId, pluginId, rootInputId, opts) {\n"
-    "  var projInput = document.getElementById(projectInputId);\n"
-    "  var tokenInput = document.getElementById("
-    "idPrefix + '-alias-token');\n"
-    "  var folderInput = folderInputId"
-    " ? document.getElementById(folderInputId) : null;\n"
-    "  var aliasFolderInput = document.getElementById("
-    "idPrefix + '-alias-folder');\n"
-    "  if (projInput && tokenInput) {\n"
-    "    projInput.addEventListener('input', function() {\n"
-    "      if (!tokenInput.dataset.userEdited)\n"
-    "        tokenInput.value = _tlcDefaultAliasToken(projInput.value);\n"
-    "    });\n"
-    "    tokenInput.addEventListener('input', function() {\n"
-    "      tokenInput.dataset.userEdited = '1';\n"
-    "    });\n"
-    "  }\n"
-    "  if (folderInput && aliasFolderInput) {\n"
-    "    folderInput.addEventListener('input', function() {\n"
-    "      if (!aliasFolderInput.dataset.userEdited)\n"
-    "        aliasFolderInput.value = folderInput.value;\n"
-    "    });\n"
-    "    aliasFolderInput.addEventListener('input', function() {\n"
-    "      aliasFolderInput.dataset.userEdited = '1';\n"
-    "    });\n"
-    "  }\n"
-    "  // The copy offer follows the folder and the project.\n"
-    "  var rootInput = rootInputId ? document.getElementById(rootInputId) : null;\n"
-    "  function review() {\n"
-    "    var folder = aliasFolderInput ? aliasFolderInput.value : (folderInput ? folderInput.value : '');\n"
-    "    var root = rootInput && rootInput.value ? rootInput.value : '';\n"
-    "    _tlcAliasReviewCopy(idPrefix, projInput ? projInput.value : '', folder, pluginId, root, opts);\n"
-    "  }\n"
-    "  [projInput, folderInput, aliasFolderInput, rootInput].forEach(function(el) {\n"
-    "    if (el) { el.addEventListener('input', review); el.addEventListener('change', review); }\n"
-    "  });\n"
-    "  review();\n"
-    "}\n"
-    "\n"
-    "function _tlcSyncAliasFromForm("
-    "idPrefix, projectInputId, folderInputId) {\n"
-    "  var projEl = document.getElementById(projectInputId);\n"
+    '}\n'
+    '// Compatibility for older fragments: alias settings no longer offer permanent copies.\n'
+    'function _tlcAliasReviewCopy(idPrefix, projectName, folderValue, pluginId, rootOverride, opts) {}\n'
+    'function _tlcBindAliasToggle(idPrefix) { return idPrefix; }\n'
+    '\n'
+    'function _tlcAliasLocationError(idPrefix) {\n'
+    '  var folder = _tlcGetAliasValues(idPrefix).alias_folder;\n'
+    "  var box = document.getElementById(idPrefix + '-alias-folder');\n"
+    "  var root = _tlcSelectedProjectRoot(idPrefix) || (box && box.dataset.projectRoot) || '';\n"
+    "  return folder && root && _tlcStorageOf(folder) === 'local' && _tlcStorageOf(root) !== 'local'\n"
+    "    ? 'This project is in cloud storage, but its alias would point to a local disk. Select a cloud source "
+    "or a local project location. To relocate data, copy it in Storage first.' : '';\n"
+    '}\n'
+    '\n'
+    'function _tlcAliasMapping(idPrefix) {\n'
+    "  var el = document.getElementById(idPrefix + '-alias-mapping');\n"
+    '  if (!el) return;\n'
+    '  var values = _tlcGetAliasValues(idPrefix);\n'
+    "  var notice = document.getElementById(idPrefix + '-alias-location-error');\n"
+    '  if (notice) {\n'
+    '    notice.textContent = _tlcAliasLocationError(idPrefix);\n'
+    "    notice.style.display = notice.textContent ? '' : 'none';\n"
+    '  }\n'
+    '  el.textContent = values.alias_folder\n'
+    "    ? (values.alias_token ? '<' + values.alias_token + '> → ' : '') + values.alias_folder\n"
+    "    : 'Source root will follow the selected data.';\n"
+    '}\n'
+    '\n'
+    '// Extra legacy arguments are accepted but never enable a copy workflow.\n'
+    'function _tlcBindAliasAutoUpdate(idPrefix, projectInputId, folderInputId, pluginId, rootInputId, opts) {\n'
+    '  var projInput = document.getElementById(projectInputId);\n'
+    "  var tokenInput = document.getElementById(idPrefix + '-alias-token');\n"
+    '  var folderInput = folderInputId ? document.getElementById(folderInputId) : null;\n'
+    "  var aliasFolderInput = document.getElementById(idPrefix + '-alias-folder');\n"
+    '  function sync() { _tlcSyncAliasFromForm(idPrefix, projectInputId, folderInputId); }\n'
+    "  var rootInput = document.getElementById(rootInputId || idPrefix + '-project-root');\n"
+    "  if (rootInput) rootInput.addEventListener('change', sync);\n"
+    '  _tlcDefaultProjectRoot().then(function(root) {\n'
+    '    if (aliasFolderInput) aliasFolderInput.dataset.projectRoot = root;\n'
+    '    _tlcAliasMapping(idPrefix);\n'
+    '  });\n'
+    '  [projInput, folderInput].forEach(function(el) {\n'
+    "    if (el) { el.addEventListener('input', sync); el.addEventListener('change', sync); }\n"
+    '  });\n'
+    '  [tokenInput, aliasFolderInput].forEach(function(el) {\n'
+    '    if (!el) return;\n'
+    "    el.addEventListener('input', function() {\n"
+    "      if (el.value.trim()) el.dataset.userEdited = '1';\n"
+    '      else delete el.dataset.userEdited;\n'
+    '      sync();\n'
+    '    });\n'
+    "    el.addEventListener('change', sync);\n"
+    '  });\n'
+    '  sync();\n'
+    '}\n'
+    '\n'
+    'function _tlcSyncAliasFromForm(idPrefix, projectInputId, folderInputId) {\n'
+    '  var projEl = document.getElementById(projectInputId);\n'
     "  var tokenEl = document.getElementById(idPrefix + '-alias-token');\n"
-    "  var folderEl = folderInputId"
-    " ? document.getElementById(folderInputId) : null;\n"
-    "  var aliasFolderEl = document.getElementById("
-    "idPrefix + '-alias-folder');\n"
-    "  if (projEl && tokenEl && !tokenEl.dataset.userEdited) {\n"
-    "    tokenEl.value = projEl.value"
-    " ? _tlcDefaultAliasToken(projEl.value) : '';\n"
-    "  }\n"
-    "  if (folderEl && aliasFolderEl"
-    " && !aliasFolderEl.dataset.userEdited) {\n"
-    "    aliasFolderEl.value = folderEl.value || '';\n"
-    "  }\n"
-    "}\n"
-    "\n"
-    "function _tlcSetAliasRoot(idPrefix, rootPath) {\n"
+    '  var folderEl = folderInputId ? document.getElementById(folderInputId) : null;\n'
+    "  var aliasFolderEl = document.getElementById(idPrefix + '-alias-folder');\n"
+    '  if (folderEl && aliasFolderEl) {\n'
+    "    var source = folderEl.value || '';\n"
+    '    if (!aliasFolderEl.dataset.userEdited &&\n'
+    '        (aliasFolderEl.dataset.sourceValue !== source || !aliasFolderEl.value)) {\n'
+    '      aliasFolderEl.value = source;\n'
+    '    }\n'
+    '    aliasFolderEl.dataset.sourceValue = source;\n'
+    '  }\n'
+    '  if (tokenEl && !tokenEl.dataset.userEdited) {\n'
+    '    tokenEl.value = _tlcSuggestedAliasToken(aliasFolderEl && aliasFolderEl.value, projEl && projEl.value);'
+    '\n'
+    '  }\n'
+    '  _tlcAliasMapping(idPrefix);\n'
+    '}\n'
+    '\n'
+    'function _tlcSetAliasRoot(idPrefix, rootPath) {\n'
     "  var el = document.getElementById(idPrefix + '-alias-folder');\n"
-    "  if (el && rootPath) {\n"
-    "    el.value = rootPath;\n"
-    "    el.dataset.userEdited = '1';\n"
+    '  if (el && rootPath && !el.dataset.userEdited) {\n'
+    '    el.value = rootPath;\n'
     "    el.dispatchEvent(new Event('change', {bubbles: true}));\n"
-    "  }\n"
-    "}\n"
-    "\n"
-    "function _tlcGetAliasValues(idPrefix) {\n"
-    "  return {\n"
-    "    alias_enabled: true,   // always: the switch is gone, the name and folder are still yours\n"
-    "    alias_token: (document.getElementById(\n"
-    "      idPrefix + '-alias-token') || {}).value || '',\n"
-    "    alias_folder: (document.getElementById(\n"
-    "      idPrefix + '-alias-folder') || {}).value || '',\n"
-    "    alias_copy_to_root: (function() {\n"
-    "      var box = document.getElementById(idPrefix + '-alias-copy');\n"
-    "      var on = document.getElementById(idPrefix + '-alias-copy-enabled');\n"
-    "      return !!(box && box.style.display !== 'none' && box.dataset.target && on && on.checked);\n"
-    "    })(),\n"
-    "    alias_copy_target: (function() {\n"
-    "      var box = document.getElementById(idPrefix + '-alias-copy');\n"
-    "      return box ? (box.dataset.target || '') : '';\n"
-    "    })(),\n"
-    "  };\n"
-    "}\n"
+    '  }\n'
+    '}\n'
+    '\n'
+    'function _tlcGetAliasValues(idPrefix) {\n'
+    '  return {\n'
+    '    alias_enabled: true,\n'
+    "    alias_token: String((document.getElementById(idPrefix + '-alias-token') || {}).value || '').trim(),\n"
+    "    alias_folder: String((document.getElementById(idPrefix + '-alias-folder') || {}).value || '').trim(),\n"
+    '    // Compatibility with older fragments: no permanent-copy request is emitted.\n'
+    '    alias_copy_to_root: false,\n'
+    "    alias_copy_target: '',\n"
+    '  };\n'
+    '}\n'
 )
 # fmt: on
 
 
 PROJECT_LOCATION_JS = (
     "// ── Where the project goes ─────────────────────────────────────────────\n"
-    "// A plugin that creates tables writes them under a project root. The compute has a default (its own\n"
-    "// tlc root: on a laptop the local projects folder) and, when an infrastructure plugin is configured,\n"
-    "// a bucket root where GPU nodes and the Dashboard read runs. This select lets a person choose between\n"
-    "// them per import. One choice for the whole Hub — every plugin that writes tables reads the same key, so\n"
-    "// picking the bucket in one import page means the next one already knows. Shown whenever a root is known:\n"
-    "// with one root it is a single, obvious line rather than a mystery (Paul, 2026-09-06).\n"
+    "// A plugin that creates tables writes them under a project root. Every job carries one: the host\n"
+    "// stamps its configured root into the run body unless the person chose another. This select offers\n"
+    "// that default first and then the deployment's other locations (its scan folders, and roots its data\n"
+    "// already lives under), so a choice lands where the Dashboard looks. One choice for the whole Hub —\n"
+    "// every plugin that writes tables reads the same key, so picking a bucket in one import page means the\n"
+    "// next one already knows. Shown whenever a root is known: with one root it is a single, obvious line\n"
+    "// rather than a mystery (Paul, 2026-09-06).\n"
     "function _tlcProjectLocationHtml(idPrefix) {\n"
     '  var html = \'<div class="form-group" id="\' + idPrefix + \'-project-location" style="display:none">\';\n'
     "  html += '<label class=\"form-label\" for=\"' + idPrefix + '-project-root\">Create project in</label>';\n"
@@ -304,22 +236,20 @@ PROJECT_LOCATION_JS = (
     "  html += '</div>';\n"
     "  return html;\n"
     "}\n"
-    "function _tlcCloudProjectRoot() {\n"
-    "  // The active infrastructure plugin's project root, {url, provider}, or null. Fetched once per page.\n"
-    "  if (window._tlcCloudRootPromise) return window._tlcCloudRootPromise;\n"
+    "function _tlcKnownProjectRoots() {\n"
+    "  // The deployment's locations — the Object Service's project root and scan folders, plus roots its\n"
+    "  // data already lives under — as the host's data API lists them: [{root, label, is_default}]. Writing\n"
+    "  // anywhere else is allowed, but the Dashboard will not see it until the deployment scans it.\n"
     "  var API = window.PLUGIN_API;\n"
-    "  var base = API && API.getConfig ? String(API.getConfig('compute_service_url') || '').replace(/\\/$/, '') : '';\n"
-    "  if (!API || !base) return Promise.resolve(null);\n"
-    "  var p = API.authFetch(base + '/api/infra/capabilities')\n"
-    "    .then(function(r) { return r.ok ? r.json() : {}; })\n"
-    "    .then(function(c) {\n"
-    "      var url = String((c && c.project_root_url) || '').replace(/\\/$/, '');\n"
-    "      return url ? { url: url, provider: String((c && (c.provider_label || c.provider)) || 'cloud') } : null;\n"
-    "    })\n"
-    "    .catch(function() { return null; })\n"
-    "    .then(function(cloud) { if (!cloud) delete window._tlcCloudRootPromise; return cloud; });\n"
-    "  window._tlcCloudRootPromise = p;\n"
-    "  return p;\n"
+    "  var data = API && API.data;\n"
+    "  if (!data || !data.getLocations) return Promise.resolve([]);\n"
+    "  var loaded = data.load ? data.load().catch(function() {}) : Promise.resolve();\n"
+    "  return loaded.then(function() {\n"
+    "    return (data.getLocations() || []).map(function(loc) {\n"
+    "      return { root: String((loc && loc.root) || '').replace(/\\/$/, ''),\n"
+    "        label: String((loc && loc.label) || ''), is_default: !!(loc && loc.is_default) };\n"
+    "    }).filter(function(loc) { return !!loc.root; });\n"
+    "  }).catch(function() { return []; });\n"
     "}\n"
     "function _tlcBindProjectLocation(idPrefix, pluginId) {\n"
     "  var box = document.getElementById(idPrefix + '-project-location');\n"
@@ -327,15 +257,18 @@ PROJECT_LOCATION_JS = (
     "  var help = document.getElementById(idPrefix + '-project-root-help');\n"
     "  if (!box || !sel) return Promise.resolve('');\n"
     "  var key = 'tlc.projectRoot';  // shared: the destination is the person's, not the plugin's\n"
-    "  return Promise.all([_tlcProjectRootUrl(pluginId), _tlcCloudProjectRoot()]).then(function(got) {\n"
-    "    var local = got[0], cloud = got[1];\n"
+    "  return Promise.all([_tlcDefaultProjectRoot(), _tlcKnownProjectRoots()]).then(function(got) {\n"
+    "    var own = got[0], known = got[1];\n"
     "    var options = [];\n"
-    "    if (local) {\n"
-    "      options.push({ value: local, label: _tlcRootLabel(local) });\n"
-    "      sel.setAttribute('data-own-root', local);\n"
+    "    function add(root, label) {\n"
+    "      if (!root || options.some(function(o) { return o.value === root; })) return;\n"
+    "      options.push({ value: root, label: label });\n"
     "    }\n"
-    "    if (cloud && cloud.url !== local) options.push({ value: cloud.url, label: cloud.provider + ' — ' + "
-    "cloud.url });\n"
+    "    // The host's default first: it is what a run gets when nothing is chosen.\n"
+    "    if (own) { add(own, _tlcRootLabel(own) + ' (default)'); sel.setAttribute('data-own-root', own); }\n"
+    "    known.forEach(function(loc) { add(loc.root, _tlcRootLabel(loc.root)); });\n"
+    "    var scanned = {};\n"
+    "    known.forEach(function(loc) { scanned[loc.root] = true; });\n"
     "    sel.textContent = '';\n"
     "    options.forEach(function(o) { var el = document.createElement('option'); el.value = o.value; "
     "el.textContent = o.label; sel.appendChild(el); });\n"
@@ -347,10 +280,15 @@ PROJECT_LOCATION_JS = (
     "    function describe() {\n"
     "      if (!help) return;\n"
     "      var isCloud = _tlcStorageOf(sel.value) !== 'local';   // what the root is, not where it came from\n"
-    "      help.textContent = isCloud\n"
-    "        ? 'The table is written to the bucket; GPU nodes and the Dashboard read it there. "
-    "Data on this computer is copied next to it (see the alias below).'\n"
-    "        : 'The table stays on this computer, in its 3LC projects folder.';\n"
+    "      var host = _tlcHostName();\n"
+    "      var text = isCloud\n"
+    "        ? 'The table is written to the bucket; GPU nodes and the Dashboard read it there.'\n"
+    "        : 'The table stays on ' + host.charAt(0).toLowerCase() + host.slice(1)"
+    " + ', in its 3LC projects folder.';\n"
+    "      // A root the deployment does not scan is allowed, but invisible: say so rather than refuse.\n"
+    "      if (sel.value && known.length && !scanned[sel.value]) text += "
+    "' This deployment does not scan this location, so the Dashboard will not list the project until it does.';\n"
+    "      help.textContent = text;\n"
     "    }\n"
     "    sel.addEventListener('change', function() {\n"
     "      try { window.localStorage.setItem(key, sel.value); } catch (e) {}\n"
@@ -389,7 +327,7 @@ PROJECT_LOCATION_JS = (
     "  if (!sel || !sel.options.length) return '';\n"
     "  var own = sel.getAttribute('data-own-root') || '';\n"
     "  var value = String(sel.value || '');\n"
-    "  return value && value !== own ? value : '';  // '' = leave the plugin on its own root\n"
+    "  return value && value !== own ? value : '';  // '' = the host's default, stamped by the host\n"
     "}\n"
 )
 
@@ -402,11 +340,13 @@ def alias_ui_script() -> str:
     - ``_tlcAliasSettingsHtml(prefix, project, folder)`` to render HTML
     - ``_tlcBindAliasToggle(prefix)`` after inserting the HTML
     - ``_tlcBindAliasAutoUpdate(prefix, projectInputId, folderInputId, pluginId, rootInputId, opts)``
-      — ``opts = {copyOffer: false}`` for a plugin that fetches its own data and copies it itself
+      — follows source changes and preserves manually edited names/roots. Legacy copy options
+      are ignored; deliberate relocation belongs in Storage, run staging in the host planner.
     - ``_tlcGetAliasValues(prefix)`` at submit time
     - ``_tlcProjectLocationHtml(prefix)`` + ``_tlcBindProjectLocation(prefix, pluginId)`` for the
-      "Create project in" choice (this computer or the bucket root); ``_tlcGetProjectRoot(prefix)``
-      at submit time — ``''`` means the plugin's default root
+      "Create project in" choice (the host's default root first, then the deployment's other
+      locations); ``_tlcGetProjectRoot(prefix)`` at submit time — ``''`` means the host's default,
+      which the host stamps into the run body itself
 
     Returns:
         JavaScript source string.

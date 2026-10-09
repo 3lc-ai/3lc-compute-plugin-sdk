@@ -1,0 +1,15 @@
+{
+  "message": "CreateNodeResponse",
+  "answer": {
+    "provider_id": "i-0abc123def456789a",
+    "hourly_rate": 0.0416,
+    "services": {
+      "object_service_url": "https://object-3-4-5-6.sslip.io",
+      "compute_service_url": "https://compute-3-4-5-6.sslip.io"
+    },
+    "managed_by": "owner"
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}
