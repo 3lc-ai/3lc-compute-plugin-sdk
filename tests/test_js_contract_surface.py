@@ -73,6 +73,8 @@ def test_list_is_present_on_both_sides() -> None:
 # Helpers the shared scripts define for their own use. Global (the scripts are plain <script> code) but
 # not part of the contract, so the .d.ts leaves them out.
 _INTERNAL_HELPERS = {
+    "_tlcAliasMapping",
+    "_tlcSuggestedAliasToken",
     "_tlcDsBrowseUrl",
     "_tlcDsBucketReach",
     "_tlcDsLocationList",
@@ -114,5 +116,6 @@ def test_the_run_target_carries_its_label_and_the_plan_is_optional() -> None:
         "ready",
         "label",
         "files_root",
+        "browse_roots",
     }
     assert "planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;" in dts

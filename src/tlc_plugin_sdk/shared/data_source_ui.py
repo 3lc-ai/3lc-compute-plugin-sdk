@@ -52,20 +52,17 @@ not offered.
 The locations follow the run target, the Hub's "Run on:" choice
 (``PLUGIN_API.getRunTarget()``, re-read on ``onRunTargetChange``):
 
-- **A node.** The node's own disk comes first ("<label> (node)"), browsed through the host's
-  ``/api/infra/nodes/{id}/files`` under the folder the node agent browses; the buckets follow, each
-  saying whether that node can read it when the node's storage probe covers it. There is no
-  "This computer" and no Upload: a node cannot read either.
-- **The compute host.** Its disk is "This computer" when the compute URL is a loopback address
-  (the browser and the compute are the same machine), else it is offered under the Hub's name for
-  the host (``getRunTarget().label``); the buckets follow.
+- **Every target.** Explicit ``browse_roots`` offers one location per operator-selected folder,
+  labelled by machine and folder. Empty roots offer buckets only. Node folders are browsed through
+  the host; Upload is unavailable for node targets. Older bridges without root metadata retain
+  their previous disk-location behavior.
 
 A value the run target cannot reach — a folder picked on this computer and then a node chosen, a
 typed path the node does not have, a bucket the node's probe says it cannot read — gets a note
 under the field naming why and what the run will do. On a Hub without ``getRunTarget`` the widget
 behaves as before run targets: the compute's disk only when it is this computer, then the buckets.
 Without an infrastructure plugin (or on a host without that surface) the bar shows only
-"This computer".
+"This computer" on older hosts; explicit empty roots offer no disk.
 """
 
 from __future__ import annotations
@@ -203,7 +200,12 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    var name = target.label || (node && node.label) || target.node_id;\n"
     "    var root = String(target.files_root || (node && node.files_root) || '');\n"
     "    if (root.length > 1) root = root.replace(/\\/$/, '');\n"
-    "    out.push({ kind: 'node', node_id: target.node_id, name: name, label: name + ' (node)', files_root: root });\n"
+    "    var roots = Array.isArray(target.browse_roots) ? target.browse_roots :\n"
+    "      node && Array.isArray(node.browse_roots) ? node.browse_roots : null;\n"
+    "    (roots || [root]).forEach(function(folder) {\n"
+    "      out.push({ kind: 'node', node_id: target.node_id, name: name,\n"
+    "        label: roots ? name + ' \u00b7 ' + folder : name + ' (node)', files_root: folder });\n"
+    "    });\n"
     "    buckets.forEach(function(b) {\n"
     "      var reach = _tlcDsBucketReach(b.url, node && node.storage);\n"
     "      var loc = {};\n"
@@ -216,7 +218,12 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    });\n"
     "    return out;\n"
     "  }\n"
-    "  if (here) out.push({ kind: 'local', name: 'This computer', label: 'This computer' });\n"
+    "  if (target && Array.isArray(target.browse_roots)) {\n"
+    "    target.browse_roots.forEach(function(folder) {\n"
+    "      var name = target.label || 'Compute host';\n"
+    "      out.push({ kind: 'local', name: name, label: name + ' · ' + folder, files_root: folder });\n"
+    "    });\n"
+    "  } else if (here) out.push({ kind: 'local', name: 'This computer', label: 'This computer' });\n"
     "  else if (target && target.label) out.push({ kind: 'local', name: target.label, label: target.label });\n"
     "  return out.concat(buckets);\n"
     "}\n"
@@ -360,7 +367,8 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "        var nodes = {};\n"
     "        (st.nodes || []).forEach(function(n) {\n"
     "          var h = n.health || {};\n"
-    "          nodes[n.id] = { label: n.label || '', files_root: h.files_root || '', storage: h.storage || {} };\n"
+    "          nodes[n.id] = { label: n.label || '', files_root: h.files_root || '', browse_r"
+    'oots: h.browse_roots, storage: h.storage || {} };\n'
     "        });\n"
     "        window._tlcDsNodes = { at: Date.now(), base: computeUrl, nodes: nodes };\n"
     "        return nodes[nodeId] || null;\n"
@@ -377,7 +385,7 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "  function _sameLoc(a, b) {\n"
     "    if (!a || !b || a.kind !== b.kind) return false;\n"
     "    if (a.kind === 'bucket') return a.url === b.url && (a.connection_id || '') === (b.connection_id || '');\n"
-    "    return a.kind !== 'node' || a.node_id === b.node_id;\n"
+    "    return a.files_root === b.files_root && (a.kind !== 'node' || a.node_id === b.node_id);\n"
     "  }\n"
     "  function _defaultLoc() {\n"
     "    // A node run opens the node; a run on the compute host opens this computer, else the project root's\n"
@@ -395,7 +403,12 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "      if (l.kind === 'bucket' && (value === l.url || value.indexOf(l.url + '/') === 0)) return l;\n"
     "    }\n"
     "    if (value && value.indexOf('://') === -1) {\n"
-    "      var disk = _list.filter(function(l) { return l.kind === 'node' || l.kind === 'local'; })[0];\n"
+    "      var disks = _list.filter(function(l) { return l.kind === 'node' || l.kind === 'local'; });\n"
+    "      var disk = disks.filter(function(l) {\n"
+    '        return l.files_root && (value === l.files_root || value.indexOf(l.files_root.rep'
+    "lace(/\\/$/, '') + '/') === 0);\n"
+    "      })[0] || disks[0];\n"
+
     "      if (disk) return disk;\n"
     "    }\n"
     "    return _defaultLoc();\n"
@@ -407,11 +420,12 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "      if (mode === 'file' || /\\.[A-Za-z0-9]{1,6}$/.test(at)) at = at.replace(/\\/[^/]*$/, '');\n"
     "      return at.indexOf(_loc.url) === 0 ? at : _loc.url;\n"
     "    }\n"
-    "    if (value.indexOf('://') !== -1) return _loc.kind === 'node' ? _loc.files_root : '~';  // nothing here lists "
+    "    if (value.indexOf('://') !== -1) return _loc.files_root || '~';  // nothing here lists "
     "it\n"
-    "    if (_loc.kind === 'node') {\n"
+    "    if (_loc.kind === 'node' || _loc.files_root) {\n"
     "      // A path under the node's browsable folder opens its parent; anything else opens that folder.\n"
     "      var root = _loc.files_root;\n"
+    "      if (value === root) return root;\n"
     "      var inside = value.charAt(0) === '/' && (!root || value === root || value.indexOf(root.replace(/\\/$/, '') "
     "+ '/') === 0);\n"
     "      return inside && value.lastIndexOf('/') > 0 ? value.substring(0, value.lastIndexOf('/')) : root;\n"
@@ -422,10 +436,8 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    return lastSlash > 0 ? value.substring(0, lastSlash) : value;\n"
     "  }\n"
     "  function _nowhereNote() {\n"
-    "    var host = String(computeUrl || '').replace(/^https?:\\/\\//, '').replace(/[/:].*$/, '');\n"
-    "    return '<div class=\"tlc-ds-empty\">The compute service runs on ' + _esc(host || 'another machine')\n"
-    "      + ', not on your computer, so there is no folder of yours to browse here. Put the data on a bucket first'\n"
-    "      + ' (Storage page), then choose it here, or type its URL.</div>';\n"
+    "    return '<div class=\"tlc-ds-empty\">No folders or buckets are offered for this target. Choose a configured'\n"
+    "      + ' storage location or type a path or URL.</div>';\n"
     "  }\n"
     "  function _globToRegex(pattern) {\n"
     "    var parts = pattern.split(',').map(function(g) { return g.trim(); }).filter(Boolean);\n"
@@ -529,9 +541,9 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "\n"
     "  function _renderBrowse(data) {\n"
     "    var h = '';\n"
-    "    // Location bar: the run target's disk and the buckets. Not drawn for this computer alone.\n"
+    "    // Location bar: the run target's disk and the buckets. Legacy implicit local disk needs no label.\n"
     "    var locs = _list;\n"
-    "    if (locs.length && !(locs.length === 1 && locs[0].kind === 'local' && _here)) {\n"
+    "    if (locs.length && !(locs.length === 1 && locs[0].kind === 'local' && !locs[0].files_root && _here)) {\n"
     "      // A provider with several Connections lists the same bucket more than once: the\n"
     "      // Connection name is what tells the twins apart, so show it only then.\n"
     "      var connsOf = {};\n"

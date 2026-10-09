@@ -152,8 +152,8 @@ section is the condensed working order.
   `tlc_plugin_sdk/shared/ui_inject.py` for why).
 - In the UI: `_tlcAliasSettingsHtml(prefix, project, folder)` renders the form;
   `_tlcBindAliasToggle(prefix)` + `_tlcBindAliasAutoUpdate(prefix, projectInputId,
-  folderInputId, pluginId, rootInputId, opts)` bind it (`opts = {copyOffer: true}` only if the
-  plugin copies the folder when the form sends `alias_copy_to_root`); `_tlcGetAliasValues(prefix)` at submit time; after programmatic
+  folderInputId, pluginId, rootInputId, opts)` bind it (legacy copy options are ignored;
+  permanent relocation belongs in Storage); `_tlcGetAliasValues(prefix)` at submit time; after programmatic
   form fills call `_tlcSyncAliasFromForm(prefix, projectId, folderId)`.
 
 **SocketIO** (if real-time updates are needed):

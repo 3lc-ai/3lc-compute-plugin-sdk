@@ -285,8 +285,10 @@ export interface PluginRunTarget {
    * ("This machine", "Your deployment (…)"). Absent on older frontends.
    */
   label?: string;
-  /** The folder the node's agent lets the Hub browse, for a node target, when the host knows it. */
+  /** The node's stage/write folder, when the host knows it. */
   files_root?: string;
+  /** Explicit folders offered by this machine; [] means none, absent means older host/agent. */
+  browse_roots?: string[];
 }
 
 /** One piece of data a planned run reads or writes (`PluginRunPlan.refs`). */
@@ -680,8 +682,7 @@ declare global {
   /** Deprecated (`shared.alias_override_ui`): '' on a Hub with `PLUGIN_API.planRun`. */
   function _tlcAliasOverrideHtml(idPrefix: string): string;
   /**
-   * Show or hide the copy-next-to-the-table offer. Offered only with `opts.copyOffer === true`,
-   * a non-empty folder on the compute host, a bucket root, and a run target that is not a node.
+   * Deprecated compatibility no-op. Permanent transfers belong in Storage, not alias settings.
    */
   function _tlcAliasReviewCopy(
     idPrefix: string,
@@ -691,11 +692,13 @@ declare global {
     rootOverride?: string,
     opts?: { copyOffer?: boolean },
   ): void;
+  /** Empty when valid; otherwise explains why the durable alias cannot use this project location. */
+  function _tlcAliasLocationError(idPrefix: string): string;
   function _tlcAliasSettingsHtml(idPrefix: string, projectValue: string, folderValue: string): string;
   /**
-   * Keep the alias token and folder in step with the form, and the copy offer with the folder,
-   * the project, the "Create project in" select (`rootInputId`) and the run target.
-   * `pluginId` is not read. `opts.copyOffer: true` opts in to the copy offer.
+   * Keep the alias token, source root and mapping in step with input/change events.
+   * Suggest the source folder name; preserve manual edits. rootInputId optionally binds placement updates.
+   * Legacy pluginId/opts arguments are ignored.
    */
   function _tlcBindAliasAutoUpdate(
     idPrefix: string,
@@ -752,6 +755,7 @@ declare global {
     ready: boolean;
     label: string;
     files_root: string;
+    browse_roots?: string[];
   } | null;
   /** Where the table will be written, whichever option is selected ('' before the roots are known). */
   function _tlcSelectedProjectRoot(idPrefix: string): string;

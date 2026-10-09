@@ -238,7 +238,7 @@ def test_a_hub_without_run_targets_gets_the_old_picker(tmp_path: Path) -> None:
         "_els['f-ds-browse-btn'].click(); await tick(); return els();",
         routes={"/api/infra/storage": {"storage": [], "providers": []}},
     )
-    assert "not on your computer" in away["panel"]
+    assert "No folders or buckets are offered" in away["panel"]
 
 
 @needs_node
@@ -341,3 +341,47 @@ def test_bucket_browse_on_a_node_target_names_its_connection(tmp_path: Path) -> 
         "http://localhost:5020/api/infra/storage/aws/list?url=s3%3A%2F%2Flocked%2F&connection_id=c1" in out["fetched"]
     )
     assert "godfire cannot read this: The node's own identity was denied listing it." in out["panel"]
+
+
+@needs_node
+def test_node_roots_are_distinct_locations_and_explicit_empty_is_not_legacy(tmp_path: Path) -> None:
+    target = {"target": "node", "node_id": "n", "label": "godfire", "browse_roots": ["/home/g/Data", "/mnt/data"]}
+    locations = _pure(tmp_path, "_tlcDsLocationList(" + json.dumps(target) + ", [], false, null)")
+    assert [loc["label"] for loc in locations] == ["godfire · /home/g/Data", "godfire · /mnt/data"]
+    assert [loc["files_root"] for loc in locations] == target["browse_roots"]
+    target["browse_roots"] = []
+    assert _pure(tmp_path, "_tlcDsLocationList(" + json.dumps(target) + ", [], false, null)") == []
+
+
+@needs_node
+@pytest.mark.parametrize("here", [True, False])
+def test_explicit_host_roots_override_location_inference(tmp_path: Path, here: bool) -> None:
+    target = {"target": "local", "label": "shared-host", "browse_roots": ["/data/a", "/data/b"]}
+    locs = _pure(tmp_path, "_tlcDsLocationList(" + json.dumps(target) + ", [], " + json.dumps(here) + ", null)")
+    assert [loc["label"] for loc in locs] == ["shared-host · /data/a", "shared-host · /data/b"]
+    target["browse_roots"] = []
+    assert _pure(tmp_path, "_tlcDsLocationList(" + json.dumps(target) + ", [], " + json.dumps(here) + ", null)") == []
+
+
+@needs_node
+def test_host_selected_root_reopens_without_escaping_to_parent(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "_els['f'].value = '/data/b'; _els['f-ds-browse-btn'].click(); await tick(); return els();",
+        routes={"/api/infra/storage": _STORAGE, "/browse": _LOCAL_BROWSE},
+        target={"target": "local", "label": "host", "browse_roots": ["/data/a", "/data/b"]},
+    )
+    assert any("/browse?path=%2Fdata%2Fb" in url for url in result["fetched"])
+
+
+@needs_node
+def test_single_explicit_host_root_keeps_machine_and_folder_label(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); return els();",
+        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE},
+        target={"target": "local", "label": "host", "browse_roots": ["/data"]},
+    )
+    assert "host · /data" in out["panel"]

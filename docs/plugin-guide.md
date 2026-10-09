@@ -482,9 +482,9 @@ PLUGIN_API = {
 - **`getRunTarget()`** (optional) is the Hub's "Run on:" choice: `target` is `'local'` (the compute
   host's own workers) or `'node'` (with its `node_id`); `ready` is false while a node's worker is
   being prepared; `label` is the Hub's name for the target (the node's label, or its name for the
-  compute host — "This machine" on a laptop, "Your deployment (…)" on a cloud workspace) and
-  `files_root` the folder a node's disk is browsed under. `label` and `files_root` are absent on
-  older frontends, and the member itself on frontends without remote-node support. Pair it with
+  compute host). `files_root` is the node's stage/write folder; optional `browse_roots` lists the
+  folders offered by either target. An explicit empty list means buckets only; absent metadata
+  means an older host. Pair it with
   **`onRunTargetChange(callback)`**, which fires on every change (listeners are cleared when the
   fragment unmounts). The shared data-source picker and alias card already follow both; see
   [Data inputs and run targets](#data-inputs-and-run-targets).
@@ -1278,20 +1278,25 @@ The Hub's run dialog replaces the per-plugin "read this data from somewhere else
 ### The shared widgets follow the run target
 
 - **The data-source picker** (`shared.data_source_ui`) reads `PLUGIN_API.getRunTarget()` and
-  re-reads it on `onRunTargetChange`. For a node run its first location is the node's own disk,
-  "<label> (node)", browsed through the host under the folder the node's agent allows; the buckets
-  follow, each saying whether that node can read it when the node's storage check covers it. A node
-  run offers no "This computer" and no Upload (an upload lands on the compute host). For a run on
-  the compute host its disk is "This computer" only when the compute URL is a loopback address — the
-  browser and the compute are the same machine — and otherwise carries the Hub's name for the host.
-  A value the target cannot reach (a folder picked on this computer before switching to a node, a
-  typed path the node does not have, a bucket the node cannot read) gets a note under the field. On
-  a Hub without `getRunTarget` the picker behaves as before.
-- **The alias card** (`shared.alias_ui`) offers to copy a folder next to a bucket table only when the
-  plugin asks for it — `_tlcBindAliasAutoUpdate(prefix, projectId, folderId, pluginId, rootId,
-  {copyOffer: true})` — because only a plugin that copies when the form sends `alias_copy_to_root`
-  should show a checked box for it. The offer needs a chosen folder (an empty one is not chosen yet),
-  and is withdrawn while the run goes to a node.
+  re-reads it on `onRunTargetChange`. Each offered folder is a location labelled with its machine
+  and folder. Node folders are browsed through the host, followed by buckets annotated with the
+  node's storage check. Node runs offer no Upload (an upload lands on the compute host).
+  Host operators configure `TLC_DATA_SOURCE_ROOTS` as an `os.pathsep`-separated list of absolute
+  paths or tilde paths. The SDK `/browse` endpoint resolves and enforces these roots; unset, empty,
+  relative-only or nonexistent roots offer no folders. Symlinks cannot escape them. An explicit
+  empty `browse_roots` list offers buckets only, even on localhost. Older bridges without root
+  metadata retain their previous picker behavior, but the updated browse endpoint still enforces
+  explicit configuration. Update plugin workers to this SDK when adopting the policy.
+  Offering a folder changes browsing only; it grants no extra file deletion, copy destination or
+  runtime file-access permission. A value the target cannot reach gets a note under the field.
+- **The alias card** (`shared.alias_ui`) configures an alias name and source root, with a live
+  mapping. It follows both typed and picked source changes, while preserving manual edits.
+  An automatically detected parent root stays until the source changes. Existing media stays at
+  its source: deliberate relocation belongs in Storage, while execution staging belongs in the
+  common run planner. Legacy `copyOffer` arguments and `_tlcAliasReviewCopy` no longer offer
+  transfers; `_tlcGetAliasValues` returns false/empty legacy copy fields for older fragments.
+  Plugins must not silently honor or ignore an obsolete explicit copy request: explain that the
+  user should copy the data first and select the resulting source.
 
 ---
 
@@ -1760,7 +1765,7 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 - [ ] Custom CSS uses `var(--*)` variables, not hardcoded colors
 - [ ] Job progress follows the generic schema (no plugin-specific fields in frontend)
 - [ ] If GPU-bound: `requires_gpu = true` in `[runtime]`; long work is `run_job(ctx)` — never grab a queue
-- [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`). The alias is not optional — the shared widget no longer offers to turn it off (a table written without one is full of absolute paths that resolve on one machine only); the token and folder stay editable under Details, and data inside the project is aliased relative to the table so the token survives a move. Register the alias before writing rows, from the durable folder (`alias_folder`), not a declared input the host may rewrite for the run (see [Data inputs and run targets](#data-inputs-and-run-targets))
+- [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`). The alias is not optional — the shared widget no longer offers to turn it off (a table written without one is full of absolute paths that resolve on one machine only); the token and folder stay editable in the alias card, and data inside the project is aliased relative to the table so the token survives a move. Register the alias before writing rows, from the durable folder (`alias_folder`), not a declared input the host may rewrite for the run (see [Data inputs and run targets](#data-inputs-and-run-targets))
 - [ ] UI follows the page structure and card conventions from "Styling & UI Conventions" above
 - [ ] Hero section with icon, title, description, and 3 feature badges
 - [ ] Config bar if plugin has saved configurations
@@ -1791,3 +1796,18 @@ address:
 While the job runs, any event whose payload carries `project_name` (or a `run_url` under a project) also sets
 the project if it was still unknown. Emit `ctx.result(run_url)` as soon as the run exists and the panel
 catches up even when the start carried nothing.
+
+
+### Alias location validation
+
+The shared alias card suggests a name from the source root; an explicitly edited name stays fixed,
+and clearing it restores the suggestion. Bind it with `_tlcBindAliasAutoUpdate` and check
+`_tlcAliasLocationError(prefix)` before submitting a table-creation request. It explains a local
+source/cloud project mismatch beside the mapping and follows changes to the selected project root.
+
+`register_alias` enforces the same rule before either persistent or session registration: a cloud
+project cannot default to a machine-local source. It raises `JobFailed` for that combination; call
+it before constructing a table writer. Omitted roots use `tlc.config.project_root_url`, matching the
+writer. Validate the durable source, never a temporary stage: `image_folder` may be local when
+`remote_path` names the lasting cloud source. Copy existing data in Storage first, then select the
+new source; import does not relocate it.

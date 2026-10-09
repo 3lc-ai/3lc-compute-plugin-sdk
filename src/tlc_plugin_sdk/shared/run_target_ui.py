@@ -36,7 +36,7 @@ RUN_TARGET_JS = (
     "  if (!t || (t.target !== 'node' && t.target !== 'local')) return null;\n"
     "  var node = t.target === 'node' && !!t.node_id;\n"
     "  return { target: node ? 'node' : 'local', node_id: node ? String(t.node_id) : '', ready: t.ready !== false,\n"
-    "           label: String(t.label || ''), files_root: String(t.files_root || '') };\n"
+    "           label: String(t.label || ''), files_root: String(t.files_root || ''), browse_roots: t.browse_roots };\n"
     "}\n"
     "function _tlcStorageOf(pathOrUrl) {\n"
     "  // 'local', or 'scheme://bucket' — what decides whether two places share storage.\n"

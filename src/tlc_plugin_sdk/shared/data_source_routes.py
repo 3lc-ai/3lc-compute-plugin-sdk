@@ -62,7 +62,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Directories ``/browse`` may list, ``os.pathsep``-separated. Default: the user's home.
+#: Directories ``/browse`` may list, ``os.pathsep``-separated. Default: no browsable folders.
 ROOTS_ENV = "TLC_DATA_SOURCE_ROOTS"
 
 #: Upload size ceiling in MB for ``/upload-temp``. Default: :data:`DEFAULT_MAX_UPLOAD_MB`.
@@ -76,22 +76,24 @@ def allowed_browse_roots() -> list[str]:
 
     Read from :data:`ROOTS_ENV` (``os.pathsep``-separated). Entries are
     tilde-expanded and ``realpath``-resolved; ones that are not existing
-    directories are dropped. Falls back to the user's home directory when the
-    variable is unset or nothing survives — a picker with zero roots is just a
-    broken picker, and home is the least surprising default.
+    directories are dropped. Unset, empty or invalid configuration offers no folders.
+    Relative paths are ignored; operators must name an absolute path or use tilde.
 
     Returns:
         Resolved root directories, first one being the default browse target.
 
     """
     raw = os.environ.get(ROOTS_ENV, "")
-    candidates = [c for c in (part.strip() for part in raw.split(os.pathsep)) if c] or ["~"]
+    candidates = [c for c in (part.strip() for part in raw.split(os.pathsep)) if c]
     roots: list[str] = []
     for candidate in candidates:
-        resolved = os.path.realpath(os.path.expanduser(candidate))
+        expanded = os.path.expanduser(candidate)
+        if not os.path.isabs(expanded):
+            continue
+        resolved = os.path.realpath(expanded)
         if os.path.isdir(resolved) and resolved not in roots:
             roots.append(resolved)
-    return roots or [os.path.realpath(os.path.expanduser("~"))]
+    return roots
 
 
 def _confine_to_roots(path: str, roots: list[str]) -> str | None:
@@ -103,7 +105,7 @@ def _confine_to_roots(path: str, roots: list[str]) -> str | None:
     """
     resolved = os.path.realpath(os.path.expanduser(path))
     for root in roots:
-        if resolved == root or resolved.startswith(root + os.sep):
+        if resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep):
             return resolved
     return None
 
@@ -197,6 +199,8 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
         import fnmatch
 
         roots = allowed_browse_roots()
+        if not roots:
+            return {"error": "No folders are offered for browsing on this machine."}
         raw_path = request.query_params.get("path", "").strip()
         # Comma-separated, matching the widget's "accept" config (e.g. "*.yaml,*.yml") —
         # a bare fnmatch against the joined string would only match a literal comma.
@@ -221,7 +225,7 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
         if not os.path.isdir(expanded):
             return {"error": f"Not a directory: {expanded}"}
 
-        active_root = next(r for r in roots if expanded == r or expanded.startswith(r + os.sep))
+        active_root = next(r for r in roots if expanded == r or expanded.startswith(r.rstrip(os.sep) + os.sep))
 
         entries: list[dict[str, Any]] = []
         try:
@@ -233,6 +237,8 @@ def data_source_route_handlers() -> list[BaseRouteHandler]:
                     and not entry.is_dir()
                     and not any(fnmatch.fnmatch(entry.name, pattern) for pattern in glob_patterns)
                 ):
+                    continue
+                if _confine_to_roots(entry.path, roots) is None:
                     continue
                 try:
                     stat = entry.stat()

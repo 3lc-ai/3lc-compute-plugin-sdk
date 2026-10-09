@@ -6,12 +6,9 @@ Three concerns:
 
 1. **Registration** — when creating a new table, register a persistent project
    alias so image paths use a portable ``<TOKEN>`` prefix.
-2. **Placement** — when the table lands on other storage than the data (a project
-   root on a bucket, images on a laptop), copy the data next to the table first
-   (:func:`copy_folder_to_url`) and register the alias against the copy, so every
-   reader of the table — GPU nodes, the Dashboard, this machine — resolves
-   ``<TOKEN>`` to one place. The copy goes through ``tlc.Url``: whatever can write
-   the table can write the data, with the same credentials.
+2. **Placement** — a cloud project must not default to a machine-local source.
+   Deliberate permanent transfers belong in Storage, before choosing the import source.
+   The copy utility remains available to legacy callers; registration never copies data.
 3. **Override** — when consuming an existing table, temporarily override an
    alias so ``<TOKEN>`` resolves to a fast local path (e.g. SSD) instead of
    the default (e.g. S3).  Overrides are session-scoped and never persisted.
@@ -189,6 +186,28 @@ def relative_alias_value(root_url: str | None, project_name: str, target: str) -
     return "../" * _TABLE_DEPTH_BELOW_PROJECT + inside[len(project_dir) + 1 :]
 
 
+def validate_alias_location(source: str, root_url: str | None = None) -> None:
+    """Refuse a machine-local default alias in a cloud project before any writes.
+
+    Validate the durable source, not a temporary execution path. When no root is
+    supplied, use the same configured default as the table writer.
+    """
+    import tlc
+
+    from tlc_plugin_sdk.job_context import JobFailed
+
+    root = root_url or str(tlc.config.project_root_url)
+    cloud_root = is_remote_url(root) and not root.strip().lower().startswith("file://")
+    local_source = not is_remote_url(source) or source.strip().lower().startswith("file://")
+    if cloud_root and source.strip() and local_source:
+        msg = (
+            "This project is in cloud storage, but its alias would point to a local disk. "
+            "Select a cloud source or a local project location. "
+            "To relocate data, copy it in Storage first."
+        )
+        raise JobFailed(msg)
+
+
 def register_alias(
     project_name: str,
     image_folder: str,
@@ -205,7 +224,7 @@ def register_alias(
             being written point today, so the SDK can fold it into ``<TOKEN>``.
         alias_token: Override token name.  If *None*, one is derived from
             *project_name* via :func:`default_alias_token`.
-        remote_path: Where the data was copied (see :func:`copy_folder_to_url`).
+        remote_path: Durable source location when the execution path differs.
             When given, the *persisted* project alias points here — every reader
             of the project resolves ``<TOKEN>`` to the copy — while this session
             keeps resolving to *image_folder* until the job ends, so paths encode
@@ -215,7 +234,10 @@ def register_alias(
 
     Returns:
         Dict with ``token`` and ``path`` that were registered (plus
-        ``remote_path`` when one was used), or ``error`` on failure.
+        ``remote_path`` when one was used), or ``error`` on registration failure.
+
+    Raises:
+        JobFailed: A cloud project would save a machine-local alias.
 
     """
     import tlc
@@ -226,6 +248,7 @@ def register_alias(
     path = os.path.expanduser(image_folder.strip())
     copied = bool(remote_path and remote_path.strip())
     persisted = remote_path.strip().rstrip("/") if copied and remote_path else path
+    validate_alias_location(persisted, root_url)
     # Data inside the project is aliased relative to the table — see relative_alias_value for why an
     # absolute alias to that folder is silently dropped when the table is written.
     relative = relative_alias_value(root_url, project_name, persisted)

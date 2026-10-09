@@ -48,17 +48,17 @@ def _browse(client: TestClient[Litestar], **params: str) -> dict[str, Any]:
 
 
 class TestAllowedBrowseRoots:
-    def test_defaults_to_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_defaults_to_no_roots(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ROOTS_ENV, raising=False)
-        assert allowed_browse_roots() == [os.path.realpath(os.path.expanduser("~"))]
+        assert allowed_browse_roots() == []
 
     def test_nonexistent_entries_are_dropped(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ROOTS_ENV, os.pathsep.join([str(root), "/no/such/dir"]))
         assert allowed_browse_roots() == [str(root.resolve())]
 
-    def test_all_entries_bad_falls_back_to_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_all_entries_bad_offer_no_roots(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ROOTS_ENV, "/no/such/dir")
-        assert allowed_browse_roots() == [os.path.realpath(os.path.expanduser("~"))]
+        assert allowed_browse_roots() == []
 
 
 class TestBrowseConfinement:
@@ -237,3 +237,19 @@ class TestSelfReferentialSymlink:
 def test_the_worker_no_longer_answers_where_tables_go(client: TestClient[Litestar]) -> None:
     """The root a job writes to is the host's to say, carried in the run body (``ctx.project_root_url``)."""
     assert client.get("/project-root").status_code == 404
+
+
+@pytest.mark.parametrize("configured", [None, "", "/no/such/folder", "."])
+def test_no_roots_refuses_even_explicit_paths(client, monkeypatch, configured):
+    if configured is None:
+        monkeypatch.delenv(ROOTS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(ROOTS_ENV, configured)
+    for path in ("", "~", os.path.expanduser("~"), "/"):
+        assert "No folders are offered" in _browse(client, path=path)["error"]
+
+
+def test_escaping_symlink_is_not_listed(client, root, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("unoffered")
+    (root / "outside-link").symlink_to(outside)
+    assert "outside-link" not in [entry["name"] for entry in _browse(client, path=str(root))["entries"]]

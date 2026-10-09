@@ -1,11 +1,6 @@
 # Copyright 2026 3LC Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Alias placement: copying data next to the table and registering the alias against the copy.
-
-The case: a project root on a bucket, the images on this machine. The shared alias widget
-offers one checkbox; the helper copies the folder through ``tlc.Url`` and the persisted alias
-points at the copy while this session keeps resolving to the local folder.
-"""
+"""Alias location safety, source suggestions, staging, and legacy copy utility coverage."""
 
 from __future__ import annotations
 
@@ -63,6 +58,7 @@ def _fake_tlc() -> types.ModuleType:
     setattr(url, "get_alias_path", lambda token: None)
     helpers = types.ModuleType("tlc.helpers")
     setattr(helpers, "ProjectHelper", _ProjectHelper)
+    setattr(fake, "config", types.SimpleNamespace(project_root_url="/projects"))
     setattr(fake, "Url", _LocalUrl)
     setattr(fake, "url", url)
     setattr(fake, "helpers", helpers)
@@ -225,26 +221,13 @@ def test_the_relative_hop_assumes_the_3lc_table_layout() -> None:
     assert aliases.relative_alias_value("s3://b/projects", "p", "https://huggingface.co/datasets/x") is None
 
 
-def test_alias_widget_offers_the_copy_and_submits_it() -> None:
+def test_alias_widget_keeps_project_location_separate_from_source() -> None:
     js = alias_ui_script()
-    for pin in (
-        "function _tlcProjectLocationHtml(",  # "Create project in": this computer, or the bucket root
-        "function _tlcBindProjectLocation(",
-        "function _tlcGetProjectRoot(",
-        "options.length ? '' : 'none'",  # shown whenever a root is known; one root reads as a statement
-        "var key = 'tlc.projectRoot';",  # one destination for the whole Hub, not one per plugin
-        "rootOverride",  # the copy offer follows the chosen root
-        "-alias-copy-enabled",
-        "function _tlcAliasReviewCopy(",
-        "'/api/deployment/storage/'",  # the host's default root — what a run gets when nothing is chosen
-        "data.getLocations()",  # the deployment's other locations, from the host's data API
-        "does not scan this location",  # a root outside the scan set is allowed, and said to be invisible
-        "_tlcStorageOf(root) !== 'local' && _tlcStorageOf(folder) === 'local'",  # local data, bucket root — only then
-        "'/data/' + token.toLowerCase()",
-        "alias_copy_to_root:",
-        "alias_copy_target:",
-    ):
-        assert pin in js, pin
+    assert "function _tlcProjectLocationHtml(" in js
+    assert "function _tlcGetProjectRoot(" in js
+    assert "-alias-copy-enabled" not in js
+    assert "Source folder ▸" not in js
+    assert "Source root" in js and "Files stay at their source" in js
 
 
 def test_data_source_widget_browses_buckets_through_the_generic_storage_surface() -> None:
@@ -270,7 +253,7 @@ def test_register_alias_persists_under_the_chosen_root(monkeypatch: pytest.Monke
         tlc.helpers.ProjectHelper, "register_project_url_alias", staticmethod(lambda **kw: calls.update(kw))
     )
     monkeypatch.setattr(tlc.url, "register_url_alias", lambda **kw: None)
-    aliases.register_alias("Fire", "/data/fire", "FIRE", root_url="s3://b/projects/")
+    aliases.register_alias("Fire", "s3://b/data/fire", "FIRE", root_url="s3://b/projects/")
     assert calls["root_url"] == "s3://b/projects"
     aliases.register_alias("Fire", "/data/fire", "FIRE")
     assert calls["root_url"] is None  # the plugin's default root
@@ -317,79 +300,144 @@ _FAKE_DOM = (Path(__file__).parent / "fixtures" / "fake_dom.js").read_text(encod
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
 
-def _copy_offer(tmp_path: Path, folder: str, opts: object, *, target: object = None, compute: str = "") -> Any:
-    """Review the copy offer for ``folder`` against a bucket root and return what the card shows.
-
-    ``target`` is what ``PLUGIN_API.getRunTarget()`` answers (``None``: a Hub without it); ``compute``
-    the compute URL the Hub reports.
-    """
-    run_target = "" if target is None else "api.getRunTarget = function () { return " + json.dumps(target) + "; };\n"
+def _run_alias_js(tmp_path: Path, script: str) -> Any:
     harness = tmp_path / "alias.js"
-    harness.write_text(
-        _FAKE_DOM
-        + "\n"
-        + alias_ui_script()
-        + "\nvar api = fakeApi({}, {config: {compute_service_url: "
-        + json.dumps(compute)
-        + "}});\n"
-        + run_target
-        + "window.PLUGIN_API = api;\n"
-        + "['p-alias-copy', 'p-alias-copy-title', 'p-alias-copy-detail', 'p-alias-token', 'p-alias-folder',"
-        + " 'p-alias-copy-enabled'].forEach(addEl);\n"
-        + "_els['p-alias-copy-enabled'].checked = true; _els['p-alias-token'].value = 'FIRE';\n"
-        + "_tlcAliasReviewCopy('p', 'Fire', "
-        + json.dumps(folder)
-        + ", 'importer', 's3://b/projects', "
-        + json.dumps(opts)
-        + ");\n"
-        + "tick().then(function () { var box = _els['p-alias-copy'];\n"
-        + "  process.stdout.write(JSON.stringify({shown: box.style.display !== 'none', target: box.dataset.target,"
-        + " detail: _els['p-alias-copy-detail'].textContent, values: _tlcGetAliasValues('p'),"
-        + " label: _tlcRootLabel('/srv/projects')})); });\n"
-    )
+    harness.write_text(_FAKE_DOM + "\n" + alias_ui_script() + "\n" + script)
     done = subprocess.run(["node", str(harness)], check=True, capture_output=True, text=True)
     return json.loads(done.stdout)
 
 
 @needs_node
-def test_the_copy_is_offered_only_to_a_plugin_that_asks_for_it(tmp_path: Path) -> None:
-    offered = _copy_offer(tmp_path, "/Users/me/fire", {"copyOffer": True}, compute="http://localhost:5020")
-    assert offered["shown"] and offered["target"] == "s3://b/projects/Fire/data/fire"
-    assert offered["values"]["alias_copy_to_root"] is True
-    assert offered["values"]["alias_copy_target"] == "s3://b/projects/Fire/data/fire"
-    # The wording names what is copied, from where, and to where.
-    assert offered["detail"].startswith(
-        "Copies /Users/me/fire (on this computer) to s3://b/projects/Fire/data/fire during the import,"
-        " because the table goes to s3://b/projects."
+def test_picker_changes_refresh_alias_and_manual_edits_survive(tmp_path: Path) -> None:
+    result = _run_alias_js(
+        tmp_path,
+        r"""
+['p-alias-token', 'p-alias-folder', 'p-alias-mapping', 'project', 'folder'].forEach(addEl);
+_els.project.value = 'Fire'; _els.folder.value = '/data/fire';
+function change(id, value, event) {
+  _els[id].value = value; _els[id].dispatchEvent(new Event(event || 'input'));
+}
+_tlcBindAliasAutoUpdate('p', 'project', 'folder', '', '', {copyOffer:true});
+var initial = _tlcGetAliasValues('p');
+change('folder', '/data/selected', 'change');
+var picked = {values:_tlcGetAliasValues('p'), mapping:_els['p-alias-mapping'].textContent};
+_tlcSetAliasRoot('p', '/data');
+change('project', 'NewProject', 'change');
+var detected = _tlcGetAliasValues('p');
+change('folder', '/new/images', 'change');
+var replaced = _tlcGetAliasValues('p');
+change('p-alias-token', 'MY_IMAGES'); change('p-alias-folder', '/new');
+change('folder', '/new/other', 'change'); change('project', 'Another');
+_tlcSetAliasRoot('p', '/detected');
+var manual = _tlcGetAliasValues('p');
+process.stdout.write(JSON.stringify({initial,picked,detected,replaced,manual}));
+""",
     )
-    # A plugin that never copies (no opts, or copyOffer false) is not offered one: it would send a
-    # checked box nothing acts on.
-    for opts in (None, {}, {"copyOffer": False}):
-        quiet = _copy_offer(tmp_path, "/Users/me/fire", opts)
-        assert not quiet["shown"] and quiet["values"]["alias_copy_to_root"] is False, opts
+    assert result["initial"]["alias_folder"] == "/data/fire"
+    assert result["picked"]["values"]["alias_folder"] == "/data/selected"
+    assert result["picked"]["mapping"] == "<SELECTED> → /data/selected"
+    assert result["detected"]["alias_folder"] == "/data"
+    assert result["detected"]["alias_token"] == "DATA"
+    assert result["replaced"]["alias_folder"] == "/new/images"
+    assert result["manual"]["alias_folder"] == "/new"
+    assert result["manual"]["alias_token"] == "MY_IMAGES"
+    assert result["manual"]["alias_copy_to_root"] is False
+    assert result["manual"]["alias_copy_target"] == ""
 
 
 @needs_node
-def test_an_empty_folder_is_not_chosen_yet(tmp_path: Path) -> None:
-    out = _copy_offer(tmp_path, "  ", {"copyOffer": True})
-    assert not out["shown"] and out["target"] == "" and out["values"]["alias_copy_to_root"] is False
-
-
-@needs_node
-def test_no_copy_is_offered_while_the_run_goes_to_a_node(tmp_path: Path) -> None:
-    node = {"target": "node", "node_id": "n1", "ready": True, "label": "godfire"}
-    assert not _copy_offer(tmp_path, "/Users/me/fire", {"copyOffer": True}, target=node)["shown"]
-    local = {"target": "local", "ready": True, "label": "This machine"}
-    assert _copy_offer(tmp_path, "/Users/me/fire", {"copyOffer": True}, target=local)["shown"]
-
-
-@needs_node
-def test_a_local_root_is_this_computer_only_when_the_browser_is_on_the_compute_host(tmp_path: Path) -> None:
-    here = _copy_offer(tmp_path, "", None, compute="http://127.0.0.1:5020")
-    assert here["label"] == "This computer — /srv/projects"
-    named = _copy_offer(
-        tmp_path, "", None, compute="https://compute.example", target={"target": "local", "label": "Your deployment"}
+def test_empty_source_stays_empty_and_rendered_values_are_escaped(tmp_path: Path) -> None:
+    result = _run_alias_js(
+        tmp_path,
+        r"""
+['p-alias-token', 'p-alias-folder', 'p-alias-mapping', 'project', 'folder'].forEach(addEl);
+_tlcBindAliasAutoUpdate('p', 'project', 'folder');
+process.stdout.write(JSON.stringify({values:_tlcGetAliasValues('p'),
+  mapping:_els['p-alias-mapping'].textContent,
+  html:_tlcAliasSettingsHtml('p', '', '/a/"<test>')}));
+""",
     )
-    assert named["label"] == "Your deployment — /srv/projects"
-    away = _copy_offer(tmp_path, "", None, compute="https://compute.example")
-    assert away["label"] == "The compute host — /srv/projects"
+    assert result["values"]["alias_folder"] == ""
+    assert result["values"]["alias_token"] == ""
+    assert result["mapping"] == "Source root will follow the selected data."
+    assert "/a/&quot;&lt;test&gt;" in result["html"]
+    assert "alias-copy" not in result["html"]
+
+
+@needs_node
+def test_a_local_root_is_named_for_its_host(tmp_path: Path) -> None:
+    result = _run_alias_js(
+        tmp_path,
+        r"""
+window.PLUGIN_API = fakeApi({}, {config:{compute_service_url:'http://127.0.0.1:5020'}});
+var local = _tlcRootLabel('/srv/projects');
+window.PLUGIN_API = fakeApi({}, {config:{compute_service_url:'https://compute.example'},
+  getRunTarget:function(){return {target:'local',label:'Your deployment'};}});
+var named = _tlcRootLabel('/srv/projects');
+window.PLUGIN_API = fakeApi({}, {config:{compute_service_url:'https://compute.example'}});
+process.stdout.write(JSON.stringify({local,named,remote:_tlcRootLabel('/srv/projects')}));
+""",
+    )
+    assert result == {
+        "local": "This computer — /srv/projects",
+        "named": "Your deployment — /srv/projects",
+        "remote": "The compute host — /srv/projects",
+    }
+
+
+@pytest.mark.parametrize("source", ["/data/images", "~/images", "C:\\data", "file:///data/images"])
+@pytest.mark.parametrize("explicit", [True, False])
+def test_cloud_alias_refusal_precedes_all_registration(monkeypatch, source, explicit):
+    import tlc
+
+    from tlc_plugin_sdk import JobFailed
+
+    tlc.config.project_root_url = "s3://bucket/projects"
+    calls = []
+    monkeypatch.setattr(tlc.url, "get_registered_url_aliases", lambda: calls.append("read"))
+    with pytest.raises(JobFailed, match="alias would point to a local disk"):
+        aliases.register_alias("Fire", source, "FIRE", root_url="s3://bucket/projects" if explicit else None)
+    assert not calls
+
+
+def test_staging_keeps_a_cloud_alias_valid(monkeypatch):
+    import tlc
+
+    tlc.config.project_root_url = "s3://bucket/projects"
+    calls = {}
+    monkeypatch.setattr(
+        tlc.helpers.ProjectHelper, "register_project_url_alias", staticmethod(lambda **kw: calls.update(kw))
+    )
+    result = aliases.register_alias("Fire", "/node/cache/images", "FIRE", remote_path="s3://bucket/images")
+    assert calls["path"] == "s3://bucket/images"
+    assert result["path"] == "/node/cache/images"
+
+
+@needs_node
+def test_cloud_location_notice_and_source_name_reset(tmp_path):
+    result = _run_alias_js(
+        tmp_path,
+        r"""
+['p-alias-token','p-alias-folder','p-alias-mapping','p-alias-location-error','p-project-root','project','folder'].forEach(addEl);
+_els.project.value = 'Project'; _els.folder.value = '/data/first';
+_els['p-project-root'].options = [{value:'s3://bucket/projects'}];
+_els['p-project-root'].value = 's3://bucket/projects';
+_tlcBindAliasAutoUpdate('p', 'project', 'folder');
+var blocked = _tlcAliasLocationError('p');
+_els.folder.value = 's3://bucket/new-images/'; _els.folder.dispatchEvent(new Event('change'));
+var cloud = {values:_tlcGetAliasValues('p'), error:_tlcAliasLocationError('p')};
+_els['p-alias-token'].value = 'CUSTOM'; _els['p-alias-token'].dispatchEvent(new Event('input'));
+_els.folder.value = 's3://bucket/next'; _els.folder.dispatchEvent(new Event('change'));
+var custom = _tlcGetAliasValues('p').alias_token;
+_els['p-alias-token'].value = ''; _els['p-alias-token'].dispatchEvent(new Event('input'));
+var reset = _tlcGetAliasValues('p').alias_token;
+_els['p-project-root'].value = '/projects'; _els['p-project-root'].dispatchEvent(new Event('change'));
+_els.folder.value = '/data/local'; _els.folder.dispatchEvent(new Event('change'));
+process.stdout.write(JSON.stringify({blocked,cloud,custom,reset,local:_tlcAliasLocationError('p')}));
+""",
+    )
+    assert "local disk" in result["blocked"]
+    assert result["cloud"]["error"] == result["local"] == ""
+    assert result["cloud"]["values"]["alias_token"] == "NEW_IMAGES"
+    assert result["custom"] == "CUSTOM"
+    assert result["reset"] == "NEXT"
