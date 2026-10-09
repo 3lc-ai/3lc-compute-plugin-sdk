@@ -319,6 +319,8 @@ export interface PluginRunPlanRef {
 
 /** What the host says a run's data needs before it can run on the current target (`PluginApi.planRun`). */
 export interface PluginRunPlan {
+  /** Resolved destination at review time; optional on older hosts. */
+  project_root_url?: string;
   target: { kind: 'host' | 'node'; node_id: string; label: string };
   refs: PluginRunPlanRef[];
   /** Sentences for what cannot be crossed (e.g. a host folder on a node run). */

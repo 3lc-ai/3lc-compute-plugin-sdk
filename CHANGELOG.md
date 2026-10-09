@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Data movement
 
+- **Reviewed project destinations stay consistent.** Run plans report their resolved root; preparation and submission refuse a changed destination and ask for a fresh review. Accepted jobs keep the stamped root through execution.
+
 - **`shared.alias_override_ui`, the "Read this data from somewhere else for this run" card.** The Hub
   now plans a run's data and asks where anything the run target cannot reach is, on the compute host
   as on a node, so the card is redundant: drop it from your fragment. It stays importable and
