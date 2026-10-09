@@ -113,15 +113,9 @@ def save_model_to_run(
 
             torch.save(model_data, str(tmp_path))
 
-        # Upload using tlc.Url write facilities
-        try:
-            model_url.write_file(str(tmp_path))
-            on_status(f"Uploaded model to: {model_url}")
-        except AttributeError:
-            # Fallback: use the Url's native copy mechanism
-            src_url = tlc.Url(str(tmp_path))
-            src_url.copy_to(model_url)
-            on_status(f"Copied model to cloud: {model_url}")
+        # Use the public Url write API shared by the supported storage adapters.
+        model_url.write_bytes(tmp_path.read_bytes())
+        on_status(f"Uploaded model to: {model_url}")
 
     return relative_path
 

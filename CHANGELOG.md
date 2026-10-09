@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Data movement
 
+- Model checkpoints upload to cloud run folders through the supported URL write API, avoiding a failed upload and node-local fallback.
+
 - **Reviewed project destinations stay consistent.** Run plans report their resolved root; preparation and submission refuse a changed destination and ask for a fresh review. Accepted jobs keep the stamped root through execution.
 
 - **`shared.alias_override_ui`, the "Read this data from somewhere else for this run" card.** The Hub
