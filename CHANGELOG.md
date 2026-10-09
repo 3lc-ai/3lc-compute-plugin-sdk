@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Connections
+- Connection diagnostics accept host project-root context through `ConnectionCheckRequest` and
+  `connection_check_with_context`; existing `connection_check()` overrides remain supported.
+- Connection verification may return per-operation diagnostic checks using the preflight check shape.
+- Credential declarations accept an optional plain-text `value_hint`; the author guide describes
+  how to explain the value the Connection form expects. The harness validates and preserves it.
+- Jobs expose service-keyed tokens through `ctx.credentials`, `ctx.get_credential(service)` and
+  `connections.current_credential(service)`, preserving the legacy singleton API and isolating
+  credentials by job. Worker health advertises support for the multi-token wire contract.
+
 ### Changed
 
 #### Data movement
+
+- Model checkpoints upload to cloud run folders through the supported URL write API, avoiding a failed upload and node-local fallback.
 
 - **Reviewed project destinations stay consistent.** Run plans report their resolved root; preparation and submission refuse a changed destination and ask for a fresh review. Accepted jobs keep the stamped root through execution.
 

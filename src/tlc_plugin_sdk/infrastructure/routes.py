@@ -39,6 +39,7 @@ from tlc_plugin_sdk.infrastructure.legacy import (
 from tlc_plugin_sdk.infrastructure.plugin import InfrastructurePlugin
 from tlc_plugin_sdk.infrastructure.types import (
     BundleRequest,
+    ConnectionCheckRequest,
     CreateNodeRequest,
     CreateStorageRequest,
     DeleteObjectsRequest,
@@ -270,10 +271,12 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
         return answer(plugin, lambda: plugin.delete_node(provider_id).to_dict())
 
     @http_get("/infra/connection/check", sync_to_thread=True)
-    def _connection_check() -> dict[str, Any]:
+    def _connection_check(project_root_url: str | None = None) -> dict[str, Any]:
         if current_connection() is None:
             raise HTTPException(status_code=400, detail=f"Send the Connection to check in {CONNECTION_HEADER}")
-        return answer(plugin, lambda: plugin.connection_check().to_dict())
+        return answer(
+            plugin, lambda: plugin.connection_check_with_context(ConnectionCheckRequest(project_root_url)).to_dict()
+        )
 
     return [_capabilities, _preflight, _create_node, _node_state, _delete_node, _connection_check]
 

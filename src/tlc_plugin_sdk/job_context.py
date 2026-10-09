@@ -17,6 +17,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
@@ -108,7 +109,9 @@ class JobContext:
         cancel_event: Set by the host/worker to request cooperative cancellation.
         identity: Who the job runs for (see :class:`JobIdentity`); empty when omitted.
         credential: The credential the host granted this job, or ``None``; the same object
-            ``connections.current_credential()`` returns inside ``run_job``.
+            ``connections.current_credential()`` returns inside ``run_job``. None for multiple tokens.
+        credentials: Tokens keyed by service; copied into a read-only map. Use ``get_credential``
+            for optional lookups. Token values never belong in saved parameters or output.
 
     ``project_root_url`` (a property) is the root the job writes to — see there.
 
@@ -124,15 +127,30 @@ class JobContext:
         cancel_event: threading.Event,
         identity: JobIdentity | None = None,
         credential: SecretToken | None = None,
+        credentials: Mapping[str, SecretToken] | None = None,
     ) -> None:
         self.job_id = job_id
         self.params = params or {}
         self.state_dir = state_dir
         self.identity = identity if identity is not None else JobIdentity()
-        self.credential = credential
+        tokens = dict(credentials or {})
+        if credential is not None:
+            if credential.provider in tokens and tokens[credential.provider] != credential:
+                msg = "Conflicting credentials for one service"
+                raise ValueError(msg)
+            tokens[credential.provider] = credential
+        if any(service != token.provider for service, token in tokens.items()):
+            msg = "A job credential does not match its service"
+            raise ValueError(msg)
+        self.credentials: Mapping[str, SecretToken] = MappingProxyType(tokens)
+        self.credential = next(iter(tokens.values())) if len(tokens) == 1 else None
         self._sink = sink
         self._cancel = cancel_event
         self._project_root: str | None = None
+
+    def get_credential(self, service: str) -> SecretToken | None:
+        """Return the job's token for ``service``, or None when none was supplied."""
+        return self.credentials.get(service)
 
     # ── plugin-facing API ────────────────────────────────────────────────
     @property

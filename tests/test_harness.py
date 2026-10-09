@@ -58,6 +58,7 @@ def test_calls_the_plugins_own_routes_and_the_generic_ones(tmp_path: Path) -> No
         assert h.post("/echo", json_body={"a": 1}).json() == {"got": {"a": 1}}
         health = h.get("/health").json()
         assert health["plugin"] == "probe"
+        assert "job_credentials_by_service" in health["capabilities"]
         assert h.get("/ui").status_code == 200
         assert h.get("/jobs/x/cancel").status_code in (404, 405), "job routes are not mounted"
     assert plugin.initialised == 1

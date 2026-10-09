@@ -55,14 +55,16 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 __all__ = [
     "BOUND_CREDENTIAL_HEADER",
     "CONNECTION_HEADER",
     "CONNECTION_USE_HEADER",
+    "CREDENTIALS_KEY",
     "CREDENTIAL_KEY",
     "ENV_VARS_FROM_JSON_BY_PROVIDER",
     "ENV_VAR_BY_PROVIDER",
@@ -74,6 +76,7 @@ __all__ = [
     "ResolvedCredential",
     "SecretToken",
     "bound_credential",
+    "bound_credentials",
     "connection_middleware",
     "credential_environment",
     "credential_middleware",
@@ -98,7 +101,9 @@ KIND_KEYLESS = "KEYLESS"
 KIND_SECRET = "SECRET"
 
 CREDENTIAL_KEY = "_credential"
-"""The host-owned top-level run-body key carrying a job's :class:`SecretToken`; popped by the worker."""
+"""The host-owned run-body key carrying one job token; popped by the worker."""
+CREDENTIALS_KEY = "_credentials"
+"""The host-owned run-body key carrying tokens by service; popped by the worker."""
 
 BOUND_CREDENTIAL_HEADER = "x-tlc-bound-credential"
 """The request header carrying a route's :class:`SecretToken` (host-owned): the JSON object
@@ -324,6 +329,9 @@ _CONNECTION: contextvars.ContextVar[ConnectionBinding | None] = contextvars.Cont
 _CREDENTIAL: contextvars.ContextVar[ResolvedCredential | None] = contextvars.ContextVar(
     "tlc_connection_credential", default=None
 )
+_CREDENTIALS: contextvars.ContextVar[Mapping[str, SecretToken]] = contextvars.ContextVar(
+    "tlc_job_credentials", default=MappingProxyType({})
+)
 _USE: contextvars.ContextVar[ConnectionUse | None] = contextvars.ContextVar("tlc_connection_use", default=None)
 
 
@@ -374,9 +382,18 @@ def current_connection() -> ConnectionBinding | None:
     return _CONNECTION.get()
 
 
-def current_credential() -> ResolvedCredential | None:
-    """The resolved credential for the current request or job, or ``None`` when it names no Connection."""
-    return _CREDENTIAL.get()
+def current_credential(service: str | None = None) -> ResolvedCredential | None:
+    """Return a service's token, or the legacy single credential when no service is given.
+
+    A multi-service job has no default credential: pass the service explicitly. Infrastructure
+    request credentials retain their existing behavior when called without a service.
+    """
+    current = _CREDENTIAL.get()
+    if service is None:
+        return current
+    if isinstance(current, SecretToken) and current.provider == service:
+        return current
+    return _CREDENTIALS.get().get(service)
 
 
 def credential_environment(credential: SecretToken) -> dict[str, str]:
@@ -450,6 +467,24 @@ def bound_credential(credential: SecretToken | None) -> Iterator[None]:
         yield
     finally:
         _CREDENTIAL.reset(token)
+
+
+@contextlib.contextmanager
+def bound_credentials(credentials: Mapping[str, SecretToken]) -> Iterator[None]:
+    """Bind a job's service tokens for this context only, restoring both contexts on exit."""
+    for service, credential in credentials.items():
+        if service != credential.provider:
+            msg = "A job credential does not match its service"
+            raise CredentialUnavailable(msg)
+        credential_environment(credential)
+    snapshot = MappingProxyType(dict(credentials))
+    many_token = _CREDENTIALS.set(snapshot)
+    single_token = _CREDENTIAL.set(next(iter(snapshot.values())) if len(snapshot) == 1 else None)
+    try:
+        yield
+    finally:
+        _CREDENTIAL.reset(single_token)
+        _CREDENTIALS.reset(many_token)
 
 
 def current_use() -> ConnectionUse | None:

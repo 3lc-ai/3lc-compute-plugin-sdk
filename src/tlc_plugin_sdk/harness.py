@@ -67,10 +67,12 @@ class CredentialRequirement:
         service: The service slug (``huggingface``, ``kaggle``, ``wandb``, …): what a SECRET
             Connection's ``provider`` names.
         required: The plugin cannot do its work without one.
+        value_hint: Plain-text help describing the value to enter; never a credential itself.
     """
 
     service: str
     required: bool = False
+    value_hint: str = ""
 
 
 def parse_credentials(raw: object) -> tuple[CredentialRequirement, ...]:
@@ -85,7 +87,7 @@ def parse_credentials(raw: object) -> tuple[CredentialRequirement, ...]:
     Raises:
         ValueError: When the value is not a list of such tables, a ``service`` is not a lower-case
             slug (``^[a-z0-9][a-z0-9._-]*$``, at most 100 characters), ``required`` is not a
-            boolean, or a service is listed twice.
+            boolean, ``value_hint`` is not a string, or a service is listed twice.
     """
     if raw is None:
         return ()
@@ -107,7 +109,11 @@ def parse_credentials(raw: object) -> tuple[CredentialRequirement, ...]:
         if any(r.service == service for r in requirements):
             msg = f"[runtime] credentials lists {service!r} twice"
             raise ValueError(msg)
-        requirements.append(CredentialRequirement(service=service, required=required))
+        hint = entry.get("value_hint", "")
+        if not isinstance(hint, str):
+            msg = f"[runtime] credentials: value_hint for {service!r} is a string"
+            raise ValueError(msg)
+        requirements.append(CredentialRequirement(service=service, required=required, value_hint=hint.strip()))
     return tuple(requirements)
 
 

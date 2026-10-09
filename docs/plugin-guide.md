@@ -671,7 +671,15 @@ an explicit `None` in it is emitted as `null`, and `from_dict` leaves it empty.
 | `POST /infra/nodes` | `CreateNodeRequest`: `node_id`, `node_type`, `token`, `env`, `agent_port`, `ports`, `idle_ttl_s` (`0` or less = never turn off on idle; only a finite number is read — a missing or unreadable value, or `inf`, is 1800), `flavor`, `owner`, `pricing` (`""` = your configured default), `storage_id`, `compute_spec` (the agent's pip requirement: a pin or a range), `project_storage`, `workspace` (a `WorkspaceRequest`; empty for a GPU node) | `CreateNodeResponse`: `provider_id`, `agent_url` (a GPU node) or `services` (a workspace: `object_service_url`, `compute_service_url`), `hourly_rate`, `pricing`, `managed_by` (`"owner"` when the node lives in the requester's own account), `location` (where the node lives, in your words: a region, a zone, a site; the Hub shows it beside the type), `token`, `detail`. The SDK answers 201; the host accepts 200 and 201 |
 | `GET /infra/nodes/{id}` | `?diagnostics=true` for `node_diagnostics` | `NodeStateResponse`: `state` (`pending`, `running`, `exited`, `terminated`, `gone`, `unknown`), `detail`, and with diagnostics `bootstrap_history`, `bootstrap_detail`, `bootstrap_failed` (`None` when the console could not be read) |
 | `DELETE /infra/nodes/{id}` | — | `NodeStateResponse`; idempotent: a repeated delete answers `terminated` or `gone` |
-| `GET /infra/connection/check` | a Connection in `x-3lc-connection` (400 without one) | `ConnectionCheckResponse`: `identity` (who the Connection acts as, `""` when not asked), `checked[]`. The default (`connection_check()`) answers `{"identity": "", "checked": ["resolve"]}`: reaching it means the binding resolved. Override to ask the provider who the credential is |
+| `GET /infra/connection/check` | a Connection in `x-3lc-connection` (400 without one), optional `project_root_url` query | `ConnectionCheckResponse`: `identity` (who the Connection acts as, `""` when not asked), `checked[]`, optional `checks[]` (`PreflightCheck`). The default (`connection_check()`) answers `{"identity": "", "checked": ["resolve"]}`: reaching it means the binding resolved. Override to ask the provider who the credential is |
+
+For checks that depend on deployment storage, override
+`connection_check_with_context(request: ConnectionCheckRequest)`. The default delegates to the
+existing `connection_check()` hook, preserving older overrides. `request.project_root_url` is the
+host's effective root at the time of verification: `None` means unavailable/omitted, and `""` means
+explicitly no root. Do not replace it with the plugin worker's configuration. The target scopes a
+read-only diagnostic; it grants no additional access and does not change queued jobs.
+
 
 The host refuses a request for any `flavor` or `pricing` the capabilities did not declare, so a
 plugin never guesses a default. Every create request carries `flavor` and `pricing`.
@@ -756,6 +764,31 @@ host forwards these as `/api/infra/login/<plugin>/…` and `/api/infra/role-setu
 derive the external id from the owner so a role is bound to one person. Temporary credentials
 must never be seeded onto the deployment — it runs its nodes by its own instance role.
 
+Connection checks may include `checks: list[PreflightCheck]` for read-only or dry-run diagnostic
+samples. Use `ok=false, level="warn"` when the sample could not be tested, and `level="error"`
+for a refused operation; include its scope and limits in `detail`. Successful resolution remains
+separate from these diagnostics: an identity can work while one operation is unavailable. Old
+hosts ignore these checks. They describe the latest request and are not a persistent audit log.
+
+### Connection setup declarations
+
+Infrastructure providers may add these optional fields through `CapabilitiesResponse.extra`:
+
+- `connection_kinds`: supported cloud-account kinds, such as `["KEYLESS", "AMBIENT"]`.
+  The Hub hides choices not listed; an absent field keeps the older two-choice behaviour.
+- `host_identity`: a readable identifier for the deployment's own identity. It must come from
+  the host's credential chain, never a caller's request or selected Connection. Omit it when
+  unavailable; do not expose credential values.
+
+A provider's Connection onboarding answer may include `permissions`, an object mapping use
+labels (for example `nodes`, `storage`, `workspaces`) to lists of plain-text sentences about
+its setup template. The Hub displays them before the setup link. Optional `revoke_help` explains
+how to remove access; `setup_wait_help` explains when setup is ready to verify;
+`verification_help` helps someone investigate an unsuccessful check. These
+explain the offered template, not an audit of an existing role the customer may have edited.
+Keep the explanations with the provider's policy definition; the frontend does not interpret
+provider policies. Older answers without these fields retain the existing setup flow.
+
 ### Identity: Connections first
 
 A **Connection** names the external account a request acts on — an AWS account, a RunPod team —
@@ -801,13 +834,14 @@ Resolved credentials live for the request only; don't cache them in settings or 
 header is host-owned: a host strips any copy a caller sends, so a fragment can never choose the
 identity.
 
-**A job's token (`SECRET`).** A run may name a `SECRET` Connection (a Hugging Face token); the
-host obtains its value for that one job and passes it in the host-owned `_credential` run-body
-key, which the worker pops before `ctx.params` exists. For the duration of `run_job` it is
-`ctx.credential` and `connections.current_credential()` (a `SecretToken`: `provider`,
-`connection_id`, `secret`; its repr masks the value), restored when `run_job` returns. Never log,
-persist or emit the value. The SDK does **not** set it as an environment variable (see
-*Concurrency* below): hand it to your library explicitly.
+**A job's tokens (`SECRET`).** A run may name a Connection for each declared service. The
+host obtains all values for that job and sends a host-owned `_credentials` service map, or
+`_credential` for one token. The worker removes these before `ctx.params` exists. During
+`run_job`, use `ctx.get_credential(service)` or `connections.current_credential(service)` to
+read a `SecretToken` (`provider`, `connection_id`, `secret`; its repr masks the value).
+The legacy `ctx.credential` and no-argument `current_credential()` expose a singleton only.
+Never log, persist or emit secret values. The SDK does **not** set environment variables (see
+*Concurrency* below): hand each token to its library explicitly.
 
 #### Tokens on runs and routes (SECRET)
 
@@ -827,8 +861,26 @@ credential_routes = ["/preview", "/model-warmup"]               # custom routes 
 `/preview/x` but not `/previewer`; `"/"` alone covers every custom route). Each `service` is a
 lower-case slug (`^[a-z0-9][a-z0-9._-]*$`).
 
-- **On a run** the Hub sends the chosen Connection as `credential_connection_id`; the host obtains
-  its value for the person submitting and the worker binds it for `run_job` (above).
+Each declaration may include `value_hint`, a short plain-text sentence shown by the Hub when
+someone adds a service token. Explain the expected value and where to obtain it, for example
+`value_hint = "A token from huggingface.co/settings/tokens. Read access for imports; write access for sharing."`
+or `value_hint = "The contents of kaggle.json (username and key)."`. This is help, not validation
+or a default value: never put credentials in it. Older hosts ignore it; without a hint the Hub
+uses generic token wording. The harness validates that it is a string.
+
+
+- **On a run** the Hub sends `credential_connection_ids: {service: connection_id}` when several
+  services are selected. The legacy `credential_connection_id` remains accepted for one selection;
+  do not send both fields. The host checks every grant and its service before queueing anything.
+  Plugins read `ctx.credentials` (a read-only map), `ctx.get_credential("huggingface")`, or
+  `connections.current_credential("huggingface")`. Each lookup returns `None` if that service was
+  not supplied. `ctx.credential` and no-argument `current_credential()` remain available for a
+  singleton; both return `None` for a multi-service job, so there is no arbitrary default token.
+  Secrets are removed from `ctx.params` before the plugin runs and must never be saved in configs.
+  Single-token jobs retain the legacy worker wire. Before sending a multi-token job, the host checks
+  the worker's `job_credentials_by_service` health capability; older workers need an SDK update.
+  The host advertises `credential_connections_by_service: true` on plugin cards. When absent,
+  the Hub retains the older single-Connection behavior; explicit service maps require a host update.
 - **On a listed route** the Hub sends the chosen Connection id to the host, which obtains the value
   for the person calling (cached briefly per person, Connection and plugin) and forwards it to
   your worker in the host-owned `x-tlc-bound-credential` header
@@ -1078,7 +1130,9 @@ class MyGpuPlugin(ComputePlugin):
 | Member | Purpose |
 |---|---|
 | `ctx.job_id` | Unique id for this job. |
-| `ctx.params` | Job parameters (parsed request body / query). |
+| `ctx.params` | Job parameters (parsed request body / query), without host-granted secrets. |
+| `ctx.credentials` / `ctx.get_credential(service)` | Read-only service-token map / optional lookup for this job. |
+| `ctx.credential` | Legacy singleton token, or `None` when there are zero or multiple tokens. |
 | `ctx.cancelled` | `True` once cancel is requested — poll at checkpoints. |
 | `ctx.state_dir` | Writable per-plugin scratch dir (never write inside the package). |
 | `ctx.identity` | Who the job runs for: a `JobIdentity` with `user_id`, `org_id`, `project_id` (canonical id strings, or `None` when the host did not know). Read it for attribution; never set it. |
@@ -1149,6 +1203,11 @@ plugin remote-ready; all are optional locally and additive:
   host's configured root. It is written at the top level and inside an inline
   `project_config.params`. Read it through `ctx.project_root_url`; a fragment may send it, a plugin
   never invents another root. A plugin that persists its params may keep it.
+  Treat this value as the accepted job's destination: later effective-configuration changes supply
+  defaults for new submissions, not a replacement destination for queued/running jobs or retries.
+  Preserve the stamped root when retrying a job. Do not reread `tlc.config.project_root_url` mid-job
+  to choose another output location. Node configuration remains useful for non-job operations and
+  legacy requests; it is not a competing authority for a current host's stamped job.
 - **`_identity` is host-owned and becomes `ctx.identity`.** The host stamps who the job runs
   for (`{"user_id", "org_id", "project_id"}`, canonical id strings) under the top-level
   `_identity` key; the worker pops it before `ctx.params` is built and exposes it as

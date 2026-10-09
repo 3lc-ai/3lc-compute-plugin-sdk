@@ -152,3 +152,88 @@ def test_concurrent_jobs_with_different_tokens_each_see_only_their_own(
     assert seen["holder"] == (_token(), None)
     assert seen["second"] == (_token("c-2", other), None)
     assert seen["bystander"] == (None, None)
+
+
+def test_multiple_services_are_available_by_name_without_a_default_or_saved_secrets(tmp_path: Path) -> None:
+    seen: dict[str, Any] = {}
+
+    class Multi(_Plugin):
+        def run_job(self, ctx: JobContext) -> None:
+            seen["services"] = list(ctx.credentials)
+            seen["hf"] = ctx.get_credential("huggingface")
+            seen["wandb"] = connections.current_credential("wandb")
+            seen["missing"] = ctx.get_credential("missing")
+            seen["legacy"] = (ctx.credential, connections.current_credential())
+            seen["params"] = dict(ctx.params)
+            with pytest.raises(TypeError):
+                ctx.credentials["wandb"] = _token()
+
+    worker = _Worker(Multi(), "p", tmp_path / "state")
+    second = {"provider": "wandb", "connection_id": "c-2", "secret": "wandb-second"}
+    job = worker.start_job(
+        "multi", {"_credentials": {"huggingface": _wire(), "wandb": second}, "table_url": "s3://b/t"}
+    )
+    assert job.wait(5)
+    events = list(job.events.queue)
+    assert events[-1]["event"] == "done", events
+    assert seen["services"] == ["huggingface", "wandb"]
+    assert seen["hf"] == _token()
+    assert seen["wandb"] == SecretToken.from_wire(second)
+    assert seen["missing"] is None
+    assert seen["legacy"] == (None, None)
+    assert seen["params"] == {"table_url": "s3://b/t"}
+    assert connections.current_credential("huggingface") is None
+    assert connections.current_credential("wandb") is None
+
+
+@pytest.mark.parametrize(
+    "wire", [[], {"wandb": _wire()}, {"huggingface": {"provider": "huggingface", "secret": SECRET}}]
+)
+def test_invalid_service_map_never_starts_a_job(tmp_path: Path, wire: Any) -> None:
+    worker = _Worker(_Plugin(), "p", tmp_path / "state")
+    with pytest.raises(ValueError, match=r"[Cc]redential"):
+        worker.start_job("invalid", {"_credentials": wire})
+    assert worker.active_jobs() == 0
+
+
+def test_nested_service_context_restores_all_tokens_after_an_exception() -> None:
+    first = _token()
+    second = SecretToken(provider="wandb", secret="wandb-second", connection_id="c-2")
+    with connections.bound_credentials({"huggingface": first, "wandb": second}):
+        assert connections.current_credential() is None
+        with pytest.raises(RuntimeError), connections.bound_credentials({}):
+            assert connections.current_credential("huggingface") is None
+            msg = "job failed"
+            raise RuntimeError(msg)
+        assert connections.current_credential("huggingface") is first
+        assert connections.current_credential("wandb") is second
+    assert connections.current_credential("wandb") is None
+
+
+def test_concurrent_multi_service_jobs_do_not_share_tokens(tmp_path: Path) -> None:
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+    seen: dict[str, tuple[object, object]] = {}
+
+    class Concurrent(_Plugin):
+        def run_job(self, ctx: JobContext) -> None:
+            if ctx.job_id == "holder":
+                entered.set()
+                release.wait(5)
+            seen[ctx.job_id] = (connections.current_credential("huggingface"), connections.current_credential("wandb"))
+
+    worker = _Worker(Concurrent(), "p", tmp_path / "state")
+    second = {"provider": "wandb", "connection_id": "c-2", "secret": "second"}
+    holder = worker.start_job("holder", {"_credentials": {"huggingface": _wire(), "wandb": second}})
+    try:
+        assert entered.wait(5)
+        other = worker.start_job("other", {"_credential": {**second, "secret": "other"}})
+        empty = worker.start_job("empty", {})
+        assert other.wait(5) and empty.wait(5)
+    finally:
+        release.set()
+    assert holder.wait(5)
+    assert seen["holder"] == (_token(), SecretToken.from_wire(second))
+    assert seen["other"] == (None, SecretToken.from_wire({**second, "secret": "other"}))
+    assert seen["empty"] == (None, None)
