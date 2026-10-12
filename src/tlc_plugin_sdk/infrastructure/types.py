@@ -600,7 +600,10 @@ class ConnectionCheckResponse:
 
     Attributes:
         identity: Who the Connection acts as (an ARN), or ``""`` when the provider did not ask.
-        checked: What succeeded, in order (``["resolve", "get_caller_identity"]``).
+        checked: The verification steps that succeeded, in order
+            (``["resolve", "get_caller_identity"]``). A step that fails raises instead of being
+            listed, so the host records a failed check with none; diagnostic samples, which may
+            fail without failing the check, go in ``checks``.
         checks: Optional diagnostic samples. A false result with level ``warn`` is inconclusive;
             ``error`` means refused. These do not change whether the Connection identity resolved.
     """

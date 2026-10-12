@@ -671,7 +671,7 @@ an explicit `None` in it is emitted as `null`, and `from_dict` leaves it empty.
 | `POST /infra/nodes` | `CreateNodeRequest`: `node_id`, `node_type`, `token`, `env`, `agent_port`, `ports`, `idle_ttl_s` (`0` or less = never turn off on idle; only a finite number is read — a missing or unreadable value, or `inf`, is 1800), `flavor`, `owner`, `pricing` (`""` = your configured default), `storage_id`, `compute_spec` (the agent's pip requirement: a pin or a range), `project_storage`, `workspace` (a `WorkspaceRequest`; empty for a GPU node) | `CreateNodeResponse`: `provider_id`, `agent_url` (a GPU node) or `services` (a workspace: `object_service_url`, `compute_service_url`), `hourly_rate`, `pricing`, `managed_by` (`"owner"` when the node lives in the requester's own account), `location` (where the node lives, in your words: a region, a zone, a site; the Hub shows it beside the type), `token`, `detail`. The SDK answers 201; the host accepts 200 and 201 |
 | `GET /infra/nodes/{id}` | `?diagnostics=true` for `node_diagnostics` | `NodeStateResponse`: `state` (`pending`, `running`, `exited`, `terminated`, `gone`, `unknown`), `detail`, and with diagnostics `bootstrap_history`, `bootstrap_detail`, `bootstrap_failed` (`None` when the console could not be read) |
 | `DELETE /infra/nodes/{id}` | — | `NodeStateResponse`; idempotent: a repeated delete answers `terminated` or `gone` |
-| `GET /infra/connection/check` | a Connection in `x-3lc-connection` (400 without one), optional `project_root_url` query | `ConnectionCheckResponse`: `identity` (who the Connection acts as, `""` when not asked), `checked[]`, optional `checks[]` (`PreflightCheck`). The default (`connection_check()`) answers `{"identity": "", "checked": ["resolve"]}`: reaching it means the binding resolved. Override to ask the provider who the credential is |
+| `GET /infra/connection/check` | a Connection in `x-3lc-connection` (400 without one), optional `project_root_url` query | `ConnectionCheckResponse`: `identity` (who the Connection acts as, `""` when not asked), `checked[]` (the verification steps that succeeded, in order; a step that fails raises instead of being listed), optional `checks[]` (`PreflightCheck` diagnostic samples, which may fail without failing the check). The default (`connection_check()`) answers `{"identity": "", "checked": ["resolve"]}`: reaching it means the binding resolved. Override to ask the provider who the credential is |
 
 For checks that depend on deployment storage, override
 `connection_check_with_context(request: ConnectionCheckRequest)`. The default delegates to the
@@ -839,7 +839,8 @@ host obtains all values for that job and sends a host-owned `_credentials` servi
 `_credential` for one token. The worker removes these before `ctx.params` exists. During
 `run_job`, use `ctx.get_credential(service)` or `connections.current_credential(service)` to
 read a `SecretToken` (`provider`, `connection_id`, `secret`; its repr masks the value).
-The legacy `ctx.credential` and no-argument `current_credential()` expose a singleton only.
+The legacy `ctx.credential` and no-argument `current_credential()` expose a singleton only:
+on a job with several tokens they are `None` and warn, so name the service.
 Never log, persist or emit secret values. The SDK does **not** set environment variables (see
 *Concurrency* below): hand each token to its library explicitly.
 
@@ -875,7 +876,9 @@ uses generic token wording. The harness validates that it is a string.
   Plugins read `ctx.credentials` (a read-only map), `ctx.get_credential("huggingface")`, or
   `connections.current_credential("huggingface")`. Each lookup returns `None` if that service was
   not supplied. `ctx.credential` and no-argument `current_credential()` remain available for a
-  singleton; both return `None` for a multi-service job, so there is no arbitrary default token.
+  singleton; both return `None` for a multi-service job, so there is no arbitrary default token,
+  and warn (a `UserWarning`) that the service must be named. A `_credential` from an older host
+  that names no service is that singleton only: it is never in `ctx.credentials`.
   Secrets are removed from `ctx.params` before the plugin runs and must never be saved in configs.
   Single-token jobs retain the legacy worker wire. Before sending a multi-token job, the host checks
   the worker's `job_credentials_by_service` health capability; older workers need an SDK update.
@@ -886,8 +889,9 @@ uses generic token wording. The harness validates that it is a string.
   your worker in the host-owned `x-tlc-bound-credential` header
   (`connections.BOUND_CREDENTIAL_HEADER`; the same `{connection_id, provider, secret}` object as a
   run body's `_credential`). The SDK's worker middleware binds it around your handler exactly as
-  around `run_job`: `connections.current_credential()` is the request's `SecretToken`, restored
-  when the handler returns. The host strips any copy a caller sent, and sends it on no other
+  around `run_job`: `connections.current_credential("huggingface")` is the request's
+  `SecretToken` (a route carries one token, so no-argument `current_credential()` finds it too),
+  restored when the handler returns. The host strips any copy a caller sent, and sends it on no other
   route.
 
 Environment variables per service, for a tool that reads only its variables:
@@ -895,19 +899,33 @@ Environment variables per service, for a tool that reads only its variables:
 `WANDB_API_KEY` (`connections.ENV_VAR_BY_PROVIDER`); `kaggle`'s value is the JSON object
 `{"username": "...", "key": "..."}` → `KAGGLE_USERNAME` + `KAGGLE_KEY`
 (`connections.ENV_VARS_FROM_JSON_BY_PROVIDER`; a value of another shape fails the job, and answers
-a route 424, before your code runs). A service not listed returns `{}`: read
-`current_credential().secret`. Pass them to a subprocess that works for this one job or request
+a route 424, before your code runs). A service not listed returns `{}`: read the token's
+`secret` yourself. Get the token by its service — `ctx.get_credential("huggingface")` in
+`run_job`, `connections.current_credential("huggingface")` anywhere in a job or a listed route —
+and check it for `None` (that service was not supplied). Pass the variables to a subprocess that
+works for this one job or request
 (`subprocess.run(cmd, env={**os.environ, **credential_environment(token)})`), never into
 `os.environ`.
 
-**Concurrency.** `current_credential()` is scoped to the job or request (a context variable), so
-concurrent requests and jobs each see their own token, in `async` and `def` handlers alike, and
-work with different Connections runs side by side in one worker. Nothing process-wide is set:
-`os.environ` is shared by every job and request in the worker — including those of other people
-on a shared host, and ones that name no Connection — so a token placed there would be used by any
-of them whose library reads its default environment. Pass `current_credential().secret` to your
-library explicitly (`hf_hub_download(..., token=...)`). A request whose route is not listed, or that names no Connection, has no credential
-bound: fall back to whatever the plugin did before Connections, or answer that a token is needed.
+**Concurrency.** `current_credential(service)` is scoped to the job or request (a context
+variable), and a `ctx` belongs to its one job, so concurrent requests and jobs each see their own
+tokens, in `async` and `def` handlers alike, and work with different Connections runs side by side in one
+worker. Nothing process-wide is set: `os.environ` is shared by every job and request in the
+worker — including those of other people on a shared host, and ones that name no Connection — so
+a token placed there would be used by any of them whose library reads its default environment.
+Pass the token's `secret` to your library explicitly:
+
+```python
+token = connections.current_credential("huggingface")  # or ctx.get_credential("huggingface") in run_job
+if token is not None:
+    hf_hub_download(..., token=token.secret)
+```
+
+Always name the service: on a job with tokens for two services, no-argument
+`current_credential()` is `None`, so `current_credential().secret` raises `AttributeError`. A
+request whose route is not listed, or that
+names no Connection, has no credential bound: fall back to whatever the plugin did before
+Connections, or answer that a token is needed.
 
 Test a route with a token through the harness by sending the header yourself:
 
@@ -1132,7 +1150,7 @@ class MyGpuPlugin(ComputePlugin):
 | `ctx.job_id` | Unique id for this job. |
 | `ctx.params` | Job parameters (parsed request body / query), without host-granted secrets. |
 | `ctx.credentials` / `ctx.get_credential(service)` | Read-only service-token map / optional lookup for this job. |
-| `ctx.credential` | Legacy singleton token, or `None` when there are zero or multiple tokens. |
+| `ctx.credential` | Legacy singleton token, or `None` when there are zero or multiple tokens (multiple also warns: use `ctx.get_credential(service)`). |
 | `ctx.cancelled` | `True` once cancel is requested — poll at checkpoints. |
 | `ctx.state_dir` | Writable per-plugin scratch dir (never write inside the package). |
 | `ctx.identity` | Who the job runs for: a `JobIdentity` with `user_id`, `org_id`, `project_id` (canonical id strings, or `None` when the host did not know). Read it for attribution; never set it. |

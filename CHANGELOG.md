@@ -70,6 +70,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropdown shows the Connection name to tell twin buckets apart, and a provider stays listed even
   when one of its Connections' listings errored.
 
+#### Connections
+- A run body whose `_credentials` is `null` carries no service tokens, as when the key is absent,
+  instead of being refused with 400.
+- A legacy `_credential` that names no service is the job's single credential only
+  (`ctx.credential`, no-argument `connections.current_credential()`), as on a credential route. It
+  is no longer keyed under `""` in `ctx.credentials`, and no service lookup finds it; sending one
+  beside a `_credentials` map is refused.
+- `ctx.credential` and no-argument `connections.current_credential()` warn (`UserWarning`) when
+  they are `None` because the job has tokens for several services, naming
+  `ctx.get_credential(service)` / `current_credential(service)` instead. The author guide's token
+  examples name the service, so a plugin with two declared services no longer fails on
+  `current_credential().secret`.
+- `ConnectionCheckResponse.checked` is documented consistently in the code and the guide: the
+  verification steps that succeeded, in order.
+
 ### Added
 
 - **`CreateNodeResponse.location`**: where a node lives, in the provider's words (a cloud region, a

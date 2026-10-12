@@ -70,6 +70,11 @@ async def _async() -> dict[str, Any]:
     return _seen()
 
 
+@get("/unkeyed")
+async def _unkeyed() -> dict[str, Any]:
+    return {**_seen(), "by_empty_service": connections.current_credential("") is not None}
+
+
 @get("/kaggle")
 async def _kaggle() -> dict[str, Any]:
     return {"username": os.environ.get("KAGGLE_USERNAME"), "key": os.environ.get("KAGGLE_KEY")}
@@ -80,7 +85,7 @@ class _Probe(HubPlugin):
         return ""
 
     def get_route_handlers(self) -> list[Any]:
-        return [_threaded, _async, _kaggle]
+        return [_threaded, _async, _unkeyed, _kaggle]
 
 
 @pytest.fixture
@@ -101,6 +106,12 @@ def test_a_bound_route_sees_its_token_for_the_request_only_and_never_in_the_env(
     assert connections.current_credential() is None
     after = harness.get(route).json()
     assert after == {"credential": None, "connection_id": None, "env": "hf_the_operators_own"}
+
+
+def test_a_token_naming_no_service_is_the_single_credential_on_a_route_as_on_a_job(harness: PluginHarness) -> None:
+    token = _token(provider="")
+    answer = harness.get("/unkeyed", headers=_header(token)).json()
+    assert answer["credential"] == repr(token) and answer["by_empty_service"] is False
 
 
 @pytest.mark.parametrize(

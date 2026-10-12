@@ -11,6 +11,7 @@ tokens run side by side, each with its own.
 from __future__ import annotations
 
 import os
+import warnings
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -163,7 +164,10 @@ def test_multiple_services_are_available_by_name_without_a_default_or_saved_secr
             seen["hf"] = ctx.get_credential("huggingface")
             seen["wandb"] = connections.current_credential("wandb")
             seen["missing"] = ctx.get_credential("missing")
-            seen["legacy"] = (ctx.credential, connections.current_credential())
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                seen["legacy"] = (ctx.credential, connections.current_credential())
+            seen["warnings"] = [(w.category, str(w.message), w.filename) for w in caught]
             seen["params"] = dict(ctx.params)
             with pytest.raises(TypeError):
                 ctx.credentials["wandb"] = _token()
@@ -181,13 +185,22 @@ def test_multiple_services_are_available_by_name_without_a_default_or_saved_secr
     assert seen["wandb"] == SecretToken.from_wire(second)
     assert seen["missing"] is None
     assert seen["legacy"] == (None, None)
+    # The legacy accessors say why they are None, pointing at the plugin's own line.
+    assert [(category, filename) for category, _message, filename in seen["warnings"]] == [
+        (UserWarning, __file__),
+        (UserWarning, __file__),
+    ]
+    assert "ctx.get_credential(service)" in seen["warnings"][0][1]
+    assert "current_credential(service)" in seen["warnings"][1][1]
+    assert "huggingface, wandb" in seen["warnings"][0][1]
+    assert "wandb-second" not in repr(seen["warnings"]) and SECRET not in repr(seen["warnings"])
     assert seen["params"] == {"table_url": "s3://b/t"}
     assert connections.current_credential("huggingface") is None
     assert connections.current_credential("wandb") is None
 
 
 @pytest.mark.parametrize(
-    "wire", [[], {"wandb": _wire()}, {"huggingface": {"provider": "huggingface", "secret": SECRET}}]
+    "wire", [[], "", {"wandb": _wire()}, {"huggingface": {"provider": "huggingface", "secret": SECRET}}]
 )
 def test_invalid_service_map_never_starts_a_job(tmp_path: Path, wire: Any) -> None:
     worker = _Worker(_Plugin(), "p", tmp_path / "state")
@@ -200,7 +213,8 @@ def test_nested_service_context_restores_all_tokens_after_an_exception() -> None
     first = _token()
     second = SecretToken(provider="wandb", secret="wandb-second", connection_id="c-2")
     with connections.bound_credentials({"huggingface": first, "wandb": second}):
-        assert connections.current_credential() is None
+        with pytest.warns(UserWarning, match=r"current_credential\(service\)"):
+            assert connections.current_credential() is None
         with pytest.raises(RuntimeError), connections.bound_credentials({}):
             assert connections.current_credential("huggingface") is None
             msg = "job failed"
@@ -237,3 +251,45 @@ def test_concurrent_multi_service_jobs_do_not_share_tokens(tmp_path: Path) -> No
     assert seen["holder"] == (_token(), SecretToken.from_wire(second))
     assert seen["other"] == (None, SecretToken.from_wire({**second, "secret": "other"}))
     assert seen["empty"] == (None, None)
+
+
+def test_a_null_service_map_is_the_same_as_an_absent_one(tmp_path: Path) -> None:
+    plugin, _events = _run(tmp_path, {"table_url": "s3://b/t", "_credentials": None, "_credential": _wire()})
+    assert plugin.seen["ctx"] == _token() and plugin.seen["current"] == _token()
+    plugin, _events = _run(tmp_path, {"_credentials": None})
+    assert plugin.seen == {"env": None, "current": None, "ctx": None, "in_params": False}
+
+
+def test_a_legacy_token_without_a_service_is_the_single_credential_but_never_keyed(tmp_path: Path) -> None:
+    """``_credential`` naming no provider: ``ctx.credential`` and ``current_credential()``, not ``credentials[""]``."""
+    seen: dict[str, Any] = {}
+
+    class Unkeyed(_Plugin):
+        def run_job(self, ctx: JobContext) -> None:
+            seen["map"] = dict(ctx.credentials)
+            seen["by_empty_service"] = (ctx.get_credential(""), connections.current_credential(""))
+            seen["single"] = (ctx.credential, connections.current_credential())
+
+    worker = _Worker(Unkeyed(), "p", tmp_path / "state")
+    job = worker.start_job("unkeyed", {"_credential": {"connection_id": "c-1", "secret": SECRET}})
+    assert job.wait(5)
+    assert list(job.events.queue)[-1]["event"] == "done"
+    expected = SecretToken(provider="", secret=SECRET, connection_id="c-1")
+    assert seen["map"] == {}
+    assert seen["by_empty_service"] == (None, None)
+    assert seen["single"] == (expected, expected)
+    assert connections.current_credential() is None
+
+
+def test_a_legacy_token_without_a_service_beside_a_service_map_never_starts_a_job(tmp_path: Path) -> None:
+    worker = _Worker(_Plugin(), "p", tmp_path / "state")
+    with pytest.raises(ValueError, match="without a service"):
+        worker.start_job("ambiguous", {"_credential": {"secret": SECRET}, "_credentials": {"huggingface": _wire()}})
+    assert worker.active_jobs() == 0
+
+
+def test_a_single_token_job_reads_its_credential_without_a_warning(tmp_path: Path) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        plugin, _events = _run(tmp_path, {"_credentials": {"huggingface": _wire()}})
+    assert plugin.seen["ctx"] == _token() and plugin.seen["current"] == _token()
