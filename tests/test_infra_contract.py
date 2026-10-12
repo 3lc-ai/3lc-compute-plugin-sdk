@@ -427,9 +427,35 @@ class TestDefaultRouteHandlers:
         plugin = ExtendedProvider()
         plugin.id = "extended"
         handlers = plugin.get_route_handlers()
-        assert len(handlers) == 7  # 6 infra + 1 custom
+        assert len(handlers) == 9  # 8 infra + 1 custom
         app = Litestar(route_handlers=handlers)
         with TestClient(app) as client:
             resp = client.get("/custom")
             assert resp.status_code == 200
             assert resp.json() == {"custom": "yes"}
+
+
+def test_node_access_requires_binding_and_only_post_applies():
+    from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+    from tlc_plugin_sdk.infrastructure import ConnectionNodeAccess
+
+    seen = []
+
+    class Setup(_StubProvider):
+        def connection_node_access(self, request, *, apply=False):
+            seen.append((request.project_root_url, apply))
+            return ConnectionNodeAccess(supported=True, ready=apply, action_label="Set up" if not apply else "")
+
+    header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+    with _checking_client(Setup()) as client:
+        assert client.post("/infra/connection/node-access", json={"project_root_url": "s3://b"}).status_code == 400
+        assert client.get("/infra/connection/node-access").status_code == 400
+        assert not seen
+        assert not client.get(
+            "/infra/connection/node-access", params={"project_root_url": "s3://b/a b"}, headers=header
+        ).json()["ready"]
+        assert client.post(
+            "/infra/connection/node-access", json={"project_root_url": "s3://b/a b"}, headers=header
+        ).json()["ready"]
+        assert client.post("/infra/connection/node-access", json={}, headers=header).status_code == 400
+    assert seen == [("s3://b/a b", False), ("s3://b/a b", True)]

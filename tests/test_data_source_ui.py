@@ -385,3 +385,33 @@ def test_single_explicit_host_root_keeps_machine_and_folder_label(tmp_path: Path
         target={"target": "local", "label": "host", "browse_roots": ["/data"]},
     )
     assert "host · /data" in out["panel"]
+
+
+_NO_STORAGE: dict[str, Any] = {"/api/infra/storage": {"storage": [], "providers": []}}
+_OPEN = (
+    "_tlcBindDataSource('f', 'https://compute.example', 'p');\n"
+    "_els['f-ds-browse-btn'].click(); await tick(); return els();"
+)
+
+
+@needs_node
+def test_a_host_that_offers_no_folders_names_the_setting_that_offers_them(tmp_path: Path) -> None:
+    target = {"target": "local", "label": "shared-host", "browse_roots": []}
+    out = _run(tmp_path, _OPEN, routes=_NO_STORAGE, target=target)
+    assert "No folders on shared-host are offered for browsing." in out["panel"]
+    assert "<code>TLC_DATA_SOURCE_ROOTS</code> on the compute host" in out["panel"]
+    assert "No folders or buckets are offered for this target" not in out["panel"]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"target": "local"},  # a host that predates browse_roots: it never said what it offers
+        {"target": "node", "node_id": "n9", "label": "gpu", "browse_roots": []},  # a node's roots are its own
+    ],
+)
+def test_an_older_host_or_a_node_keeps_the_general_empty_state(tmp_path: Path, target: dict[str, Any]) -> None:
+    out = _run(tmp_path, _OPEN, routes={**_NO_STORAGE, "/api/infra/status": {"nodes": []}}, target=target)
+    assert "No folders or buckets are offered for this target" in out["panel"]
+    assert "TLC_DATA_SOURCE_ROOTS" not in out["panel"]

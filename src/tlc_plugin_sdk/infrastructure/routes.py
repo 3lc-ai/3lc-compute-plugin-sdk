@@ -242,9 +242,14 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
         return answer(plugin, run)
 
     @http_get("/infra/preflight", sync_to_thread=True)
-    def _preflight(node_type: str = "", gpu_type: str = "", datacenter: str = "") -> dict[str, Any]:
+    def _preflight(
+        node_type: str = "", gpu_type: str = "", datacenter: str = "", project_root_url: str | None = None
+    ) -> dict[str, Any]:
         return answer(
-            plugin, lambda: plugin.preflight(node_type=node_type or gpu_type, datacenter=datacenter).to_dict()
+            plugin,
+            lambda: plugin.preflight_with_context(
+                ConnectionCheckRequest(project_root_url), node_type=node_type or gpu_type, datacenter=datacenter
+            ).to_dict(),
         )
 
     @http_post("/infra/nodes", status_code=201, sync_to_thread=True)
@@ -278,7 +283,31 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             plugin, lambda: plugin.connection_check_with_context(ConnectionCheckRequest(project_root_url)).to_dict()
         )
 
-    return [_capabilities, _preflight, _create_node, _node_state, _delete_node, _connection_check]
+    @http_get("/infra/connection/node-access", sync_to_thread=True)
+    def _node_access(project_root_url: str | None = None) -> dict[str, Any]:
+        if current_connection() is None:
+            raise HTTPException(status_code=400, detail="A host-authorized Connection is required")
+        return answer(plugin, lambda: plugin.connection_node_access(ConnectionCheckRequest(project_root_url)).to_dict())
+
+    @http_post("/infra/connection/node-access", status_code=200, sync_to_thread=True)
+    def _setup_node_access(data: dict[str, Any]) -> dict[str, Any]:
+        if current_connection() is None:
+            raise HTTPException(status_code=400, detail="A host-authorized Connection is required")
+        root = data.get("project_root_url")
+        if not isinstance(root, str):
+            raise HTTPException(status_code=400, detail="The host's project root is required")
+        return answer(plugin, lambda: plugin.connection_node_access(ConnectionCheckRequest(root), apply=True).to_dict())
+
+    return [
+        _capabilities,
+        _preflight,
+        _create_node,
+        _node_state,
+        _delete_node,
+        _connection_check,
+        _node_access,
+        _setup_node_access,
+    ]
 
 
 # ── Storage facet ──────────────────────────────────────────────────────────────

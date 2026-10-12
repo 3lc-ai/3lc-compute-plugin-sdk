@@ -64,7 +64,13 @@ from litestar import Request, Response, get, post
 from litestar.exceptions import HTTPException
 from litestar.response import Stream
 
-from tlc_plugin_sdk.connections import CREDENTIAL_KEY, CREDENTIALS_KEY, SecretToken, bound_credentials
+from tlc_plugin_sdk.connections import (
+    CREDENTIAL_KEY,
+    CREDENTIALS_KEY,
+    SecretToken,
+    bound_credential,
+    bound_credentials,
+)
 from tlc_plugin_sdk.job_context import IDENTITY_KEY, JobContext, JobFailed, JobIdentity
 
 if TYPE_CHECKING:
@@ -276,10 +282,10 @@ class _Job:
         # that persists its params must not persist who ran them, nor the token it was granted).
         identity = JobIdentity.from_wire(params.pop(IDENTITY_KEY, None))
         credential = SecretToken.from_wire(params.pop(CREDENTIAL_KEY, None))
-        has_credentials = CREDENTIALS_KEY in params
+        # ``null`` is the same as an absent key (no service tokens); anything else must be a map.
         raw_credentials = params.pop(CREDENTIALS_KEY, None)
         credentials: dict[str, SecretToken] = {}
-        if has_credentials:
+        if raw_credentials is not None:
             if not isinstance(raw_credentials, dict):
                 msg = "Job credentials must be a service map"
                 raise ValueError(msg)
@@ -351,7 +357,10 @@ class _Job:
         try:
             # The job's own thread, so current_credential() is this job's alone (the SDK sets no
             # environment variable: other jobs and requests in this worker must not see it).
-            with _alias_overrides(self.ctx), bound_credentials(self.ctx.credentials):
+            # A legacy token that names no service is the job's single credential only: it is
+            # bound for no-argument ``current_credential()`` and never keyed in the service map.
+            unkeyed = None if self.ctx.credentials else self.ctx.credential
+            with _alias_overrides(self.ctx), bound_credentials(self.ctx.credentials), bound_credential(unkeyed):
                 self._plugin.run_job(self.ctx)
             status = "cancelled" if self.ctx.cancelled else "completed"
             terminal: dict[str, Any] = {"event": "done", "status": status, "job_id": self.job_id}

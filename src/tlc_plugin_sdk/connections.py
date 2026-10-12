@@ -55,6 +55,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import json
+import warnings
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -385,12 +386,29 @@ def current_connection() -> ConnectionBinding | None:
 def current_credential(service: str | None = None) -> ResolvedCredential | None:
     """Return a service's token, or the legacy single credential when no service is given.
 
-    A multi-service job has no default credential: pass the service explicitly. Infrastructure
-    request credentials retain their existing behavior when called without a service.
+    A multi-service job has no default credential: pass the service explicitly. Without one there,
+    this returns ``None`` and warns (a ``UserWarning``). Infrastructure request credentials retain
+    their existing behavior when called without a service.
+
+    Args:
+        service: The service slug (``huggingface``), or ``None`` for the legacy single credential.
+
+    Returns:
+        The token for ``service``; without ``service``, the request's or job's only credential.
+        ``None`` when there is none.
     """
     current = _CREDENTIAL.get()
     if service is None:
+        services = _CREDENTIALS.get()
+        if current is None and len(services) > 1:
+            warnings.warn(
+                f"current_credential() is None: this job has tokens for {len(services)} services "
+                f"({', '.join(sorted(services))}). Use current_credential(service).",
+                stacklevel=2,
+            )
         return current
+    if not service:
+        return None  # a token that names no service is only ever the single credential
     if isinstance(current, SecretToken) and current.provider == service:
         return current
     return _CREDENTIALS.get().get(service)

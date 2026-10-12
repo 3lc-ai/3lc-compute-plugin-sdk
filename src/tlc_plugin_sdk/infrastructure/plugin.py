@@ -35,6 +35,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     CapabilitiesResponse,
     ConnectionCheckRequest,
     ConnectionCheckResponse,
+    ConnectionNodeAccess,
     CreateNodeRequest,
     CreateNodeResponse,
     NodeStateResponse,
@@ -128,6 +129,12 @@ class InfrastructurePlugin(HubPlugin):
         """
         return PreflightResponse(ok=True, summary="no preflight checks")
 
+    def preflight_with_context(
+        self, request: ConnectionCheckRequest, *, node_type: str = "", datacenter: str = ""
+    ) -> PreflightResponse:
+        """Preflight with the host's project root; older providers keep their existing hook."""
+        return self.preflight(node_type=node_type, datacenter=datacenter)
+
     def connection_check(self) -> ConnectionCheckResponse:
         """Who the request's Connection acts as (``GET /infra/connection/check``).
 
@@ -146,6 +153,15 @@ class InfrastructurePlugin(HubPlugin):
         Do not fall back to worker-local configuration when a target is unavailable.
         """
         return self.connection_check()
+
+    def connection_node_access(self, request: ConnectionCheckRequest, *, apply: bool = False) -> ConnectionNodeAccess:
+        """Inspect or explicitly configure node access for the request's Connection.
+
+        The host authorizes Connection administration before applying setup, supplies its own
+        project root, and never accepts a caller's cloud policy. Inspection must not mutate cloud
+        resources. Providers opt in with ``connection_node_access`` in capabilities.
+        """
+        return ConnectionNodeAccess()
 
     def node_diagnostics(self, provider_id: str) -> NodeStateResponse:
         """The node's state with startup diagnostics (``GET /infra/nodes/{id}?diagnostics=true``).
