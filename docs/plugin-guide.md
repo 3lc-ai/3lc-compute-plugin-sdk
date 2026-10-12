@@ -1342,10 +1342,16 @@ data *for this run*, not where it lives:
 - **Persist durable locations from your own field.** A plugin that registers an alias keeps the
   lasting location in its own form field (the shared alias card's `alias_folder`), never the
   rewritten input. Read the data from the input; persist the alias from `alias_folder`.
-- **Register the alias before writing rows.** Call
-  `register_alias(project, image_folder=<the folder you read>, remote_path=<alias_folder, when it
-  differs>, root_url=ctx.project_root_url)` before the table writer runs: rows written first keep
-  absolute paths, and an absolute path from a node is useless everywhere else.
+- **Register the alias before writing rows.** For a table written from a folder the person
+  picked, call `register_run_alias(ctx.params, <the folder you read>, project_name=…,
+  root_url=ctx.project_root_url)` before the table writer runs: rows written first keep absolute
+  paths, and an absolute path from a node is useless everywhere else. It reads the alias card's
+  values (including `alias_source_folder`, the folder as picked, which the host never rewrites)
+  and applies one rule (`register_source_alias`): the saved alias points at `alias_folder`; when
+  that is a folder above the picked one, the rows keep the subfolders between them
+  (`<TOKEN>/sub/a.jpg`), also when the run reads a copy that kept the layout; a copy that did not
+  is refused before any row. A plugin that writes rows into a folder it chose itself (no picked
+  source) can keep calling `register_alias` directly.
 - **A folder on the compute host cannot run on a node.** The host refuses such a run with a sentence
   saying to put the data in a bucket (or name where it is on the node); it does not copy a host
   folder to a node. Tables whose aliases point at host folders keep their own

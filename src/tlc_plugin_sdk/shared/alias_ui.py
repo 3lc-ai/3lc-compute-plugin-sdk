@@ -208,6 +208,10 @@ ALIAS_UI_JS = RUN_TARGET_JS + (
     '    alias_enabled: true,\n'
     "    alias_token: String((document.getElementById(idPrefix + '-alias-token') || {}).value || '').trim(),\n"
     "    alias_folder: String((document.getElementById(idPrefix + '-alias-folder') || {}).value || '').trim(),\n"
+    '    // The folder the bound source field held: the host never rewrites this key, so a run reading a\n'
+    '    // copy still knows where the data was picked (see register_run_alias).\n'
+    "    alias_source_folder: String(((document.getElementById(idPrefix + '-alias-folder') || {}).dataset || {})"
+    ".sourceValue || '').trim(),\n"
     '    // Compatibility with older fragments: no permanent-copy request is emitted.\n'
     '    alias_copy_to_root: false,\n'
     "    alias_copy_target: '',\n"
