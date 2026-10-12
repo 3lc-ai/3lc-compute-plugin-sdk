@@ -53,9 +53,10 @@ The locations follow the run target, the Hub's "Run on:" choice
 (``PLUGIN_API.getRunTarget()``, re-read on ``onRunTargetChange``):
 
 - **Every target.** Explicit ``browse_roots`` offers one location per operator-selected folder,
-  labelled by machine and folder. Empty roots offer buckets only. Node folders are browsed through
-  the host; Upload is unavailable for node targets. Older bridges without root metadata retain
-  their previous disk-location behavior.
+  labelled by machine and folder. Empty roots offer buckets only; a compute host with empty roots
+  and no bucket says its operator offers folders with ``TLC_DATA_SOURCE_ROOTS``. Node folders are
+  browsed through the host; Upload is unavailable for node targets. Older bridges without root
+  metadata retain their previous disk-location behavior.
 
 A value the run target cannot reach — a folder picked on this computer and then a node chosen, a
 typed path the node does not have, a bucket the node's probe says it cannot read — gets a note
@@ -436,6 +437,15 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    return lastSlash > 0 ? value.substring(0, lastSlash) : value;\n"
     "  }\n"
     "  function _nowhereNote() {\n"
+    "    // A compute host that reports browse_roots: [] offers no folders by its operator's configuration; say\n"
+    "    // where that is set. An older host (no browse_roots) and a node keep the general wording.\n"
+    "    var t = _tlcRunTarget();\n"
+    "    if (t && t.target !== 'node' && Array.isArray(t.browse_roots) && !t.browse_roots.length) {\n"
+    "      return '<div class=\"tlc-ds-empty\">No folders on ' + _esc(_hostLabel(t)) + ' are offered for browsing.'\n"
+    "        + ' The operator chooses them with <code>TLC_DATA_SOURCE_ROOTS</code> on the compute host (for example'\n"
+    "        + ' <code>~</code>, or absolute folders separated by <code>:</code>, <code>;</code> on Windows) and'\n"
+    "        + ' restarts it. Choose a configured storage location or type a path or URL.</div>';\n"
+    "    }\n"
     "    return '<div class=\"tlc-ds-empty\">No folders or buckets are offered for this target. Choose a configured'\n"
     "      + ' storage location or type a path or URL.</div>';\n"
     "  }\n"

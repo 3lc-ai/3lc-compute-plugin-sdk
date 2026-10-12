@@ -1886,5 +1886,6 @@ source/cloud project mismatch beside the mapping and follows changes to the sele
 project cannot default to a machine-local source. It raises `JobFailed` for that combination; call
 it before constructing a table writer. Omitted roots use `tlc.config.project_root_url`, matching the
 writer. Validate the durable source, never a temporary stage: `image_folder` may be local when
-`remote_path` names the lasting cloud source. Copy existing data in Storage first, then select the
-new source; import does not relocate it.
+`remote_path` names the lasting cloud source. Import does not relocate data: for local data and a
+cloud project, choose a local project location, or upload the folder to the bucket first (for
+example with `aws s3 sync`) and select the cloud source.

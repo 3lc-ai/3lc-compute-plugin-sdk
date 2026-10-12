@@ -70,7 +70,8 @@ ALIAS_UI_JS = RUN_TARGET_JS + (
     '  html += \'<div id="\' + idPrefix + \'-alias-location-error" role="alert" style="display:none;margin-top:8px'
     ';color:var(--danger,#dc3545)"></div>\';\n'
     '  html += \'<div class="form-help">Files stay at their source. Other machines need access to that location.'
-    " To relocate data, use Storage before selecting it here.</div>';\n"
+    " To relocate data, copy it there first (Storage copies between buckets; upload a local folder with a tool"
+    " such as aws s3 sync), then select it here.</div>';\n"
     "  html += '</div>';\n"
     '  return html;\n'
     '}\n'
@@ -127,8 +128,9 @@ ALIAS_UI_JS = RUN_TARGET_JS + (
     "  var box = document.getElementById(idPrefix + '-alias-folder');\n"
     "  var root = _tlcSelectedProjectRoot(idPrefix) || (box && box.dataset.projectRoot) || '';\n"
     "  return folder && root && _tlcStorageOf(folder) === 'local' && _tlcStorageOf(root) !== 'local'\n"
-    "    ? 'This project is in cloud storage, but its alias would point to a local disk. Select a cloud source "
-    "or a local project location. To relocate data, copy it in Storage first.' : '';\n"
+    "    ? 'This project is in cloud storage, but its alias would point to a local disk. Choose a local project "
+    "location, or upload the folder to the bucket first (for example with aws s3 sync) and select the cloud "
+    "source.' : '';\n"
     '}\n'
     '\n'
     'function _tlcAliasMapping(idPrefix) {\n'

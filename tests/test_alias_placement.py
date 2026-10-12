@@ -385,6 +385,12 @@ process.stdout.write(JSON.stringify({local,named,remote:_tlcRootLabel('/srv/proj
     }
 
 
+_LOCAL_ALIAS_IN_CLOUD_PROJECT = (
+    "This project is in cloud storage, but its alias would point to a local disk. Choose a local project location, "
+    "or upload the folder to the bucket first (for example with aws s3 sync) and select the cloud source."
+)
+
+
 @pytest.mark.parametrize("source", ["/data/images", "~/images", "C:\\data", "file:///data/images"])
 @pytest.mark.parametrize("explicit", [True, False])
 def test_cloud_alias_refusal_precedes_all_registration(monkeypatch, source, explicit):
@@ -395,8 +401,11 @@ def test_cloud_alias_refusal_precedes_all_registration(monkeypatch, source, expl
     tlc.config.project_root_url = "s3://bucket/projects"
     calls = []
     monkeypatch.setattr(tlc.url, "get_registered_url_aliases", lambda: calls.append("read"))
-    with pytest.raises(JobFailed, match="alias would point to a local disk"):
+    with pytest.raises(JobFailed) as refused:
         aliases.register_alias("Fire", source, "FIRE", root_url="s3://bucket/projects" if explicit else None)
+    # Says what works (Storage cannot upload a machine's folder to a bucket), naming no plugin.
+    assert str(refused.value) == _LOCAL_ALIAS_IN_CLOUD_PROJECT
+    assert "Storage" not in str(refused.value)
     assert not calls
 
 
@@ -436,7 +445,7 @@ _els.folder.value = '/data/local'; _els.folder.dispatchEvent(new Event('change')
 process.stdout.write(JSON.stringify({blocked,cloud,custom,reset,local:_tlcAliasLocationError('p')}));
 """,
     )
-    assert "local disk" in result["blocked"]
+    assert result["blocked"] == _LOCAL_ALIAS_IN_CLOUD_PROJECT  # the card and the job refuse in the same words
     assert result["cloud"]["error"] == result["local"] == ""
     assert result["cloud"]["values"]["alias_token"] == "NEW_IMAGES"
     assert result["custom"] == "CUSTOM"

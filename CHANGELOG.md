@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Data movement
 
+- **The data-source picker says how a compute host offers folders.** When the run target is a
+  compute host that reports no browse folders (`browse_roots: []`) and no bucket is listed, the
+  empty panel names `TLC_DATA_SOURCE_ROOTS`, set on the compute host (for example `~`, or absolute
+  folders separated by `os.pathsep`). An older host, which does not report `browse_roots`, and a
+  node target keep the general wording.
+- **A local source in a cloud project is refused with what works.** `register_alias` and the shared
+  alias card no longer send the person to Storage, which cannot upload a machine's folder to a
+  bucket: choose a local project location, or upload the folder to the bucket first (for example
+  with `aws s3 sync`) and select the cloud source. The card's help line says the same.
+
 - Model checkpoints upload to cloud run folders through the supported URL write API, avoiding a failed upload and node-local fallback.
 
 - **Reviewed project destinations stay consistent.** Run plans report their resolved root; preparation and submission refuse a changed destination and ask for a fresh review. Accepted jobs keep the stamped root through execution.

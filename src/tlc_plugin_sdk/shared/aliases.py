@@ -202,8 +202,8 @@ def validate_alias_location(source: str, root_url: str | None = None) -> None:
     if cloud_root and source.strip() and local_source:
         msg = (
             "This project is in cloud storage, but its alias would point to a local disk. "
-            "Select a cloud source or a local project location. "
-            "To relocate data, copy it in Storage first."
+            "Choose a local project location, or upload the folder to the bucket first "
+            "(for example with aws s3 sync) and select the cloud source."
         )
         raise JobFailed(msg)
 
