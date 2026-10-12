@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias card no longer send the person to Storage, which cannot upload a machine's folder to a
   bucket: choose a local project location, or upload the folder to the bucket first (for example
   with `aws s3 sync`) and select the cloud source. The card's help line says the same.
+- **One alias rule for tables written from a picked folder: `register_source_alias` /
+  `register_run_alias`.** With the alias card's source root on a folder above the picked one, the
+  rows keep the subfolders between them (`<TOKEN>/sub/a.jpg`) and the saved alias points at the
+  source root, whether the run reads the data in place or from a copy that kept the layout; a copy
+  that did not is refused before any row is written. The card now sends `alias_source_folder`
+  (the folder its source field held), which the host never rewrites. `register_alias` is unchanged.
 
 - Model checkpoints upload to cloud run folders through the supported URL write API, avoiding a failed upload and node-local fallback.
 

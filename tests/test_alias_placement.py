@@ -334,6 +334,9 @@ process.stdout.write(JSON.stringify({initial,picked,detected,replaced,manual}));
 """,
     )
     assert result["initial"]["alias_folder"] == "/data/fire"
+    assert result["initial"]["alias_source_folder"] == "/data/fire"
+    # A source root above the picked folder: the card still reports the folder picked.
+    assert result["manual"]["alias_source_folder"] == "/new/other"
     assert result["picked"]["values"]["alias_folder"] == "/data/selected"
     assert result["picked"]["mapping"] == "<SELECTED> → /data/selected"
     assert result["detected"]["alias_folder"] == "/data"
