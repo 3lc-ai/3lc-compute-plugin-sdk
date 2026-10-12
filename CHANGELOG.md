@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 #### Connections
+
+- Providers can expose read-only node-access inspection and explicit setup through `ConnectionNodeAccess` and `connection_node_access`. Host-context preflight preserves older provider overrides.
 - Connection diagnostics accept host project-root context through `ConnectionCheckRequest` and
   `connection_check_with_context`; existing `connection_check()` overrides remain supported.
 - Connection verification may return per-operation diagnostic checks using the preflight check shape.

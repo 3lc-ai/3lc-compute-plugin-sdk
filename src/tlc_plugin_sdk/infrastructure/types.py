@@ -36,6 +36,7 @@ __all__ = [
     "CapabilitiesResponse",
     "ConnectionCheckRequest",
     "ConnectionCheckResponse",
+    "ConnectionNodeAccess",
     "CpuCatalog",
     "CreateNodeRequest",
     "CreateNodeResponse",
@@ -575,6 +576,46 @@ class PreflightResponse:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the JSON body the host passes through."""
         return {"ok": self.ok, "checks": [c.to_dict() for c in self.checks], "summary": self.summary}
+
+
+@dataclass
+class ConnectionNodeAccess:
+    """Provider-owned node-access setup, rendered generically by the Hub.
+
+    ``ready`` confirms configuration only, not live storage access. ``action_label`` is empty
+    when no setup action is available. GET inspects; POST explicitly applies the displayed setup.
+    """
+
+    supported: bool = False
+    ready: bool = False
+    title: str = "Node storage access"
+    detail: str = ""
+    action_label: str = ""
+    checks: list[PreflightCheck] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ConnectionNodeAccess:
+        """Parse a provider response, including older providers' absent fields."""
+        checks = data.get("checks")
+        return cls(
+            supported=_bool(data.get("supported")),
+            ready=_bool(data.get("ready")),
+            title=_str(data.get("title")) or "Node storage access",
+            detail=_str(data.get("detail")),
+            action_label=_str(data.get("action_label")),
+            checks=[PreflightCheck.from_dict(c) for c in checks] if isinstance(checks, list) else [],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the generic setup result."""
+        return {
+            "supported": self.supported,
+            "ready": self.ready,
+            "title": self.title,
+            "detail": self.detail,
+            "action_label": self.action_label,
+            "checks": [c.to_dict() for c in self.checks],
+        }
 
 
 @dataclass

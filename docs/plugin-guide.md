@@ -672,6 +672,9 @@ an explicit `None` in it is emitted as `null`, and `from_dict` leaves it empty.
 | `GET /infra/nodes/{id}` | `?diagnostics=true` for `node_diagnostics` | `NodeStateResponse`: `state` (`pending`, `running`, `exited`, `terminated`, `gone`, `unknown`), `detail`, and with diagnostics `bootstrap_history`, `bootstrap_detail`, `bootstrap_failed` (`None` when the console could not be read) |
 | `DELETE /infra/nodes/{id}` | — | `NodeStateResponse`; idempotent: a repeated delete answers `terminated` or `gone` |
 | `GET /infra/connection/check` | a Connection in `x-3lc-connection` (400 without one), optional `project_root_url` query | `ConnectionCheckResponse`: `identity` (who the Connection acts as, `""` when not asked), `checked[]` (the verification steps that succeeded, in order; a step that fails raises instead of being listed), optional `checks[]` (`PreflightCheck` diagnostic samples, which may fail without failing the check). The default (`connection_check()`) answers `{"identity": "", "checked": ["resolve"]}`: reaching it means the binding resolved. Override to ask the provider who the credential is |
+| `GET /infra/connection/node-access` | a host-authorized Connection, `project_root_url` query | `ConnectionNodeAccess`: `supported`, `ready`, `title`, `detail`, `action_label`, `checks[]` |
+| `POST /infra/connection/node-access` | a host-authorized Connection, `{project_root_url}` | Explicitly apply the advertised node-access setup; same response shape |
+
 
 For checks that depend on deployment storage, override
 `connection_check_with_context(request: ConnectionCheckRequest)`. The default delegates to the
@@ -1889,3 +1892,23 @@ writer. Validate the durable source, never a temporary stage: `image_folder` may
 `remote_path` names the lasting cloud source. Import does not relocate data: for local data and a
 cloud project, choose a local project location, or upload the folder to the bucket first (for
 example with `aws s3 sync`) and select the cloud source.
+
+### Node-access setup
+
+Providers opt in with `connection_node_access: true` in capabilities and implement
+`connection_node_access(request: ConnectionCheckRequest, *, apply: bool = False)`.
+Return provider-owned plain-language instructions and an `action_label` only when an action is
+available. Inspection (GET, verification and preflight) must never create or change cloud resources.
+The default hook returns `supported: false`. `ready` confirms configuration, not a live data test.
+Keep operations repeatable and refuse to overwrite resources belonging to another setup.
+
+The host supplies its effective project root and authorizes Connection administration before setup.
+The host's public setup surface checks that the project location matches the review the person saw.
+A browser cannot choose arbitrary policies or substitute storage scope. The plugin routes require a
+host-owned Connection header; generic browser proxying must strip caller-supplied authority headers.
+Setup is a reserved generic infrastructure operation, not a plugin-private route for the frontend to call.
+
+`preflight_with_context(request: ConnectionCheckRequest, *, node_type, datacenter)` receives the
+same host project-root context. Its default delegates to `preflight`, preserving existing providers.
+Use it to inspect the identity that the actual node launch will attach. A live node's data access
+still needs to be checked separately.
