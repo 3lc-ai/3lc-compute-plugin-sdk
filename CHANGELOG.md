@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connections.current_credential(service)`, preserving the legacy singleton API and isolating
   credentials by job. Worker health advertises support for the multi-token wire contract.
 
+#### Plugin pages
+
+- **`PLUGIN_API.showResult(target, result, options?)` draws the Hub's result box.** It takes the
+  `{success, message, details}` dict a run returns and draws the message, optional `extra` HTML and
+  the details, with a close button (✕) that removes the box. Declared optional (`PluginResult`,
+  `PluginResultOptions`): older frontends do not have it, so feature-detect.
+
 ### Changed
 
 #### Data movement
