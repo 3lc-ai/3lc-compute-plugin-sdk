@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `WorkspaceRequest` carries a workspace's Config Service identity for a provider that launches it
+  through a Connection: `workspace_id`, `config_service_url` and the single-use `bootstrap_token`
+  the machine redeems for its two service keys, plus `region` and `vpc_id` for where the stack goes.
+  The token is scrubbed from the SDK's error answers like the node token. A host that predates the
+  fields sends none; a provider that predates them ignores them.
+
+### Added
+
 #### Connections
 
 - Providers can expose read-only node-access inspection and explicit setup through `ConnectionNodeAccess` and `connection_node_access`. Host-context preflight preserves older provider overrides.

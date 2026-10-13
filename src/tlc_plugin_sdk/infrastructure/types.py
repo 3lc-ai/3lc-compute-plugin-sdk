@@ -267,7 +267,17 @@ class ProjectStorage:
 class WorkspaceRequest:
     """The ``workspace`` object of a create body for a ``flavor == "workspace"`` node.
 
-    The transient ``credentials`` and ``provider_configs`` a demo request carries are not fields:
+    A workspace created through a Connection carries its Config Service identity: ``workspace_id``
+    (the record the machine becomes), ``config_service_url`` (where it redeems) and
+    ``bootstrap_token``, the single-use token the machine redeems at
+    ``POST {config_service_url}/v1/workspaces/{workspace_id}/bootstrap`` for its two service keys.
+    The token is the one secret of the launch: a provider puts it in the machine's startup data
+    and keeps nothing (it is scrubbed from the SDK's error answers); a host sends it on the one
+    create call and never persists it. ``region`` and ``vpc_id`` say where the stack goes; empty
+    leaves the provider's default. A workspace created the legacy way, with its owner's keys,
+    carries none of these.
+
+    The transient ``credentials`` and ``provider_configs`` a legacy request carries are not fields:
     the SDK strips them from the body and exposes them through
     :mod:`tlc_plugin_sdk.infrastructure.legacy` to a plugin with the legacy facet.
     """
@@ -280,6 +290,11 @@ class WorkspaceRequest:
     data_buckets: list[str] = field(default_factory=list)
     create_bucket: bool = False
     seed_provider_configs: bool = False
+    workspace_id: str = ""
+    config_service_url: str = ""
+    bootstrap_token: str = field(default="", repr=False)
+    region: str = ""
+    vpc_id: str = ""
 
     @classmethod
     def from_dict(cls, data: Any) -> WorkspaceRequest:
@@ -294,6 +309,11 @@ class WorkspaceRequest:
             data_buckets=_str_list(d.get("data_buckets")),
             create_bucket=_bool(d.get("create_bucket")),
             seed_provider_configs=_bool(d.get("seed_provider_configs")),
+            workspace_id=_stripped(d.get("workspace_id")),
+            config_service_url=_stripped(d.get("config_service_url")),
+            bootstrap_token=_stripped(d.get("bootstrap_token")),
+            region=_stripped(d.get("region")),
+            vpc_id=_stripped(d.get("vpc_id")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -307,6 +327,11 @@ class WorkspaceRequest:
             "data_buckets": list(self.data_buckets),
             "create_bucket": self.create_bucket,
             "seed_provider_configs": self.seed_provider_configs,
+            "workspace_id": self.workspace_id,
+            "config_service_url": self.config_service_url,
+            "bootstrap_token": self.bootstrap_token,
+            "region": self.region,
+            "vpc_id": self.vpc_id,
         }
 
 

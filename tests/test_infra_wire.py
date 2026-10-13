@@ -73,6 +73,11 @@ ROUND_TRIPS: list[tuple[Any, set[str]]] = [
             "data_buckets",
             "create_bucket",
             "seed_provider_configs",
+            "workspace_id",
+            "config_service_url",
+            "bootstrap_token",
+            "region",
+            "vpc_id",
         },
     ),
     (
