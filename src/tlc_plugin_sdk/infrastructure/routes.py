@@ -263,7 +263,11 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             with request_credentials(credentials, provider_configs, owner=req.owner):
                 return plugin.create_node(req).to_dict()
 
-        return answer(plugin, run, secrets=_CredentialSecrets(plugin, credentials, req.token))
+        # The node token and a workspace's bootstrap token are the request's own secrets: a
+        # provider's error that quotes its request must not put either in the host's ledger.
+        return answer(
+            plugin, run, secrets=_CredentialSecrets(plugin, credentials, req.token, req.workspace.bootstrap_token)
+        )
 
     @http_get("/infra/nodes/{provider_id:str}", sync_to_thread=True)
     def _node_state(provider_id: str, diagnostics: bool = False) -> dict[str, Any]:
