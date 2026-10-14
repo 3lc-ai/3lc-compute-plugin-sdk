@@ -19,6 +19,11 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# The staged core resolves from the private `staging` index; uv applies these to it by name.
+env:
+  UV_INDEX_STAGING_USERNAME: ${{ secrets.CLOUDREPO_READ_USERNAME || secrets.CLOUDREPO_USERNAME }}
+  UV_INDEX_STAGING_PASSWORD: ${{ secrets.CLOUDREPO_READ_PASSWORD || secrets.CLOUDREPO_PASSWORD }}
+
 jobs:
   build-deploy:
     name: build & deploy

@@ -6,12 +6,9 @@ Three concerns:
 
 1. **Registration** — when creating a new table, register a persistent project
    alias so image paths use a portable ``<TOKEN>`` prefix.
-2. **Placement** — when the table lands on other storage than the data (a project
-   root on a bucket, images on a laptop), copy the data next to the table first
-   (:func:`copy_folder_to_url`) and register the alias against the copy, so every
-   reader of the table — GPU nodes, the Dashboard, this machine — resolves
-   ``<TOKEN>`` to one place. The copy goes through ``tlc.Url``: whatever can write
-   the table can write the data, with the same credentials.
+2. **Placement** — a cloud project must not default to a machine-local source.
+   Deliberate permanent transfers belong in Storage, before choosing the import source.
+   The copy utility remains available to legacy callers; registration never copies data.
 3. **Override** — when consuming an existing table, temporarily override an
    alias so ``<TOKEN>`` resolves to a fast local path (e.g. SSD) instead of
    the default (e.g. S3).  Overrides are session-scoped and never persisted.
@@ -19,6 +16,7 @@ Three concerns:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -101,8 +99,11 @@ def copy_folder_to_url(
         url.write_bytes(path.read_bytes())
         return size, False
 
+    # Each upload runs in a copy of the caller's context, so a job's or request's Connection
+    # (``connections.current_credential()``) holds in the pool threads as it does here.
+    context = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for path, fut in [(p, pool.submit(put, p)) for p in files]:
+        for path, fut in [(p, pool.submit(context.copy().run, put, p)) for p in files]:
             try:
                 size, was_skipped = fut.result()
             except Exception as exc:  # surfaced once, below
@@ -185,6 +186,28 @@ def relative_alias_value(root_url: str | None, project_name: str, target: str) -
     return "../" * _TABLE_DEPTH_BELOW_PROJECT + inside[len(project_dir) + 1 :]
 
 
+def validate_alias_location(source: str, root_url: str | None = None) -> None:
+    """Refuse a machine-local default alias in a cloud project before any writes.
+
+    Validate the durable source, not a temporary execution path. When no root is
+    supplied, use the same configured default as the table writer.
+    """
+    import tlc
+
+    from tlc_plugin_sdk.job_context import JobFailed
+
+    root = root_url or str(tlc.config.project_root_url)
+    cloud_root = is_remote_url(root) and not root.strip().lower().startswith("file://")
+    local_source = not is_remote_url(source) or source.strip().lower().startswith("file://")
+    if cloud_root and source.strip() and local_source:
+        msg = (
+            "This project is in cloud storage, but its alias would point to a local disk. "
+            "Choose a local project location, or upload the folder to the bucket first "
+            "(for example with aws s3 sync) and select the cloud source."
+        )
+        raise JobFailed(msg)
+
+
 def register_alias(
     project_name: str,
     image_folder: str,
@@ -201,7 +224,7 @@ def register_alias(
             being written point today, so the SDK can fold it into ``<TOKEN>``.
         alias_token: Override token name.  If *None*, one is derived from
             *project_name* via :func:`default_alias_token`.
-        remote_path: Where the data was copied (see :func:`copy_folder_to_url`).
+        remote_path: Durable source location when the execution path differs.
             When given, the *persisted* project alias points here — every reader
             of the project resolves ``<TOKEN>`` to the copy — while this session
             keeps resolving to *image_folder* until the job ends, so paths encode
@@ -211,7 +234,10 @@ def register_alias(
 
     Returns:
         Dict with ``token`` and ``path`` that were registered (plus
-        ``remote_path`` when one was used), or ``error`` on failure.
+        ``remote_path`` when one was used), or ``error`` on registration failure.
+
+    Raises:
+        JobFailed: A cloud project would save a machine-local alias.
 
     """
     import tlc
@@ -222,6 +248,7 @@ def register_alias(
     path = os.path.expanduser(image_folder.strip())
     copied = bool(remote_path and remote_path.strip())
     persisted = remote_path.strip().rstrip("/") if copied and remote_path else path
+    validate_alias_location(persisted, root_url)
     # Data inside the project is aliased relative to the table — see relative_alias_value for why an
     # absolute alias to that folder is silently dropped when the table is written.
     relative = relative_alias_value(root_url, project_name, persisted)
@@ -259,6 +286,144 @@ def register_alias(
     except Exception:
         logger.exception("Failed to register alias <%s> → %s", token, persisted)
         return {"error": f"Failed to register alias <{token}> → {persisted}"}
+
+
+def _folder(value: str | None) -> str:
+    """A folder as compared and registered: trimmed, ``~`` expanded, no trailing slash."""
+    text = os.path.expanduser(str(value or "").strip())
+    return text.rstrip("/") or text
+
+
+def _is_under(path: str, folder: str) -> bool:
+    """True when *path* is *folder* or inside it (local paths and URLs alike)."""
+    return path == folder or path.startswith(folder + "/")
+
+
+def _session_alias_folder(read_folder: str, source_folder: str, alias_folder: str, token: str) -> str:
+    """Where the session alias points so rows read from *read_folder* resolve under *alias_folder*.
+
+    A row read from ``<read_folder>/b.jpg`` is written as ``<TOKEN>/<rel>/b.jpg``, *rel* being where
+    the picked folder sits below the alias folder, and the persisted alias resolves that to
+    ``<alias_folder>/<rel>/b.jpg``. That needs a session folder S with ``S/<rel> == read_folder``:
+    the read folder itself when the alias is the picked folder, else the read folder minus *rel*
+    (which, for data read where it was picked, is the alias folder itself).
+
+    Raises:
+        JobFailed: The read folder does not end in *rel*: a copy that did not keep the layout.
+
+    """
+    from tlc_plugin_sdk.job_context import JobFailed
+
+    rel = source_folder[len(alias_folder) :].strip("/")
+    if not rel:
+        return read_folder
+    if read_folder.endswith("/" + rel):
+        return read_folder[: -len(rel) - 1]
+    msg = (
+        f"This run reads the data from {read_folder}, a copy of {source_folder}, but the alias <{token}> "
+        f"points at {alias_folder}, a folder above it; the table's paths would not resolve to the source. "
+        "Point the alias at the data folder itself, or read the data where it is for this run."
+    )
+    raise JobFailed(msg)
+
+
+def register_source_alias(
+    project_name: str,
+    read_folder: str,
+    *,
+    source_folder: str | None = None,
+    alias_folder: str | None = None,
+    alias_token: str | None = None,
+    root_url: str | None = None,
+) -> dict[str, Any]:
+    """Register the alias for a table written from a folder the person picked, before any row.
+
+    Three folders take part, each defaulting to the one before it:
+
+    - *read_folder*: where THIS run reads the data. The host may have rewritten the picked folder
+      for one run (a copy staged on a GPU node, or a path the person named there).
+    - *source_folder*: where the person picked the data.
+    - *alias_folder*: the durable folder the alias points at — the picked folder, or a folder above
+      it ("source root") when the table's paths should keep the subfolders between them.
+
+    The persisted alias always points at *alias_folder*. The rows keep the subfolders from the alias
+    folder down to the picked folder (``<TOKEN>/sub/a.jpg``), whether the data is read in place or
+    from a copy that kept that layout. An alias folder that is not above the picked folder is a
+    durable copy elsewhere: the rows are folded from the folder read and every reader resolves the
+    token to the alias folder.
+
+    Args:
+        project_name: The project that owns the alias.
+        read_folder: The folder this run reads.
+        source_folder: The folder as picked (default: *read_folder*, the data is read in place).
+        alias_folder: The folder the persisted alias points at (default: *source_folder*).
+        alias_token: The token (default: derived from *project_name*).
+        root_url: The project root the table is written under (``None`` = the default root).
+
+    Returns:
+        :func:`register_alias`'s result.
+
+    Raises:
+        JobFailed: The alias folder is above the picked one and the folder read (a copy) does not
+            keep the layout below it, or a cloud project would save a machine-local alias.
+
+    """
+    token = alias_token or default_alias_token(project_name)
+    read = _folder(read_folder)
+    source = _folder(source_folder) or read
+    durable = _folder(alias_folder) or source
+    if _is_under(source, durable):
+        session = _session_alias_folder(read, source, durable, token)
+        remote = durable if session != durable else None
+    else:
+        session, remote = read, (durable if durable != read else None)
+    return register_alias(
+        project_name=project_name, image_folder=session, alias_token=token, remote_path=remote, root_url=root_url
+    )
+
+
+_ENABLED = ("true", True, "1", 1)
+
+
+def register_run_alias(
+    params: dict[str, Any],
+    read_folder: str,
+    *,
+    project_name: str,
+    root_url: str | None = None,
+    source_folder: str | None = None,
+) -> dict[str, Any] | None:
+    """:func:`register_source_alias` from a run body the alias card filled in.
+
+    Reads ``alias_enabled`` (default on), ``alias_token``, ``alias_folder`` and
+    ``alias_source_folder``, which the card sends as the folder its source field held when the run
+    was submitted. The host never rewrites these keys, so they say where the data was picked even
+    when the run reads a copy.
+
+    Args:
+        params: The run body.
+        read_folder: The folder this run reads.
+        project_name: The project that owns the alias.
+        root_url: The project root the table is written under.
+        source_folder: The folder as picked, when the plugin knows it better than the card.
+
+    Returns:
+        :func:`register_alias`'s result, or ``None`` when the person turned the alias off.
+
+    Raises:
+        JobFailed: As :func:`register_source_alias`.
+
+    """
+    if params.get("alias_enabled", True) not in _ENABLED:
+        return None
+    return register_source_alias(
+        project_name,
+        read_folder,
+        source_folder=source_folder or str(params.get("alias_source_folder", "") or ""),
+        alias_folder=str(params.get("alias_folder", "") or ""),
+        alias_token=str(params.get("alias_token", "") or "").strip() or None,
+        root_url=root_url,
+    )
 
 
 # ---------------------------------------------------------------------------

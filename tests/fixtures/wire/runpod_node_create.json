@@ -1,0 +1,12 @@
+{
+  "message": "CreateNodeResponse",
+  "answer": {
+    "provider_id": "abcdef012345",
+    "agent_url": "https://abcdef012345-8800.proxy.runpod.net",
+    "managed_by": "creator",
+    "pricing": "spot"
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}

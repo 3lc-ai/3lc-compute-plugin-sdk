@@ -1,0 +1,11 @@
+{
+  "message": "NodeStateResponse",
+  "answer": {
+    "state": "running",
+    "detail": "running",
+    "bootstrap_detail": "Boot diagnostics unavailable; waiting for the node agent."
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}

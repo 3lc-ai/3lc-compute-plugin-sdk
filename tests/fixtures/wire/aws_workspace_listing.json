@@ -1,0 +1,29 @@
+{
+  "message": "WorkspaceListing",
+  "answer": {
+    "workspaces": [
+      {
+        "provider_id": "i-0abc123def456789a",
+        "name": "3lc-ws-1",
+        "state": "running",
+        "instance_type": "t3.medium",
+        "public_ip": "3.4.5.6",
+        "launched_at": "2026-09-01T10:00:00+00:00",
+        "owner": "someone@example.com",
+        "node_id": "ws-1",
+        "mode": "full",
+        "kind": "workspace"
+      }
+    ]
+  },
+  "passthrough": [],
+  "item_passthrough": {
+    "workspaces": [
+      "launched_at",
+      "node_id",
+      "mode",
+      "kind"
+    ]
+  },
+  "additive": []
+}

@@ -11,6 +11,13 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import pytest
+from litestar import get
+
+from tlc_plugin_sdk import connections
+from tlc_plugin_sdk.connections import CONNECTION_HEADER, AwsSession, ConnectionBinding, encode_binding
+from tlc_plugin_sdk.contract import HubPlugin
+from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.shared import storage_bundle as sb
 
 
@@ -106,3 +113,103 @@ def test_bundle_names_and_arcnames_are_safe() -> None:
     assert sb._default_arcname("s3://bucket/data/fire", "data/fire/x/y.jpg") == "fire/x/y.jpg"
     assert sb._default_arcname("s3://bucket", "y.jpg") == "bucket/y.jpg"
     assert sb._default_arcname("volume://vol1/models", "models/best.pt") == "models/best.pt"
+
+
+def test_an_empty_name_is_resolved_from_the_url_the_registry_bundles() -> None:
+    registry = sb.BundleRegistry(list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "")
+    assert registry.start(url="s3://bucket/data/fire/", name="")["name"] == "fire"
+    assert registry.start(url="s3://bucket")["name"] == "bucket"
+    assert registry.start(url="s3://bucket/data", name="mine")["name"] == "mine"
+    assert sb.default_bundle_name("volume://vol1") == "vol1"
+
+
+def test_a_normalising_subclass_sees_an_empty_name_and_gets_the_normalised_default() -> None:
+    seen: list[str] = []
+
+    class Normalising(sb.BundleRegistry):
+        def start(self, *, url: str, name: str = "") -> dict[str, Any]:
+            seen.append(name)
+            return super().start(url=url.replace("VOLUME://", "volume://").rstrip("/") + "/models", name=name)
+
+    registry = Normalising(list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "")
+    assert registry.start(url="VOLUME://vol1/")["name"] == "models"
+    assert seen == [""]
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        msg = "no text"
+        raise RuntimeError(msg)
+
+
+def test_a_describer_answering_a_non_str_or_raising_never_strands_the_job() -> None:
+    def failing_store(path: Path, name: str) -> str:
+        msg = "store failed"
+        raise RuntimeError(msg)
+
+    for describer, expected in ((lambda exc: 7, "7"), (lambda exc: _Unprintable(), "store failed")):
+        registry = sb.BundleRegistry(
+            list_objects=lambda u: [("p/a", 1)],
+            open_object=lambda k: io.BytesIO(b"x"),
+            store_bundle=failing_store,
+            describe_error=describer,
+        )
+        status = _wait(registry, registry.start(url="s3://b/p")["bundle_id"])
+        assert (status["state"], status["error"]) == ("failed", expected)
+
+
+def _connection_seen() -> tuple[str | None, str | None]:
+    binding = connections.current_connection()
+    credential = connections.current_credential()
+    return (binding.id if binding else None, getattr(credential, "session_token", None))
+
+
+def test_a_bundle_started_by_a_request_keeps_the_requests_connection_in_its_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(connections, "_RESOLVERS", {})
+    connections.register_resolver("aws", "KEYLESS", lambda b: AwsSession("AKIA123", "secret", "session-1"))
+    seen: list[tuple[str, str | None, str | None]] = []
+
+    def list_objects(url: str) -> list[tuple[str, int]]:
+        seen.append(("list", *_connection_seen()))
+        return [("p/a", 1), ("p/b", 1)]
+
+    def open_object(key: str) -> io.BytesIO:
+        seen.append(("open", *_connection_seen()))
+        return io.BytesIO(b"x")
+
+    def store_bundle(path: Path, name: str) -> str:
+        seen.append(("store", *_connection_seen()))
+        return "https://signed.example/p.zip"
+
+    registry = sb.BundleRegistry(list_objects=list_objects, open_object=open_object, store_bundle=store_bundle)
+
+    # Sync, like the infrastructure routes: the handler runs in a thread with a copy of the context.
+    @get("/bundle", sync_to_thread=True)
+    def start_bundle() -> dict[str, Any]:
+        return registry.start(url="s3://b/p")
+
+    class _Probe(HubPlugin):
+        def get_ui_fragment(self) -> str:
+            return ""
+
+        def get_route_handlers(self) -> list[Any]:
+            return [start_bundle]
+
+    header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("conn-1", "aws", "KEYLESS", {}))}
+    with PluginHarness(_Probe(), plugin_id="probe", config_root=tmp_path) as harness:
+        bundle_id = harness.get("/bundle", headers=header).json()["bundle_id"]
+        # The request has ended (its context variables are reset) before the bundle finishes.
+        assert _wait(registry, bundle_id)["state"] == "done"
+        assert seen == [
+            ("list", "conn-1", "session-1"),
+            ("open", "conn-1", "session-1"),
+            ("open", "conn-1", "session-1"),
+            ("store", "conn-1", "session-1"),
+        ]
+
+        # A request naming no Connection starts a bundle that sees none: nothing leaks between jobs.
+        seen.clear()
+        assert _wait(registry, harness.get("/bundle").json()["bundle_id"])["state"] == "done"
+        assert {entry[1:] for entry in seen} == {(None, None)}

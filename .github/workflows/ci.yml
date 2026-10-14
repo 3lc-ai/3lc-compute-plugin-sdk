@@ -2,14 +2,19 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, config-service-poc]
   push:
-    branches: [main]
+    branches: [main, config-service-poc]
   workflow_call:   # reused as the gate by release.yml
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# The staged core resolves from the private `staging` index; uv applies these to it by name.
+env:
+  UV_INDEX_STAGING_USERNAME: ${{ secrets.CLOUDREPO_READ_USERNAME || secrets.CLOUDREPO_USERNAME }}
+  UV_INDEX_STAGING_PASSWORD: ${{ secrets.CLOUDREPO_READ_PASSWORD || secrets.CLOUDREPO_PASSWORD }}
 
 jobs:
   lint-type-test:

@@ -10,7 +10,12 @@ import time
 from typing import Any
 
 import pytest
+from litestar import post
 
+from tlc_plugin_sdk import connections
+from tlc_plugin_sdk.connections import CONNECTION_HEADER, AwsSession, ConnectionBinding, encode_binding
+from tlc_plugin_sdk.contract import HubPlugin
+from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.shared import storage_transfer
 from tlc_plugin_sdk.shared.storage_transfer import TransferError, TransferRegistry, notify_storage_deletes
 
@@ -263,3 +268,88 @@ def test_raw_delete_notification_failure_is_one_warning(monkeypatch: pytest.Monk
     warnings = notify_storage_deletes(["s3://b/a/object.3lc.json", "s3://b/c/object.3lc.json"])
     assert len(warnings) == 1
     assert "discovery could not be refreshed" in warnings[0]
+
+
+def test_a_describer_answering_a_non_str_never_strands_the_transfer() -> None:
+    store = _Store(_OBJECTS)
+    store.fail_on.add("s3://b/data/fire/train/1.jpg")
+    registry = _registry(store, workers=2, notify_change=lambda _u, _o: None, describe_error=lambda exc: 403)
+    st = registry.start("s3://b/data/fire", "s3://b/copy", ["train/"], mode="copy")
+    done = _wait(registry, st["transfer_id"])
+    assert done["state"] == "failed"
+    assert done["failures"] == [{"path": "s3://b/data/fire/train/1.jpg", "reason": "403"}]
+
+
+def _connection_seen() -> tuple[str | None, str | None]:
+    binding = connections.current_connection()
+    credential = connections.current_credential()
+    return (binding.id if binding else None, getattr(credential, "session_token", None))
+
+
+class _RecordingStore(_Store):
+    """A :class:`_Store` that records the Connection each provider call saw, and on which thread."""
+
+    def __init__(self, objects: dict[str, int]) -> None:
+        super().__init__(objects)
+        self.seen: list[tuple[str, str | None, str | None]] = []
+        self.threads: set[str] = set()
+        self._seen_lock = threading.Lock()
+
+    def _record(self, call: str) -> None:
+        with self._seen_lock:
+            self.seen.append((call, *_connection_seen()))
+            self.threads.add(threading.current_thread().name)
+
+    def list_objects(self, url: str) -> list[tuple[str, int]]:
+        self._record("list")
+        return super().list_objects(url)
+
+    def head_object(self, url: str) -> int | None:
+        self._record("head")
+        return super().head_object(url)
+
+    def copy_object(self, src: str, dst: str) -> None:
+        self._record("copy")
+        super().copy_object(src, dst)
+
+    def delete_object(self, url: str) -> None:
+        self._record("delete")
+        super().delete_object(url)
+
+
+def test_a_transfer_started_by_a_request_keeps_the_requests_connection_in_every_thread(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(connections, "_RESOLVERS", {})
+    connections.register_resolver("aws", "KEYLESS", lambda b: AwsSession("AKIA123", "secret", "session-1"))
+    store = _RecordingStore(_OBJECTS)
+    registry = _registry(store, workers=4, notify_change=lambda _u, _o: None)
+
+    # Sync, like the infrastructure routes: the handler runs in a thread with a copy of the context.
+    @post("/transfer", sync_to_thread=True)
+    def start_transfer() -> dict[str, Any]:
+        return registry.start("s3://b/data/fire", "s3://b/moved", ["a.jpg", "train/"], mode="move")
+
+    class _Probe(HubPlugin):
+        def get_ui_fragment(self) -> str:
+            return ""
+
+        def get_route_handlers(self) -> list[Any]:
+            return [start_transfer]
+
+    header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("conn-1", "aws", "KEYLESS", {}))}
+    with PluginHarness(_Probe(), plugin_id="probe", config_root=tmp_path) as harness:
+        transfer_id = harness.post("/transfer", headers=header).json()["transfer_id"]
+        # The request has ended (its context variables are reset) before the transfer finishes.
+        done = _wait(registry, transfer_id)
+        assert done["state"] == "done" and done["files_done"] == 3 and done["deleted"] == 3
+        assert {call for call, *_ in store.seen} == {"list", "head", "copy", "delete"}
+        assert {tuple(entry[1:]) for entry in store.seen} == {("conn-1", "session-1")}
+        # The copies ran on the transfer's pool threads, not only on its planning thread.
+        assert any(name.startswith(f"transfer-{transfer_id}_") for name in store.threads)
+
+        # A transfer started with no Connection in context sees none: nothing leaks between jobs.
+        store.seen.clear()
+        st = registry.start("s3://b/moved", "s3://b/data/fire", ["a.jpg"], mode="move")
+        assert _wait(registry, st["transfer_id"])["state"] == "done"
+        assert {tuple(entry[1:]) for entry in store.seen} == {(None, None)}
