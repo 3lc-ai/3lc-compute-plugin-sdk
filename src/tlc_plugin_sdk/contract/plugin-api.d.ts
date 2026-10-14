@@ -332,6 +332,31 @@ export interface PluginRunPlan {
 }
 
 /**
+ * A finished action's result as `PluginApi.showResult` draws it: the dict a plugin's run or
+ * route already returns. Other fields (`table_url`, `project_name`, ...) are allowed and ignored.
+ */
+export interface PluginResult {
+  /** True draws the success style; false or absent draws the error style. */
+  success?: boolean;
+  /** The one-line outcome, shown in bold. */
+  message?: string;
+  /** Drawn under the message as `key: value` pairs (objects as JSON); null/undefined values are skipped. */
+  details?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+/** Options for `PluginApi.showResult`. */
+export interface PluginResultOptions {
+  /**
+   * HTML drawn between the message and the details: "View in Project" links, follow-up buttons,
+   * guidance. Inserted as HTML, so escape every value you interpolate.
+   */
+  extra?: string;
+  /** False leaves out the close button. Default true. */
+  dismissible?: boolean;
+}
+
+/**
  * The single host -> fragment JS contract. The frontend injects this as
  * `window.PLUGIN_API` when it mounts a plugin fragment; a fragment should reach
  * for nothing else. Many plugins alias it: `var API = window.PLUGIN_API`.
@@ -523,6 +548,15 @@ export interface PluginApi {
 
   /** Show a host toast notification; no-op fallback if the host's `showToast` is unavailable. */
   showToast(message: string, type?: string): void;
+
+  /**
+   * Draw a finished action's result into `target`, replacing its content: the Hub's result box,
+   * in the success or error style, with the message, `options.extra`, the `details` pairs and a
+   * close button (✕) that removes the box. Scrolls the box into view and returns it. Use it for
+   * every "done" or "failed" message a fragment shows after a run, so results look and close the
+   * same in every plugin. Absent on older frontends — feature-detect.
+   */
+  showResult?(target: HTMLElement, result: PluginResult, options?: PluginResultOptions): HTMLElement | null;
 
   /**
    * Return an SVG icon string. With no id (or the current plugin's id) returns the
