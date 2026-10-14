@@ -470,6 +470,7 @@ PLUGIN_API = {
   container: HTMLElement,             // The DOM element the plugin is mounted in
   navigate: function(path) { ... },   // Navigate to a route
   showToast: function(msg, type) { }, // Show a toast notification
+  showResult: function(el, result, opts) { ... }, // Draw a run's result box, with a close button (optional)
   getIcon: function(id) { ... },      // Get SVG icon for this plugin (or another by ID)
 }
 ```
@@ -516,6 +517,18 @@ PLUGIN_API = {
   of its own. It refreshes itself while visible and stops when the element leaves the page; call
   the returned `refresh()` after your own Spin up. Feature-detect it, and point to Deployments on
   hosts that predate it.
+- **`showResult(target, result, options?)`** (optional) draws the Hub's result box into `target`,
+  replacing its content: the success or error style, `result.message` in bold, `options.extra`
+  (HTML for "View in Project" links or follow-up buttons — escape what you interpolate), the
+  `result.details` as `key: value` pairs, and a close button (✕) that removes the box. It takes
+  the `{success, message, details}` dict your run already returns, so pass it straight through,
+  and returns the box. Feature-detect it; on older frontends draw the message yourself:
+
+  ```javascript
+  if (API.showResult) API.showResult(el, data, { extra: viewInProjectHtml });
+  else el.innerHTML = '<div class="alert alert-' + (data.success ? 'success' : 'error') + '">' +
+    _esc(data.message) + '</div>';
+  ```
 - **`location`** (SDK 0.2+) exposes the host's shared location renderers (`TlcLocationApi`):
   chips and labels for the project roots / scan URLs that tables, runs, and projects from
   `PLUGIN_API.data` resolve to (their `location` / `locations` fields, also 0.2). Every renderer
@@ -1636,7 +1649,8 @@ A sidebar plugin UI follows this shape:
 6. **Buttons** — `.btn` + one variant; the primary action gets `.btn-primary`.
 7. **Spinners** — `<span class="spinner"></span>` (defined in `main.css`).
 8. **Toasts** — `PLUGIN_API.showToast(msg, 'success'|'error'|'info')` for feedback.
-9. **Dark mode** — must work; only `var(--*)` colors, and confirm the raised/flat card distinction actually reads.
+9. **Results** — `PLUGIN_API.showResult(el, result)` for the outcome of a run, so every plugin's result looks and closes the same.
+10. **Dark mode** — must work; only `var(--*)` colors, and confirm the raised/flat card distinction actually reads.
 
 ### What NOT to do
 
@@ -1646,6 +1660,7 @@ A sidebar plugin UI follows this shape:
 - Don't restyle a shared class globally, and prefix your own classes with the plugin id.
 - Don't reach for host-template-only classes like `.pbadge` — they aren't inherited.
 - Don't create custom modal/dialog implementations — use `.card` with show/hide.
+- Don't build your own result banner — use `PLUGIN_API.showResult`.
 - Don't use `position: fixed` — it breaks the plugin container.
 - Don't add font sizes below 10px or custom scrollbars.
 - Don't skip a dark-mode check.
