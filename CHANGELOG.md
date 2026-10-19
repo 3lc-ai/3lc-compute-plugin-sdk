@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `WorkspaceRequest` carries the host's deployment DNS zone, `dns_zone_id` and `dns_zone_name`
+  (a Route 53 hosted zone and its name), for a provider that gives a workspace a stable address and
+  public names under that zone (`<deployment>.<zone>`, derived from the request's `name`) and removes
+  them when the workspace goes. Both empty, the default, leaves the provider's own naming; a host
+  that predates the fields sends none and a provider that predates them ignores them.
 - `WorkspaceRequest` carries a workspace's Config Service identity for a provider that launches it
   through a Connection: `workspace_id`, `config_service_url` and the single-use `bootstrap_token`
   the machine redeems for its two service keys, plus `region` and `vpc_id` for where the stack goes.
