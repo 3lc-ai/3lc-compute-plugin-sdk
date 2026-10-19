@@ -274,8 +274,12 @@ class WorkspaceRequest:
     The token is the one secret of the launch: a provider puts it in the machine's startup data
     and keeps nothing (it is scrubbed from the SDK's error answers); a host sends it on the one
     create call and never persists it. ``region`` and ``vpc_id`` say where the stack goes; empty
-    leaves the provider's default. A workspace created the legacy way, with its owner's keys,
-    carries none of these.
+    leaves the provider's default. ``dns_zone_id`` and ``dns_zone_name`` name the host's deployment
+    DNS zone (a Route 53 hosted zone id and its name, ``deploy.example.com``): a provider that
+    supports hostnames gives the workspace a stable address and public names under that zone,
+    ``<deployment>.<zone>``, derived from ``name``, and removes them when the workspace goes; both
+    empty (the default) leaves the provider's own naming. A workspace created the legacy way, with
+    its owner's keys, carries none of these.
 
     The transient ``credentials`` and ``provider_configs`` a legacy request carries are not fields:
     the SDK strips them from the body and exposes them through
@@ -295,6 +299,8 @@ class WorkspaceRequest:
     bootstrap_token: str = field(default="", repr=False)
     region: str = ""
     vpc_id: str = ""
+    dns_zone_id: str = ""
+    dns_zone_name: str = ""
 
     @classmethod
     def from_dict(cls, data: Any) -> WorkspaceRequest:
@@ -314,6 +320,8 @@ class WorkspaceRequest:
             bootstrap_token=_stripped(d.get("bootstrap_token")),
             region=_stripped(d.get("region")),
             vpc_id=_stripped(d.get("vpc_id")),
+            dns_zone_id=_stripped(d.get("dns_zone_id")),
+            dns_zone_name=_stripped(d.get("dns_zone_name")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -332,6 +340,8 @@ class WorkspaceRequest:
             "bootstrap_token": self.bootstrap_token,
             "region": self.region,
             "vpc_id": self.vpc_id,
+            "dns_zone_id": self.dns_zone_id,
+            "dns_zone_name": self.dns_zone_name,
         }
 
 

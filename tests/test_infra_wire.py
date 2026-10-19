@@ -78,6 +78,8 @@ ROUND_TRIPS: list[tuple[Any, set[str]]] = [
             "bootstrap_token",
             "region",
             "vpc_id",
+            "dns_zone_id",
+            "dns_zone_name",
         },
     ),
     (
