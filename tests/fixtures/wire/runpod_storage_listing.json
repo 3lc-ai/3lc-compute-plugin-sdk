@@ -1,0 +1,58 @@
+{
+  "message": "StorageListing",
+  "answer": {
+    "kind": "volume",
+    "label": "RunPod network volume",
+    "creatable": true,
+    "upload": false,
+    "browse": false,
+    "download": false,
+    "bundle": false,
+    "delete": false,
+    "transfer": false,
+    "rename": false,
+    "upload_hint": "Add the network volume access keys (RunPod console → Settings → S3 API Keys) to browse, upload to and download from volumes.",
+    "default_id": "abc123volume",
+    "storage": [
+      {
+        "id": "abc123volume",
+        "kind": "volume",
+        "name": "cache",
+        "size_gb": 100,
+        "region": "EU-RO-1",
+        "url": "volume://abc123volume",
+        "default": true
+      },
+      {
+        "id": "def456volume",
+        "kind": "volume",
+        "name": "scratch",
+        "size_gb": 50,
+        "region": "US-NC-1",
+        "url": "volume://def456volume",
+        "default": false
+      }
+    ],
+    "regions": [
+      {
+        "id": "EU-RO-1",
+        "name": "EU-RO-1",
+        "location": "Romania",
+        "country": "RO"
+      },
+      {
+        "id": "US-NC-1",
+        "name": "US-NC-1",
+        "location": "North Carolina",
+        "country": "US"
+      }
+    ]
+  },
+  "passthrough": [],
+  "item_passthrough": {
+    "regions": [
+      "country"
+    ]
+  },
+  "additive": []
+}

@@ -15,16 +15,22 @@ Import-light: stdlib only. Must not pull in the server stack.
 from __future__ import annotations
 
 import threading
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from tlc_plugin_sdk.connections import SecretToken
+
 #: The host-owned top-level run-body key that carries :class:`JobIdentity` to the worker.
 #: The worker pops it before ``ctx.params`` is built; a plugin never reads or sets it.
 IDENTITY_KEY = "_identity"
+#: The run-body key carrying the project root the job writes to; the host stamps it at submit.
+PROJECT_ROOT_KEY = "project_root_url"
 
 
 @dataclass(frozen=True)
@@ -103,6 +109,15 @@ class JobContext:
         sink: Callable invoked with each emitted event dict.
         cancel_event: Set by the host/worker to request cooperative cancellation.
         identity: Who the job runs for (see :class:`JobIdentity`); empty when omitted.
+        credential: The legacy single token the host granted this job, or ``None``. One that
+            names a service is keyed under it in ``credentials``; one that names none is only
+            ``ctx.credential`` (and no-argument ``connections.current_credential()``).
+        credentials: Tokens keyed by service; copied into a read-only map. Read one with
+            ``get_credential(service)``. ``ctx.credential`` is the only token of a single-token
+            job, and ``None`` (with a warning) for several. Token values never belong in saved
+            parameters or output.
+
+    ``project_root_url`` (a property) is the root the job writes to — see there.
 
     """
 
@@ -115,15 +130,86 @@ class JobContext:
         sink: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
         identity: JobIdentity | None = None,
+        credential: SecretToken | None = None,
+        credentials: Mapping[str, SecretToken] | None = None,
     ) -> None:
         self.job_id = job_id
         self.params = params or {}
         self.state_dir = state_dir
         self.identity = identity if identity is not None else JobIdentity()
+        tokens = dict(credentials or {})
+        single: SecretToken | None = None
+        if credential is not None and not credential.provider:
+            # A legacy token that names no service is the job's single credential, never keyed
+            # under ``""``: ``credentials`` only ever maps service names, as the service wire does.
+            if tokens:
+                msg = "A credential without a service cannot accompany service tokens"
+                raise ValueError(msg)
+            single = credential
+        elif credential is not None:
+            if credential.provider in tokens and tokens[credential.provider] != credential:
+                msg = "Conflicting credentials for one service"
+                raise ValueError(msg)
+            tokens[credential.provider] = credential
+        if any(not service or service != token.provider for service, token in tokens.items()):
+            msg = "A job credential does not match its service"
+            raise ValueError(msg)
+        self.credentials: Mapping[str, SecretToken] = MappingProxyType(tokens)
+        if single is None and len(tokens) == 1:
+            single = next(iter(tokens.values()))
+        self._credential = single
         self._sink = sink
         self._cancel = cancel_event
+        self._project_root: str | None = None
+
+    @property
+    def credential(self) -> SecretToken | None:
+        """The job's only token, or ``None`` when it has none or tokens for several services.
+
+        Kept for single-token plugins. A job with tokens for several services has no default, so
+        this is ``None`` there and warns (a ``UserWarning``) to use :meth:`get_credential` instead.
+        """
+        if len(self.credentials) > 1:
+            warnings.warn(
+                f"ctx.credential is None: this job has tokens for {len(self.credentials)} services "
+                f"({', '.join(sorted(self.credentials))}). Use ctx.get_credential(service).",
+                stacklevel=2,
+            )
+        return self._credential
+
+    def get_credential(self, service: str) -> SecretToken | None:
+        """Return the job's token for ``service``, or None when none was supplied.
+
+        Args:
+            service: The service slug the plugin declares (``huggingface``).
+
+        Returns:
+            The token, or ``None`` when the job was not given one for ``service``.
+        """
+        return self.credentials.get(service)
 
     # ── plugin-facing API ────────────────────────────────────────────────
+    @property
+    def project_root_url(self) -> str:
+        """The project root this job writes to, without a trailing slash.
+
+        The host resolves it at submit (the person's choice, else the host's configured root) and
+        stamps it into the run body as ``project_root_url``; a plugin that creates tables or runs
+        passes it as ``root_url`` to the core library. A body from a host that predates the key
+        falls back to this worker's own ``tlc`` root, and to ``""`` only when ``tlc`` cannot say.
+        """
+        raw = self.params.get(PROJECT_ROOT_KEY)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().rstrip("/")
+        if self._project_root is None:
+            try:
+                import tlc
+
+                self._project_root = str(tlc.config.project_root_url).rstrip("/")
+            except Exception:
+                self._project_root = ""
+        return self._project_root
+
     @property
     def cancelled(self) -> bool:
         """Whether cancellation has been requested (poll this at checkpoints)."""

@@ -1,0 +1,17 @@
+{
+  "message": "NodeStateResponse",
+  "answer": {
+    "state": "pending",
+    "detail": "pending",
+    "bootstrap_detail": "Installing Compute Service",
+    "bootstrap_failed": false,
+    "bootstrap_history": [
+      "Installing uv",
+      "Creating Python environment",
+      "Installing Compute Service"
+    ]
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}

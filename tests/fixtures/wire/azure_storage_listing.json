@@ -1,0 +1,42 @@
+{
+  "message": "StorageListing",
+  "answer": {
+    "kind": "bucket",
+    "label": "Blob container",
+    "creatable": true,
+    "upload": true,
+    "browse": true,
+    "download": true,
+    "bundle": true,
+    "delete": true,
+    "transfer": true,
+    "rename": true,
+    "account": "3lcteam",
+    "storage": [
+      {
+        "id": "projects",
+        "kind": "bucket",
+        "name": "projects",
+        "region": "westeurope",
+        "url": "abfs://projects",
+        "account": "3lcteam",
+        "https_url": "https://3lcteam.blob.core.windows.net/projects",
+        "size_gb": null
+      }
+    ],
+    "regions": [
+      {
+        "id": "westeurope",
+        "name": "West Europe"
+      }
+    ]
+  },
+  "passthrough": [],
+  "item_passthrough": {
+    "storage": [
+      "account",
+      "https_url"
+    ]
+  },
+  "additive": []
+}

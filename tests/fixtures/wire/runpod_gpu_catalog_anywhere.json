@@ -1,0 +1,27 @@
+{
+  "message": "GpuCatalog",
+  "answer": {
+    "gpus": [
+      {
+        "id": "NVIDIA GeForce RTX 4090",
+        "name": "RTX 4090",
+        "memory_gb": 24,
+        "description": "24 GB VRAM",
+        "price_hint": "$0.69/h",
+        "price_hour": 0.69,
+        "price_secure": 0.69,
+        "price_community": 0.34,
+        "price_spot": 0.35,
+        "spot_saves": true,
+        "spot_bid": 0.36,
+        "stock": "High",
+        "available": true,
+        "availability": "in stock (high)"
+      }
+    ],
+    "placement": {}
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": []
+}

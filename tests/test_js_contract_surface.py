@@ -68,3 +68,54 @@ def test_list_is_present_on_both_sides() -> None:
     # The 0.3 addition — guard it explicitly so a regression is unambiguous.
     assert "list" in _js_exported_names()
     assert "list" in _dts_pluginjobs_members()
+
+
+# Helpers the shared scripts define for their own use. Global (the scripts are plain <script> code) but
+# not part of the contract, so the .d.ts leaves them out.
+_INTERNAL_HELPERS = {
+    "_tlcAliasMapping",
+    "_tlcSuggestedAliasToken",
+    "_tlcDsBrowseUrl",
+    "_tlcDsBucketReach",
+    "_tlcDsLocationList",
+    "_tlcDsReachNote",
+    "_tlcHostName",
+    "_tlcHubAsksForData",
+    "_tlcKnownProjectRoots",
+    "_tlcProjectRootUrl",  # a pre-0.5 name for _tlcDefaultProjectRoot, kept working, not advertised
+}
+
+
+def test_every_shared_widget_helper_is_declared() -> None:
+    from tlc_plugin_sdk.shared.alias_override_ui import alias_override_ui_script
+    from tlc_plugin_sdk.shared.alias_ui import alias_ui_script
+    from tlc_plugin_sdk.shared.data_source_ui import data_source_ui_script
+
+    js = alias_ui_script() + data_source_ui_script() + alias_override_ui_script()
+    defined = set(re.findall(r"^function (_tlc\w+)\(", js, re.MULTILINE)) - _INTERNAL_HELPERS
+    declared = set(re.findall(r"^\s*function (_tlc\w+)\(", _dts_text(), re.MULTILINE))
+    assert defined <= declared, f"undeclared helpers: {sorted(defined - declared)}"
+
+
+def test_alias_auto_update_is_declared_with_its_real_arity() -> None:
+    dts = _dts_text()
+    block = re.search(r"function _tlcBindAliasAutoUpdate\((.*?)\): void;", dts, re.DOTALL)
+    assert block
+    params = [p.strip().split(":")[0].rstrip("?") for p in block.group(1).split(",") if p.strip()]
+    assert params == ["idPrefix", "projectInputId", "folderInputId", "pluginId", "rootInputId", "opts"]
+
+
+def test_the_run_target_carries_its_label_and_the_plan_is_optional() -> None:
+    dts = _dts_text()
+    assert "getRunTarget?(): PluginRunTarget;" in dts
+    target = re.search(r"export interface PluginRunTarget\s*\{(.*?)\n\}", dts, re.DOTALL)
+    assert target
+    assert set(re.findall(r"^\s*(\w+)\??:", target.group(1), re.MULTILINE)) == {
+        "target",
+        "node_id",
+        "ready",
+        "label",
+        "files_root",
+        "browse_roots",
+    }
+    assert "planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;" in dts

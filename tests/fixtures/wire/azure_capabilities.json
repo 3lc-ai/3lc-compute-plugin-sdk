@@ -1,0 +1,67 @@
+{
+  "message": "CapabilitiesResponse",
+  "answer": {
+    "provider": "azure",
+    "missing_fields": [
+      {
+        "key": "subscription_id",
+        "required": true,
+        "label": "Azure subscription id",
+        "secret": false,
+        "placeholder": "12345678-1234-1234-1234-123456789abc",
+        "help": "The subscription nodes and storage are billed to.",
+        "href": "https://portal.azure.com/#view/Microsoft_Azure_Billing/SubscriptionsBladeV2"
+      },
+      {
+        "key": "storage_account",
+        "required": true,
+        "label": "Storage account",
+        "secret": false,
+        "placeholder": "3lcyourname",
+        "help": "The storage account whose containers hold your data.",
+        "href": "https://portal.azure.com/#browse/Microsoft.Storage%2FStorageAccounts"
+      }
+    ],
+    "gpu_types": [
+      "Standard_NC4as_T4_v3"
+    ],
+    "flavors": [
+      "gpu"
+    ],
+    "pricing": [
+      "on_demand",
+      "spot"
+    ],
+    "lists_workspaces": true,
+    "credential_keys": [
+      "tenant_id",
+      "client_id",
+      "client_secret",
+      "subscription_id"
+    ],
+    "storage": {
+      "kind": "bucket",
+      "label": "Blob container",
+      "creatable": true,
+      "upload": true,
+      "browse": true,
+      "download": true,
+      "bundle": true,
+      "delete": true,
+      "transfer": true,
+      "rename": true
+    },
+    "region": "westeurope",
+    "ready": false,
+    "missing": [
+      "subscription_id",
+      "storage_account"
+    ]
+  },
+  "passthrough": [],
+  "item_passthrough": {},
+  "additive": [
+    "node_types",
+    "facets"
+  ]
+}
