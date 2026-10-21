@@ -155,7 +155,8 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   on a host at a time.
 - `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
   plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
-  (pin the interpreter the plugin's venv is built with).
+  (pin the interpreter the plugin's venv is built with), `remote_capable` (a run may target a
+  remote node even though `requires_gpu` is false).
 - `[ui]`: `min_input_count` (minimum selected resources an `action` plugin needs — defaults to
   `len(input_types)`; set `0` explicitly to require none), `action_param_names` (query params
   passed through from the action launch), `quick_action_label` / `quick_action_description`
@@ -174,9 +175,11 @@ plugin sharing an umbrella declares one, since that is how its own dependencies 
 Every plugin runs in its own uv-managed venv, behind a worker the host spawns and talks to
 over a Unix socket — the host registers the plugin from its manifest alone and never imports
 its code. Isolation is venv-only: there is no in-process/host mode, and the venv is always one
-the host builds and owns (never a `.venv` beside your source). `requires_gpu` is the manifest's **only placement knob**: `true` routes the job
+the host builds and owns (never a `.venv` beside your source). `requires_gpu` is the manifest's **queue knob**: `true` routes the job
 through the shared GPU queue (one GPU job at a time, across every plugin); `false` jobs run
 on the CPU queue. Both are host-owned; the plugin never picks a queue or names a lane.
+`remote_capable = true` lets a plugin that needs no GPU also run on a remote node (see
+[Run-body conventions for remote workers](#run-body-conventions-for-remote-workers)).
 
 ### 3. Implement the plugin object
 
@@ -759,6 +762,27 @@ answered with `services` and `managed_by`. You still list `"workspace"` in
 `capabilities().flavors` — the host gates on `flavors`; the kit asserts the two agree.
 `capabilities.lists_workspaces` reads `true` for a provider with this facet.
 
+A workspace request's `workspace` object is a `WorkspaceRequest`. Besides what the person chose
+(`name`, `mode`, `public`, `project_root_url`, `bootstrap_plugins`, `data_buckets`,
+`create_bucket`, `seed_provider_configs`), a workspace launched through a Connection carries:
+
+- `workspace_id`, `config_service_url` and `bootstrap_token` — the workspace's Config Service
+  identity. `workspace_id` is the record the machine becomes; the machine redeems the single-use
+  `bootstrap_token` at `POST {config_service_url}/v1/workspaces/{workspace_id}/bootstrap` for its
+  two service keys. The token is the one secret of the launch: put it in the machine's startup
+  data and keep nothing. The SDK scrubs it from error answers and leaves it out of the
+  dataclass's `repr`.
+- `region` and `vpc_id` — where the stack goes; empty leaves your configured default.
+- `dns_zone_id` and `dns_zone_name` — the host's deployment DNS zone (a hosted zone id and its
+  name, `deploy.example.com`). A provider that supports hostnames gives the workspace a stable
+  address and public names `<deployment>.<zone>` under that zone, derived from `name`, and
+  removes them when the workspace goes. Both empty (the default) leaves the provider's own
+  naming. The host sends a zone only to a plugin whose SDK is 0.5.3 or newer (see
+  [Version & Compatibility](#version--compatibility)).
+
+A workspace created the legacy way, with its owner's keys, carries none of these; the SDK strips
+that request's transient `credentials` and `provider_configs` (see the legacy facet below).
+
 **`LegacyOwnerCredentialsFacet`** (`"legacy-owner-credentials"`) — **legacy**: request-carried
 owner credentials, superseded by Connections and kept for the demo and hosted flows (a
 visitor's workspace in their own account, a sign-in, a role grant). Deliberately dict-typed:
@@ -805,6 +829,30 @@ explain the offered template, not an audit of an existing role the customer may 
 Keep the explanations with the provider's policy definition; the frontend does not interpret
 provider policies. Older answers without these fields retain the existing setup flow.
 
+### Deployment names in the host's DNS zone
+
+A host may own a deployment DNS zone and send it on each workspace request (`dns_zone_id`,
+`dns_zone_name` above). Two more capabilities let it work with that zone; declare each as `true`
+in `CapabilitiesResponse.extra` and serve the route yourself from `get_route_handlers()` (they are
+plugin-owned routes, not SDK-mounted):
+
+- **`deployment_name_check`** → `GET /infra/deployments/name-check?name=&dns_zone_id=&dns_zone_name=`.
+  The host asks it as a person types a deployment name, before anyone presses Launch, with its own
+  identity (the zone is the host's, so no Connection is sent). Answer
+  `{ok, checked, label, hostname, reason}`: `ok` says whether a launch with that name would get it,
+  `checked` whether the zone was consulted, `label` and `hostname` what the name becomes, and
+  `reason` a sentence when `ok` is false or the zone could not be read. A refused name is an
+  answer, not an error. A provider without this capability is not asked; its launch refuses a
+  name it cannot give.
+- **`deployment_sweep`** → `POST /infra/deployments/sweep` with
+  `{dns_zone_id, dns_zone_name, regions, keep, gone}`. The host calls it on its own clock, once per
+  Connection its live deployments were launched through (in `x-3lc-connection`), or as itself when
+  there is none. `keep` and `gone` list the deployments (`{node_id, name}`) the host tracks as alive
+  or mid-launch and as dead: never touch a `keep` name; a `gone` name's records may be removed.
+  Remove only what you can prove no deployment owns in that account, and report the rest. Answer
+  `{complete, records_removed, addresses_released, accounted, unverified, pending, problems}`; the
+  host warns about a name no swept account could account for.
+
 ### Identity: Connections first
 
 A **Connection** names the external account a request acts on — an AWS account, a RunPod team —
@@ -832,6 +880,14 @@ credential = connections.current_credential()  # Ambient | AwsSession | SecretTo
   ```python
   connections.register_resolver("aws", "KEYLESS", assume_connection_role)
   ```
+
+  A `KEYLESS` role trusts **one principal**: the identity of the host the Connection was set up
+  from — a self-hosted deployment's own identity, or the launcher principal of a hosted Hub that
+  launches deployments into customers' accounts. The provider's onboarding answer names it
+  (`principal`), and the Config Service may store it in the binding's metadata as
+  `trusted_principal`. When it is stored and this host's identity is a different one, a resolver
+  should refuse before asking the provider, with a `CredentialUnavailable` sentence naming both
+  identities: the role cannot be assumed from here, and nothing is gained by trying.
 
   A resolver returns a credential (`AwsSession` for AWS) or raises `CredentialUnavailable`
   with a sentence a person can act on. Resolution runs in a worker thread, so it may call the
@@ -1209,7 +1265,9 @@ way to consume it is `window.PluginJobs` (next section).
 ### Run-body conventions for remote workers
 
 A host with remote-node support can run a `requires_gpu` job on a **remote worker** — a
-TCP worker on another machine — over the same stream contract. These conventions make a
+TCP worker on another machine — over the same stream contract. A plugin that needs no GPU
+opts in with `remote_capable = true` in `[runtime]`; without either flag the host refuses a
+run aimed at a node. These conventions make a
 plugin remote-ready; all are optional locally and additive:
 
 - **Self-contained params (`project_config`).** A remote worker has none of the
@@ -1727,12 +1785,27 @@ There are **two independent** kinds of "version" in play. Keep them separate:
 
 | Constant | Covers | Value |
 |----------|--------|-------|
-| `SDK_CONTRACT_VERSION` | the whole contract — the Python surface (`ComputePlugin` / `JobContext` / `shared.*`) *and* the browser surface (`PLUGIN_API` / `PluginJobs` / `TlcData`, see `plugin-api.d.ts`); also the dependency *pin* (`3lc-compute-plugin-sdk>=X,<Y`) | = package version (e.g. `0.3.0`) |
+| `SDK_CONTRACT_VERSION` | the whole contract — the Python surface (`HubPlugin` / `ComputePlugin` / `InfrastructurePlugin` / `JobContext` / `shared.*`) *and* the browser surface (`PLUGIN_API` / `PluginJobs` / `TlcData`, see `plugin-api.d.ts`); also the dependency *pin* (`3lc-compute-plugin-sdk>=X,<Y`) | = package version (e.g. `0.3.0`) |
 
 It is this package's own version — one source of truth. A plugin that needs a newer capability
 raises its `3lc-compute-plugin-sdk` floor; the host and frontend implement a range and compare
 compatibility on `MAJOR.MINOR`. (Earlier 0.x lines split this into separate `PY_CONTRACT` /
 `JS_CONTRACT` markers; those were removed in 0.3 — there is one axis now.)
+
+**Per-feature SDK floors.** The typed request models drop keys they do not know, so a plugin
+whose SDK predates a field the host sends does not fail: it answers as if the field was never
+sent. `MAJOR.MINOR` cannot catch that within a line, so the host also keeps a table of features
+and the first SDK release that carries each one's fields. Before it sends such a feature it
+compares the floor against the SDK version the plugin's worker reports on `/health` and, when the
+worker is older, refuses the request with a sentence naming the plugin, its SDK version and the
+floor; the plugin card carries the same sentence. A pre-release of the floor counts as the floor,
+and an unknown version refuses nothing.
+
+| Feature | Fields | Needs SDK |
+|---------|--------|-----------|
+| Deployment DNS zone | `WorkspaceRequest.dns_zone_id`, `WorkspaceRequest.dns_zone_name` | 0.5.3 |
+
+A host without a deployment DNS zone sends no zone and has nothing to refuse.
 
 **(b) SERVICE compatibility — what a plugin *runs against*.** Negotiated at *runtime*, not pinned.
 The compute-service and frontend version independently (separate repos); a plugin declares floors

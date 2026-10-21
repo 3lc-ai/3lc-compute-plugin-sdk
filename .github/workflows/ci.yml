@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, config-service-poc]
+    branches: [main]
   push:
-    branches: [main, config-service-poc]
+    branches: [main]
   workflow_call:   # reused as the gate by release.yml
 
 concurrency:
