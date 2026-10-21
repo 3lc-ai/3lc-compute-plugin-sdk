@@ -16,12 +16,24 @@ pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
 
 > **Distribution `3lc-compute-plugin-sdk` · import `tlc_plugin_sdk`.**
 
+**PyPI carries the 0.4 contract line.** The 0.5 line this README and the guide describe (the
+plugin hierarchy, infrastructure plugins, Connections) is published only to the 3LC staging
+index, so a plain `pip install` gets a 0.4 SDK without them; see
+[Snapshot builds](#snapshot-builds) for installing a 0.5 snapshot.
+
 ## What it gives you
 
-- **`ComputePlugin`** — the base class you subclass. Implement `get_ui_fragment` (and `compute`
-  if you expose a synchronous endpoint); job and lifecycle hooks ship as safe defaults. There is
-  no `register()` to call — a plugin's metadata lives in its `plugin.toml` manifest (or a
-  `[tool.tlc-compute]` table in `pyproject.toml`), and the Hub discovers it from there.
+- **The plugin hierarchy** — `HubPlugin` is the root base class (UI fragment, optional
+  `compute`, custom routes, shutdown). You subclass one of its two children:
+  - **`ComputePlugin`** for importers, exporters, training and data tools: implement
+    `get_ui_fragment` (and `compute` if you expose a synchronous endpoint) and `run_job` for
+    long-running work; lifecycle hooks ship as safe defaults.
+  - **`InfrastructurePlugin`** (`tlc_plugin_sdk.infrastructure`, manifest `kind =
+    "infrastructure"`) for providers that create remote nodes and workspaces: a typed
+    create / state / delete contract plus opt-in facets for storage, catalogs and workspaces.
+
+  There is no `register()` to call — a plugin's metadata lives in its `plugin.toml` manifest (or
+  a `[tool.tlc-compute]` table in `pyproject.toml`), and the Hub discovers it from there.
 - **`JobContext`** — the surface a long-running job programs against: `progress` / `metric` /
   `log` / `result` for the generic job panel, `emit` for your plugin's own rich UI, and
   cooperative `cancelled`.
@@ -44,6 +56,14 @@ contract axis (both the Python and the browser surface). A plugin pins the SDK
 compatibility on `MAJOR.MINOR`. Versions are SemVer; see **Status** below for the 0.x stability
 stance.
 
+`MAJOR.MINOR` is not the whole check. Request models drop keys they do not know, so a plugin
+whose SDK predates a field the host sends would answer as if it was never sent. The host
+therefore keeps a per-feature SDK floor, compares it against the SDK version the plugin's worker
+reports, and refuses a request that needs a newer SDK with a sentence naming the plugin, its SDK
+version and the floor (the plugin card shows the same sentence). The first floor is the
+deployment DNS zone on `WorkspaceRequest` (`dns_zone_id` / `dns_zone_name`), which needs SDK
+0.5.3 or newer.
+
 ## How it fits
 
 This SDK sits at the root of the plugin dependency graph. Its dependencies are `uvicorn`,
@@ -62,7 +82,7 @@ collapsed into `SDK_CONTRACT_VERSION`). Anything reshaping the core still waits 
 the browser bridge, `PLUGIN_API.libs.io` is a stable part of the contract; the other bundled
 libs are best-effort (see the guide).
 
-## POC builds
+## Snapshot builds
 
 The manual `Release` workflow tests and builds an SDK snapshot. Its default is build-only;
 download the wheel and source archive from the workflow artifacts. Select `publish` to upload
@@ -79,5 +99,5 @@ test them. A consumer declares it as an explicit uv index named `staging`
 `UV_INDEX_STAGING_USERNAME` / `UV_INDEX_STAGING_PASSWORD`. Record the exact tested snapshot when validating a group of consumers. A Git source
 override in a development checkout does not provide that SDK to users installing a built wheel.
 
-Public releases still use a `vX.Y.Z` tag whose version matches `pyproject.toml`. POC snapshots
+Public releases still use a `vX.Y.Z` tag whose version matches `pyproject.toml`. Snapshots
 are never published to PyPI.
