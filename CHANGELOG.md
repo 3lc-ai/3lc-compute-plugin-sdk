@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ConnectionCheckResponse` carries an optional `metadata` mapping: non-secret binding facts the provider
+  read back from the account, for the host to record on the Connection (for example a KEYLESS
+  Connection's `write_locations` and `read_locations`). A provider that reads none sends none; a host
+  that predates the field ignores it.
 - `WorkspaceRequest` carries the host's deployment DNS zone, `dns_zone_id` and `dns_zone_name`
   (a Route 53 hosted zone and its name), for a provider that gives a workspace a stable address and
   public names under that zone (`<deployment>.<zone>`, derived from the request's `name`) and removes

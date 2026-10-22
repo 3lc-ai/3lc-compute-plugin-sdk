@@ -312,6 +312,16 @@ class TestConnectionCheck:
             identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
         )
 
+    def test_check_metadata_round_trips_and_is_left_out_when_empty(self) -> None:
+        from tlc_plugin_sdk.infrastructure import ConnectionCheckResponse
+
+        resp = ConnectionCheckResponse(metadata={"write_locations": ["s3://a"], "read_locations": []})
+        body = resp.to_dict()
+        assert body["metadata"] == {"write_locations": ["s3://a"], "read_locations": []}
+        assert ConnectionCheckResponse.from_dict(body) == resp
+        assert "metadata" not in ConnectionCheckResponse().to_dict()
+        assert ConnectionCheckResponse.from_dict({"metadata": "nope"}).metadata == {}
+
     def test_host_root_context_preserves_missing_empty_and_changed_values(self) -> None:
         from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
         from tlc_plugin_sdk.infrastructure import ConnectionCheckRequest, ConnectionCheckResponse
