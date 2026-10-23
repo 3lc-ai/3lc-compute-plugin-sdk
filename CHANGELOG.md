@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `ConnectionBinding.configuration` transports installed configuration separately from identity
+  metadata. Pending edits never ride this field. The verification contract uses an issued grant id.
+
 ### Added
 
+- Documented capability negotiation for Connection configuration updates and prefix-preserving
+  dataset locations, including the distinction between requested settings and trusted observations.
+
+- `ConnectionCheckResponse` carries an optional `metadata` mapping: non-secret binding facts the provider
+  read back from the account. The host forwards configuration observations for grant-bound
+  validation by Config; it never patches them into writable metadata. A provider that reads none sends none; a host
+  that predates the field ignores it.
 - `WorkspaceRequest` carries the host's deployment DNS zone, `dns_zone_id` and `dns_zone_name`
   (a Route 53 hosted zone and its name), for a provider that gives a workspace a stable address and
   public names under that zone (`<deployment>.<zone>`, derived from the request's `name`) and removes

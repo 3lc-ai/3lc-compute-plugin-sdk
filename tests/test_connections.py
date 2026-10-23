@@ -192,3 +192,12 @@ def test_a_malformed_use_is_400(harness: PluginHarness, value: str) -> None:
     response = harness.get("/threaded", headers={**_header("AMBIENT"), CONNECTION_USE_HEADER: value})
     assert response.status_code == 400
     assert CONNECTION_USE_HEADER in response.json()["detail"]
+
+
+def test_binding_transports_installed_configuration_separately() -> None:
+    binding = ConnectionBinding("conn-1", "aws", "KEYLESS", {"role_arn": "role"}, configuration={"node_storage": True})
+    assert ConnectionBinding.from_json(encode_binding(binding)) == binding
+    old = ConnectionBinding.from_json('{"id":"c","provider":"aws","kind":"KEYLESS","metadata":{}}')
+    assert old.configuration is None
+    with pytest.raises(ValueError, match="configuration must be an object"):
+        ConnectionBinding.from_json('{"id":"c","provider":"aws","kind":"KEYLESS","metadata":{},"configuration":[]}')

@@ -682,21 +682,26 @@ class ConnectionCheckResponse:
             fail without failing the check, go in ``checks``.
         checks: Optional diagnostic samples. A false result with level ``warn`` is inconclusive;
             ``error`` means refused. These do not change whether the Connection identity resolved.
+        metadata: Non-secret binding facts the provider read back from the account, for the host to
+            record on the Connection; a provider that reads none sends none.
     """
 
     identity: str = ""
     checked: list[str] = field(default_factory=lambda: ["resolve"])
     checks: list[PreflightCheck] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ConnectionCheckResponse:
         """Parse a provider's answer."""
         checked = data.get("checked")
         checks = data.get("checks")
+        metadata = data.get("metadata")
         return cls(
             identity=_str(data.get("identity")),
             checked=[_str(c) for c in checked if _str(c)] if isinstance(checked, (list, tuple)) else [],
             checks=[PreflightCheck.from_dict(c) for c in checks] if isinstance(checks, (list, tuple)) else [],
+            metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -704,6 +709,8 @@ class ConnectionCheckResponse:
         out: dict[str, Any] = {"identity": self.identity, "checked": list(self.checked)}
         if self.checks:
             out["checks"] = [check.to_dict() for check in self.checks]
+        if self.metadata:
+            out["metadata"] = dict(self.metadata)
         return out
 
 
