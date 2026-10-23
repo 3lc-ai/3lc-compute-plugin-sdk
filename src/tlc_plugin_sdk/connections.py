@@ -138,19 +138,22 @@ class ConnectionBinding:
         kind: ``AMBIENT`` or ``KEYLESS`` (more kinds later).
         metadata: Kind-specific, non-secret binding data (for ``KEYLESS`` on AWS: ``role_arn``,
             ``external_id``, optionally ``region`` and ``session_duration_s``).
+        configuration: Trusted installed configuration from Config Service, or None before
+            verification. Never pending editor state or caller-supplied metadata.
     """
 
     id: str
     provider: str
     kind: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    configuration: dict[str, Any] | None = None
 
     @classmethod
     def from_json(cls, raw: str | bytes) -> ConnectionBinding:
         """Parse the header value.
 
         Args:
-            raw: The JSON object ``{id, provider, kind, metadata?}``.
+            raw: The JSON object ``{id, provider, kind, metadata?, configuration?}``.
 
         Returns:
             The binding.
@@ -168,7 +171,17 @@ class ConnectionBinding:
         if not all(isinstance(v, str) and v for v in values) or not isinstance(metadata, dict):
             msg = "a connection binding needs string 'id', 'provider' and 'kind', and an object 'metadata'"
             raise ValueError(msg)
-        return cls(id=str(values[0]), provider=str(values[1]), kind=str(values[2]).upper(), metadata=metadata)
+        configuration = data.get("configuration")
+        if configuration is not None and not isinstance(configuration, dict):
+            msg = "connection configuration must be an object"
+            raise ValueError(msg)
+        return cls(
+            id=str(values[0]),
+            provider=str(values[1]),
+            kind=str(values[2]).upper(),
+            metadata=metadata,
+            configuration=configuration,
+        )
 
 
 @dataclass(frozen=True)
@@ -229,7 +242,13 @@ def encode_binding(binding: ConnectionBinding) -> str:
         Compact JSON.
     """
     return json.dumps(
-        {"id": binding.id, "provider": binding.provider, "kind": binding.kind, "metadata": binding.metadata},
+        {
+            "id": binding.id,
+            "provider": binding.provider,
+            "kind": binding.kind,
+            "metadata": binding.metadata,
+            "configuration": binding.configuration,
+        },
         separators=(",", ":"),
     )
 

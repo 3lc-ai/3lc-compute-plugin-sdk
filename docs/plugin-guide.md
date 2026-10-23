@@ -2029,3 +2029,32 @@ Setup is a reserved generic infrastructure operation, not a plugin-private route
 same host project-root context. Its default delegates to `preflight`, preserving existing providers.
 Use it to inspect the identity that the actual node launch will attach. A live node's data access
 still needs to be checked separately.
+
+
+### Connection verification and deployment binding contract
+
+Config Service verification reports reference the issued `connection.verify` grant id. The host
+must send that id with the same service credential and Connection; it must not copy revision
+numbers from browser metadata. Config captures the desired revision and observation generation
+when issuing the grant. A rejected/stale report returns `NOT_RECORDED`; the host must present
+that as an unconfirmed check, not successful verification.
+
+`ConnectionBinding.configuration` contains only trusted **installed** cloud configuration. It is
+optional for older hosts; pending edits and editor revision tokens must never enter credentials
+or grants. Binding `metadata` contains identity and transport settings, not access declarations.
+A provider's check can return `metadata.configuration_observation` with `configuration`,
+`role_arn`, `stack_id`, `stack_status` and `template_version`. That report is diagnostic input
+until Config validates it; neither a browser nor the host promotes it into installed state.
+
+Providers declare location syntax in `connection_defaults.location_schema`: `scheme`, `example`,
+`url_pattern`, `parse_pattern` (capture bucket and prefix), `bucket_pattern`, `scope_pattern`,
+`prefix_pattern`, `prefix_help`, and `scopes` entries (`kind`, `label`, `help`). They also declare
+`permission_switches` (`id`, configuration `field`, `purpose`, `label`, defaults) and
+`host_is_deployment`. The Hub renders these declarations; the provider checks actual storage
+coverage and ownership before provisioning.
+
+Compute's `workspace_binding_api: 1` promises to forward an explicitly selected `team_id` from
+the launch body into the Config `workspace.create` grant. Null/omitted selects organization-wide
+services. The selected team's membership is checked by Config. Connection ownership does not
+choose deployment binding. Personal service binding requires the separate deployment-record
+contract and is not represented as a team id or a one-person organization.
