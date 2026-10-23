@@ -829,6 +829,29 @@ explain the offered template, not an audit of an existing role the customer may 
 Keep the explanations with the provider's policy definition; the frontend does not interpret
 provider policies. Older answers without these fields retain the existing setup flow.
 
+Providers that can prepare changes to an existing Connection may advertise
+`connection_configuration: true`. Their onboarding route accepts `action: "create" | "update"`
+and a `configuration` object alongside the existing identity fields. Preparing instructions must
+not mutate cloud resources. An update targets the existing stack and preserves its identity;
+it must not return a create-stack link as though it were an update. Return the normalized
+configuration, downloadable template/parameters and provider-owned application instructions.
+The host separately advertises `connection_configuration_api: 1`; a frontend must require both
+markers before sending the new fields, because an older host may discard them.
+
+Installed configuration is evidence from the cloud, not a copy of the requested configuration.
+`ConnectionCheckResponse.metadata` can carry a `configuration_observation` containing the complete
+normalized `configuration`, `stack_id`, `stack_status` and `template_version`. Read these afresh
+on each check. Identity resolution alone, a running update, or a rollback is not evidence that a
+pending update succeeded. A compatible host reports the observation with the state revision it
+received before checking; the Config Service owns comparison, recording and pending-state
+promotion. The browser must not PATCH an observation into generic Connection metadata.
+
+Pending settings never authorize work. Providers use the installed declaration in the granted
+binding. A provider supporting read-only dataset locations, including prefixes, advertises
+`workspace_data_locations: true`; end-to-end callers also require the host's
+`workspace_data_locations_api: 1`. Check the writable project root and readable datasets
+independently, without broadening a folder URL to its entire bucket.
+
 ### Deployment names in the host's DNS zone
 
 A host may own a deployment DNS zone and send it on each workspace request (`dns_zone_id`,

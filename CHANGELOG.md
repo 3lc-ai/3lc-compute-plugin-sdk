@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Documented capability negotiation for Connection configuration updates and prefix-preserving
+  dataset locations, including the distinction between requested settings and trusted observations.
+
 - `ConnectionCheckResponse` carries an optional `metadata` mapping: non-secret binding facts the provider
   read back from the account, for the host to record on the Connection (for example a KEYLESS
   Connection's `write_locations` and `read_locations`). A provider that reads none sends none; a host
