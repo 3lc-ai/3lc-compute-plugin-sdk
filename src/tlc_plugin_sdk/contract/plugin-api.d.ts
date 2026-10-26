@@ -521,7 +521,10 @@ export interface PluginApi {
    * tables it names), where each piece is, and what the run would need answered. The Hub
    * does this itself before every run and asks the person; a fragment calls it only to
    * preview. Its presence also means the Hub asks where a run's data is, so the deprecated
-   * override card draws nothing. Absent on older frontends.
+   * override card draws nothing. On a Hub 1.2 host it always resolves to a plan; it rejects
+   * when the Compute Service refuses or cannot plan the run (a missing plan route is an
+   * error, never a null). What a run reads where is the host's to stamp at dispatch: the
+   * browser never sends `_alias_overrides`. Absent on older frontends.
    */
   planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;
 
