@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Plugin workers no longer resolve multidict 7.2.0, whose stricter `CIMultiDictProxy` constructor made
+  Litestar answer every request with 500; the release is excluded from the SDK's dependencies (7.2.1
+  works again).
+
+### Changed
+
+- The supported Python range is `>=3.10,<3.15`, matching the host: the core has no Python 3.15 wheels yet,
+  and uv 0.13 cannot lock a range it cannot resolve.
+
 ### Changed
 
 - `ConnectionBinding.configuration` transports installed configuration separately from identity
