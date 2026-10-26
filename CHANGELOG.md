@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The contract documents that `PLUGIN_API.planRun` always resolves to a plan on a Hub 1.2 host and
+  rejects when the run cannot be planned; the browser never sends `_alias_overrides`.
 - The supported Python range is `>=3.10,<3.15`, matching the host: the core has no Python 3.15 wheels yet,
   and uv 0.13 cannot lock a range it cannot resolve.
 
