@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tlc_plugin_sdk.lint` checks a plugin's UI fragment against the Hub's styling conventions: no hardcoded
+  colours, no inline `background`/`box-shadow`/`color`, no `!important` or `position: fixed`, and every rule in
+  the fragment's `<style>` scoped by a class or id named after the plugin. Run it as
+  `python -m tlc_plugin_sdk.lint src/`, or call `lint_plugin()` from a test (plugin guide, "Check a fragment").
+
 ### Fixed
 
 - Plugin workers no longer resolve multidict 7.2.0, whose stricter `CIMultiDictProxy` constructor made

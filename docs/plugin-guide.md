@@ -1746,6 +1746,30 @@ A sidebar plugin UI follows this shape:
 - Don't add font sizes below 10px or custom scrollbars.
 - Don't skip a dark-mode check.
 
+### Check a fragment
+
+`tlc_plugin_sdk.lint` checks a fragment against the rules above that a machine can check: no hardcoded colours
+(`hardcoded-color`), no `background`, `box-shadow` or `color` inline (`surface-inline-style`), no `!important`, no
+`position: fixed`, every rule in the fragment's `<style>` scoped by a class or id that starts with the plugin id
+(`unscoped-selector`), and no rule that styles a shared `.plugin-*` class (`shared-class-restyled`). It reads the
+markup, the `<style>` block and the strings a script builds HTML from, and it leaves a `var(--token, #fallback)`, a
+link and a comment alone.
+
+```bash
+python -m tlc_plugin_sdk.lint src/                            # every plugin under src/
+python -m tlc_plugin_sdk.lint src/tlc_plugin_my_plugin/ui.html
+```
+
+Each finding names the file, line, column and rule. To keep a clean fragment clean, test it:
+
+```python
+from tlc_plugin_sdk.lint import lint_plugin
+
+def test_the_ui_follows_the_hub_styling_conventions() -> None:
+    findings = lint_plugin("src/tlc_plugin_my_plugin")
+    assert not findings, "\n".join(map(str, findings))
+```
+
 ---
 
 ## Existing Plugins Reference
