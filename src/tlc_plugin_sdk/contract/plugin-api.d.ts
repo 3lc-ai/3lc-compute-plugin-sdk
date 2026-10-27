@@ -741,7 +741,41 @@ export interface TlcPickerApi {
   isOpen(anchor?: HTMLElement): boolean;
 }
 
+// ── The table field (Hub 1.2 and later) ─────────────────────────────────────────
+
+/**
+ * `<tlc-table-field>` — a table URL field with its Browse… button (table-field.js in the Hub).
+ * Browse…, or a double-click in the empty field, opens the Hub's table picker for it; a pick fills
+ * the field and fires `input` and `change`, which bubble from the inner input through the element.
+ * The element is the field: read and write `value` by its id.
+ *
+ * It is form-associated, so a `<label for>` labels it. The picker tags the table it holds with that
+ * label (or the `label` attribute), without a trailing "URL", in the lists the plugin's other table
+ * fields open. Attributes: `placeholder`, `value` (the first value), `required`, `disabled`, `label`.
+ *
+ * A Hub before 1.2 does not define it: a plugin that uses it sets `min_frontend_version = "1.2.0"`.
+ */
+export interface TlcTableFieldElement extends HTMLElement {
+  /** The table URL. Setting it fires no event, as on an `<input>`. */
+  value: string;
+  disabled: boolean;
+  required: boolean;
+  /** What the table picker tags this field's table with; '' when the field has no label. */
+  readonly labelText: string;
+  /**
+   * This field's selection besides its value: the picker, opened from this field, marks these tables
+   * as its own, like its current table. A field that adds to a list sets it to the list's tables, e.g.
+   * `{url, label: 'Added'}`, so the picker shows what is in the list. Reading it gives a copy; assign
+   * a new list to change it.
+   */
+  tagged: Array<{ url: string; label?: string }>;
+}
+
 declare global {
+  interface HTMLElementTagNameMap {
+    'tlc-table-field': TlcTableFieldElement;
+  }
+
   /** Injected by the frontend when a plugin fragment is mounted. */
   const PLUGIN_API: PluginApi;
 
@@ -764,7 +798,10 @@ declare global {
   // `shared.config_ui`); the picker/cancel/cssVar globals come from the frontend.
   // NOTE: there is no bare `showToast` — use `PLUGIN_API.showToast`.
 
-  /** Open the shared table-picker overlay, writing the choice back into `targetInputId`. */
+  /**
+   * Open the shared table-picker overlay, writing the choice back into `targetInputId`. On a Hub 1.2
+   * or later, prefer `<tlc-table-field>`, which opens it itself (see `TlcTableFieldElement`).
+   */
   function openTablePicker(targetInputId: string): void;
   /** Close the shared table-picker overlay. */
   function closeTablePicker(): void;
