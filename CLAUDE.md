@@ -143,10 +143,13 @@ section is the condensed working order.
 - Not found: raise `HTTPException(status_code=404)`
 
 **URL aliases** (if the plugin creates tables from image folders):
-- `from tlc_plugin_sdk.shared.aliases import register_alias`; call
-  `register_alias(project_name, image_folder, alias_token, remote_path=..., root_url=...)` before
-  the rows are written, persisting the durable folder (`alias_folder`), not a declared input the
-  host may rewrite for a node run (guide → "Data inputs and run targets").
+- Register the alias before the rows are written, persisting the durable folder (`alias_folder`),
+  not a declared input the host may rewrite for a node run (guide → "Data inputs and run targets").
+  `tlc_plugin_sdk.shared.aliases.register_alias` / `register_run_alias` do this today and are
+  deprecated in SDK 0.5.5: with 3lc 3.5, use `tlc.integration.compute.register_run_alias` inside
+  `with tlc.integration.compute.job_scope(ctx):` (guide → "Using 3LC data").
+- A plugin that reads tables in `run_job` sets `applies_alias_overrides = True` on its class and
+  runs the job inside `job_scope(ctx)`, so staged data (`ctx.alias_overrides`) is used.
 - Shared UI component: `from tlc_plugin_sdk.shared.alias_ui import alias_ui_script`; inject
   into the fragment with `inject_scripts()` (never `str.replace` — see
   `tlc_plugin_sdk/shared/ui_inject.py` for why).

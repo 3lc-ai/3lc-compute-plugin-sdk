@@ -107,6 +107,11 @@ the service.
 .. automodule:: tlc_plugin_sdk.shared.aliases
    :members:
 
+.. autoclass:: tlc_plugin_sdk.shared.alias_ui.AliasCard
+   :members:
+
+.. autofunction:: tlc_plugin_sdk.shared.alias_ui.parse_alias_card
+
 .. automodule:: tlc_plugin_sdk.shared.config_store
    :members:
 

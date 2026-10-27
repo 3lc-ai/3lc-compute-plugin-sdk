@@ -1250,11 +1250,12 @@ class MyGpuPlugin(ComputePlugin):
 | `ctx.state_dir` | Writable per-plugin scratch dir (never write inside the package). |
 | `ctx.identity` | Who the job runs for: a `JobIdentity` with `user_id`, `org_id`, `project_id` (canonical id strings, or `None` when the host did not know). Read it for attribution; never set it. |
 | `ctx.project_root_url` | The project root this job writes to, without a trailing slash: the person's choice, else the host's configured root, resolved and stamped by the host at submit. A plugin that creates tables or runs passes it as `root_url` to the core library; a plugin that derives an object from its input places it beside the input and ignores it. Never empty on a current host; a body from an older host falls back to this worker's own `tlc` root. |
+| `ctx.alias_overrides` | The aliases the host re-pointed at data it staged for this run, as `AliasOverride(token, path)` values; empty when nothing was staged. Applied by a plugin that declares `applies_alias_overrides` (see [Using 3LC data](#using-3lc-data)). |
 | `ctx.progress(*, percent, label="", timing=None)` | Generic progress bar. `percent=-1` = indeterminate. `timing` = `{elapsed_s, eta_s, avg_step_s, step_label}`. |
 | `ctx.metric(label, value)` | Scalar metric card on the generic panel. |
 | `ctx.log(message)` | A log line for the job. |
 | `ctx.result(url)` | The canonical result link the Open button opens — a run *or* a table URL (last write wins). |
-| `ctx.fail(message)` | Fail the job with a clean, user-facing message (raises `JobFailed`; reported verbatim, no type prefix). |
+| `ctx.fail(message)` | Fail the job with a clean, user-facing message (raises `JobFailed`; reported verbatim, no type prefix). Any exception whose class sets `user_facing = True` is reported the same way. |
 | `ctx.emit(name, payload)` | A **custom** event for the plugin's OWN rich UI (see below). |
 
 **The host owns listing and cancellation — there is nothing to implement.** Because the
@@ -1299,19 +1300,21 @@ plugin remote-ready; all are optional locally and additive:
   store, also accept the frozen configuration inline (recommended key:
   `project_config`) and prefer it when present; have your fragment always include it in
   the run body (harmless locally, required remotely).
-- **`_alias_overrides` is applied by the worker.** When a table's data has been staged
+- **`_alias_overrides` becomes `ctx.alias_overrides`.** When a table's data has been staged
   somewhere else for this worker (a copy on a remote node), the host puts
   `{"enabled": true, "overrides": [{"token": "MY_DATA", "path": "/staged/…"}]}` at the top
-  level of the run body (tokens are bare, no angle brackets). The worker registers those
-  aliases before `run_job` and restores them after, so the table resolves to the staged copy
-  with no code in the plugin. A plugin that persists its own alias overrides with its saved
-  config keeps applying those itself; a plugin that used to read the top-level key can drop
-  that code (applying the same override twice is a no-op).
+  level of the run body (tokens are bare, no angle brackets), and the SDK reads it as
+  `ctx.alias_overrides`. A plugin that declares `applies_alias_overrides = True` applies them
+  itself, through 3LC (see [Using 3LC data](#using-3lc-data)). For a plugin that does not, the
+  worker still registers those aliases before `run_job` and restores them after, and says in the
+  job log that SDK 0.6 stops doing so. Either way the overrides are process-wide: the worker
+  refuses (409) a run that needs an alias elsewhere than a job still running on it. A plugin
+  that persists its own alias overrides with its saved config keeps applying those itself.
 - **`run_target` is host-owned.** The run body may carry `run_target` (where to run); the
   host consumes it before params reach the worker — never read or set it in a plugin. The
   same goes for `prepare_job_ids` (the data-copy jobs a remote run waits for): the host pops
-  it, orders the run behind the copies, and delivers their result as `_alias_overrides`,
-  which the worker applies for you.
+  it, orders the run behind the copies, and delivers their result as `_alias_overrides`
+  (`ctx.alias_overrides`).
 - **`project_root_url` is stamped by the host and becomes `ctx.project_root_url`.** Every run body
   carries the root the job writes to: the value the fragment sent (the shared "Create project in"
   select; validated, and refused in words for a node run when a node cannot write it), else the
@@ -1362,19 +1365,23 @@ expose `start`/`status`/`cancel` as `POST /infra/storage/bundle`, `GET /infra/st
 and renames inside one provider run the same way through
 `tlc_plugin_sdk.shared.storage_transfer.TransferRegistry` (`POST /infra/storage/transfer`,
 `GET`/`DELETE /infra/storage/transfer/{id}`); a failed copy never deletes its source. When a
-transfer finishes — done, failed or cancelled — the registry tells 3LC object discovery about
-every table, run or `.3lc.yaml` object it wrote or removed, so the Object Service lists the
-moved objects without a rescan; a notification that fails is reported in the status
-payload's `warnings`, never as a failed transfer. A plugin that deletes raw storage itself
-calls `notify_storage_deletes(urls, removed_folders=...)` from the same module for the same
-effect.
+transfer finishes — done, failed or cancelled — the registry calls its `on_change` once with
+every URL it wrote and every URL it deleted. Pass `on_change=tlc.discovery.notify_storage_changes`
+(3lc 3.5): it tells 3LC object discovery about the tables, runs and `.3lc.yaml` objects among
+them, so the Object Service lists the moved objects without a rescan. A callback that fails is
+reported in the status payload's `warnings`, never as a failed transfer; `on_change=None` tells
+nobody. A registry built without `on_change` still notifies 3LC discovery through the SDK, with a
+deprecation warning: SDK 0.6 requires `on_change`. A plugin that deletes raw storage itself calls
+`tlc.discovery.notify_storage_changes((), urls, removed_folders=...)` for the same effect (the
+SDK's `notify_storage_deletes` is deprecated).
 
 **Paths or URLs, one vocabulary** (import and export plugins): people point at a folder on the
 machine the run reads from (`/data/coco`) or at a bucket (`s3://bucket/data/coco`), and the shared
-data-source picker offers both for the current run target. `tlc_plugin_sdk.shared.url_utils` (`is_url`, `join_path_or_url`, `parent_of`,
-`iter_files`, `read_bytes`, …) lets a plugin treat the two alike — URLs go through `tlc.Url`
-and its adapters, the same transport and credentials that read and write tables, so no extra
-cloud SDKs.
+data-source picker offers both for the current run target. `tlc_plugin_sdk.shared.url_utils`'s string
+helpers (`is_url`, `join_path_or_url`, `parent_of`, `name_of`, …) let a plugin treat the two alike.
+To read and list them, use `tlc.Url` (`read_bytes`, and from 3lc 3.5 `is_dir`, `is_file`, `list_dir`,
+`iter_files`), the same transport and credentials that read and write tables, so no extra cloud
+SDKs; the SDK's own `read_bytes`, `iter_files` and the other storage helpers are deprecated.
 
 **When a table has landed** (importers, converters): end the same way every time. Inject
 `tlc_plugin_sdk.shared.table_landed.table_landed_script()` and render
@@ -1397,6 +1404,71 @@ consumer. Neither affects a local Unix-socket worker. Every worker also answers 
 (`{"active_jobs": n}`, read before a remote worker's machine is torn down) and
 `POST /jobs/cancel-all` (what a host calls after a restart it could not re-attach to);
 plugins implement neither.
+
+## Using 3LC data
+
+Most plugins read and write 3LC tables and runs, through the `3lc` package (`import tlc`). The SDK
+is the contract between a plugin and the Hub; working with 3LC data is 3lc's own API. From SDK 0.6
+the SDK does not import 3lc at all, so a plugin that does:
+
+- **declares `3lc` in its own dependencies**, pinned to the 3lc it is tested against (the SDK
+  0.5 line still brings it along; 0.6 does not);
+- **uses 3lc's API for 3LC data**, not the `shared.*` helpers that wrap it. Those helpers are
+  deprecated in SDK 0.5.5 and removed in 0.6; each one's `DeprecationWarning` names its 3lc 3.5
+  replacement (`tlc.helpers.ImageHelper`, `AnnotationHelper.detect_task`, `ModelHelper`,
+  `ProjectHelper.register_data_alias`, `tlc.Url.iter_files`, …), and the changelog lists them all.
+
+What follows is forthcoming in **3lc 3.5**. A plugin can make each change on SDK 0.5.5, test it
+there, and then widen its pin to `<0.7` with no change in behaviour.
+
+### Staged data: declare it and apply it
+
+When the host stages a table's data for a run (a copy on a GPU node), the run reads the copy only
+while the table's aliases point at it: `ctx.alias_overrides` says where they point for this run.
+A plugin that reads tables applies them around everything the job does, and says so:
+
+```python
+import tlc.integration.compute
+from tlc_plugin_sdk import ComputePlugin, JobContext
+
+
+class MyTrainer(ComputePlugin):
+    applies_alias_overrides = True  # this plugin applies the run's staged data itself
+
+    def run_job(self, ctx: JobContext) -> None:
+        with tlc.integration.compute.job_scope(ctx):  # applies ctx.alias_overrides, restores on exit
+            table = tlc.Table.from_url(ctx.params["table_url"])
+            ...
+```
+
+`job_scope(ctx)` reads `ctx.alias_overrides`, points the aliases at the staged copy for the length of
+the block and puts them back afterwards; it is also where `tlc.integration.compute.register_run_alias`
+registers the alias of a table the job writes. Both parts are needed:
+
+- `applies_alias_overrides = True` tells the worker (and, on `/health`, the host) that the plugin
+  applies the overrides, so the worker does not. Left at `False`, SDK 0.5.5 still applies them for the
+  plugin, process-wide, and says in the job log that 0.6 stops; on SDK 0.6 a job whose data was
+  staged fails before `run_job`, because it would read the original locations.
+- `with job_scope(ctx):` applies them. A plugin that declares but never reads `ctx.alias_overrides`
+  in a job with staged data gets a warning in the job log.
+
+The overrides are process-wide, so threads the job starts (data loaders, thread pools) see them too.
+The worker refuses (409) a run that needs an alias somewhere else than a job still running on it.
+
+### Errors written for people
+
+The worker shows an exception's message on the job card as it is when the exception's class sets
+`user_facing = True` (`JobFailed`, and so `ctx.fail`, does), and any other as
+`"TypeName: message"`. 3lc's alias errors set it, so a missing alias or a local folder for a cloud
+project reaches the person as 3lc words it, with nothing to catch. Your own error classes can set
+it too.
+
+### Storage plugins: tell discovery what changed
+
+A storage provider's `TransferRegistry` takes `on_change=tlc.discovery.notify_storage_changes`, so the
+Object Service lists what a copy or move wrote and removed (see
+[Run-body conventions for remote workers](#run-body-conventions-for-remote-workers) for the registry).
+Import it inside the provider's facet method, so the worker does not load 3lc until storage is used.
 
 ---
 
@@ -1438,7 +1510,9 @@ data *for this run*, not where it lives:
   rewritten input. Read the data from the input; persist the alias from `alias_folder`.
 - **Register the alias before writing rows.** For a table written from a folder the person
   picked, call `register_run_alias(ctx.params, <the folder you read>, project_name=…,
-  root_url=ctx.project_root_url)` before the table writer runs: rows written first keep absolute
+  root_url=ctx.project_root_url)` (deprecated: from 3lc 3.5,
+  `tlc.integration.compute.register_run_alias(ctx, <the folder you read>, project_name=…)` inside
+  `job_scope`, see [Using 3LC data](#using-3lc-data)) before the table writer runs: rows written first keep absolute
   paths, and an absolute path from a node is useless everywhere else. It reads the alias card's
   values (including `alias_source_folder`, the folder as picked, which the host never rewrites)
   and applies one rule (`register_source_alias`): the saved alias points at `alias_folder`; when
@@ -2062,7 +2136,9 @@ and clearing it restores the suggestion. Bind it with `_tlcBindAliasAutoUpdate` 
 `_tlcAliasLocationError(prefix)` before submitting a table-creation request. It explains a local
 source/cloud project mismatch beside the mapping and follows changes to the selected project root.
 
-`register_alias` enforces the same rule before either persistent or session registration: a cloud
+`register_alias` (deprecated; 3lc 3.5's `tlc.helpers.ProjectHelper.register_data_alias` raises
+`tlc.url.AliasLocationError` for the same case) enforces the same rule before either persistent or
+session registration: a cloud
 project cannot default to a machine-local source. It raises `JobFailed` for that combination; call
 it before constructing a table writer. Omitted roots use `tlc.config.project_root_url`, matching the
 writer. Validate the durable source, never a temporary stage: `image_folder` may be local when
