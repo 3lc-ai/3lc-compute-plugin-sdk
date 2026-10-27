@@ -119,3 +119,13 @@ def test_the_run_target_carries_its_label_and_the_plan_is_optional() -> None:
         "browse_roots",
     }
     assert "planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;" in dts
+
+
+def test_the_value_picker_is_an_optional_frontend_global() -> None:
+    # Hub 1.2 adds it, and a fragment can meet an older Hub: the declarations keep it optional.
+    dts = _dts_text()
+    assert "const TlcPicker: TlcPickerApi | undefined;" in dts
+    assert "TlcPicker?: TlcPickerApi;" in dts
+    api = re.search(r"export interface TlcPickerApi\s*\{(.*?)\n\}", dts, re.DOTALL)
+    assert api
+    assert set(re.findall(r"^\s*(\w+)\(", api.group(1), re.MULTILINE)) == {"open", "close", "isOpen"}

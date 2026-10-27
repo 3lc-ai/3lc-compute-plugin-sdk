@@ -684,9 +684,69 @@ export interface TlcApi {
   waitForMode(): Promise<void>;
 }
 
+// ── The value picker (Hub 1.2 and later) ────────────────────────────────────────
+
+/**
+ * A row of a `TlcPicker.open()` list: an option (`value`, `label`), a header (`{group}`) or a
+ * rule (`{separator: true}`). `onPick` and `remove.run` get a copy of the item with all of its
+ * fields, so it may carry fields of the caller's own.
+ */
+export interface TlcPickerItem {
+  value?: string;
+  label?: string;
+  /** Muted text at the row's end, such as "2 days ago". */
+  hint?: string;
+  disabled?: boolean;
+  /** A header row with this text. */
+  group?: string;
+  /** A rule between rows. */
+  separator?: boolean;
+  /**
+   * Makes the row removable: a trash button on hover, or Delete on the active row (Shift+Delete
+   * when the anchor is a text field), turns the row into the confirmation in place. When `run`
+   * resolves the row goes away; when it rejects the row comes back with the error as its hint.
+   */
+  remove?: {
+    /** The confirming button's text; "Delete" by default. */
+    label?: string;
+    /** The question in the row; "Delete “<label>”?" by default. */
+    confirm?: string;
+    run(item: TlcPickerItem): unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface TlcPickerOptions {
+  items: TlcPickerItem[];
+  /** The value of the row that gets the ✓ and is active first. */
+  value?: string;
+  /** Called with the picked item, after the list closed. */
+  onPick?(item: TlcPickerItem): void;
+  /** Called once when the list closes, picked or not. */
+  onClose?(): void;
+}
+
+/**
+ * `TlcPicker` — the list a dropdown opens in the Hub (value-picker.js). Every single-choice
+ * `<select>` in a fragment opens it by itself; `open()` shows it for a menu that is not a
+ * select. Focus stays on the anchor, which carries `aria-expanded`, `aria-controls` and
+ * `aria-activedescendant` while the list is open. A Hub before 1.2 has no `TlcPicker`.
+ */
+export interface TlcPickerApi {
+  /** Show the list under `anchor`, closing any other list first. */
+  open(anchor: HTMLElement, opts: TlcPickerOptions): { close(): void };
+  /** Close the open list, if there is one. */
+  close(): void;
+  /** Whether the list is open under `anchor`, or open at all without one. */
+  isOpen(anchor?: HTMLElement): boolean;
+}
+
 declare global {
   /** Injected by the frontend when a plugin fragment is mounted. */
   const PLUGIN_API: PluginApi;
+
+  /** The Hub's list for dropdowns; feature-detect it (`typeof TlcPicker !== 'undefined'`). */
+  const TlcPicker: TlcPickerApi | undefined;
 
   /** Injected by `3lc-compute-plugin-sdk` (`shared.job_tracker`) into the plugin fragment. */
   const PluginJobs: PluginJobsApi;
@@ -808,6 +868,7 @@ declare global {
     PLUGIN_API: PluginApi;
     PluginJobs: PluginJobsApi;
     TlcApi: TlcApi;
+    TlcPicker?: TlcPickerApi;
   }
 }
 
