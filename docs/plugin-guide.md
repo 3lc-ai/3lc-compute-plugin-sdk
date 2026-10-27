@@ -1642,6 +1642,21 @@ if (typeof TlcPicker !== 'undefined') {
 
 Items can also be `{group: 'Saved'}` headers. `remove.run` returns a promise: the row goes when it resolves, and shows the error when it rejects. See `TlcPickerApi` in `plugin-api.d.ts` for the rest.
 
+**Table fields.** For a field that holds a table URL, write the Hub's `<tlc-table-field>` instead of your own `<input>` and Browse button:
+
+```html
+<div class="form-group">
+  <label class="form-label required" for="source-table">Source table</label>
+  <tlc-table-field id="source-table" placeholder="Paste URL or click Browse…" required></tlc-table-field>
+</div>
+```
+
+It is a text field with a Browse… button. Browse…, or a double-click in the empty field, opens the Hub's Browse Tables dialog. The element is the field, so your code stays as it was: `document.getElementById('source-table').value` reads and writes the URL, and `input` and `change` from it reach `oninput=` and your listeners, for a typed URL and a picked one alike. Browse Tables opens at the table the field holds, and tags the tables your other table fields hold with their labels ("Source table"), so a second pick starts where the first one is. Label the field with a `<label for>`, or give it a `label` attribute.
+
+For a list of tables, put one field below the list to add to it: take its value on `change`, add it to the list, and empty the field. Set the field's `tagged` to the list's tables (`field.tagged = urls.map(url => ({url, label: 'Added'}))`) and Browse Tables tags them, so it shows what is already in the list.
+
+A Hub before 1.2 doesn't define the element, so a plugin that uses it sets `min_frontend_version = "1.2.0"` in `plugin.toml`. The bare `openTablePicker(inputId)` still works for a field you build yourself, without the double-click or the tags. See `TlcTableFieldElement` in `plugin-api.d.ts`.
+
 ### Buttons
 
 Use `.btn` plus one variant. Never define your own button styles.

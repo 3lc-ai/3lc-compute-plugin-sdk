@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The contract declares `<tlc-table-field>` (`TlcTableFieldElement`), the Hub 1.2 field for a table
+  URL with its Browse… button. Browse…, or a double-click in the empty field, opens Browse Tables,
+  which opens at the field's table and tags the tables the plugin's other table fields hold. The
+  element is the field: plugin code reads and writes its `value` by id, and its `input` and `change`
+  events bubble. Its `tagged` list names more tables for the picker to tag, for a field that adds
+  to a list. The guide's Forms section describes it; a plugin that uses it sets
+  `min_frontend_version = "1.2.0"`.
 - The contract declares `TlcPicker`, the list a dropdown opens on a Hub 1.2 or later, in place of the
   operating system's menu. A plain `<select>` gets it with no change to the plugin;
   `TlcPicker.open()` shows it for other menus, with hints and removable rows. The guide's Forms
