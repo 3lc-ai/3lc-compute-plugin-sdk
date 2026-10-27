@@ -1621,6 +1621,42 @@ Wrap each field in `.form-group`; label it with `.form-label`; use `.form-contro
 - Placeholders render dimmed + italic automatically.
 - **Required-field cue — worth adopting:** put both `required` **and** a `placeholder` on a required text field. While the field is empty (its placeholder still showing) the host paints it with a muted red wash (`:required:placeholder-shown`), which clears the instant the user types. A free "you still need to fill this in" signal — no JS.
 
+**Dropdowns.** On a Hub 1.2 or later, a `<select>` opens the Hub's own list, in the theme's colours, instead of the operating system's menu. There is nothing to do for it: the `<select>` stays the control your code reads and sets, and a pick fires `input` and `change` as before. So don't build a dropdown of your own just to pick a value. Multi-select lists, `size > 1` and touch devices keep the native control. To keep the system menu for one select, put `data-native-select` on it or on an element around it.
+
+For a menu that is not a plain select, such as rows with a hint or rows that can be removed, show the same list with `TlcPicker.open(anchor, {items, value, onPick})`. A Hub before 1.2 has no `TlcPicker`, so feature-detect it and fall back to a `<select>`:
+
+```js
+if (typeof TlcPicker !== 'undefined') {
+  TlcPicker.open(button, {
+    value: currentPresetId,
+    items: [
+      { value: 'defaults', label: 'Defaults' },
+      { separator: true },
+      { value: 'p1', label: 'Small objects 1280', hint: '2 days ago',
+        remove: { confirm: 'Delete this preset?', run: item => deletePreset(item.value) } },
+    ],
+    onPick: item => applyPreset(item.value),
+  });
+}
+```
+
+Items can also be `{group: 'Saved'}` headers. `remove.run` returns a promise: the row goes when it resolves, and shows the error when it rejects. See `TlcPickerApi` in `plugin-api.d.ts` for the rest.
+
+**Table fields.** For a field that holds a table URL, write the Hub's `<tlc-table-field>` instead of your own `<input>` and Browse button:
+
+```html
+<div class="form-group">
+  <label class="form-label required" for="source-table">Source table</label>
+  <tlc-table-field id="source-table" placeholder="Paste URL or click Browse…" required></tlc-table-field>
+</div>
+```
+
+It is a text field with a Browse… button. Browse…, or a double-click in the empty field, opens the Hub's Browse Tables dialog. The element is the field, so your code stays as it was: `document.getElementById('source-table').value` reads and writes the URL, and `input` and `change` from it reach `oninput=` and your listeners, for a typed URL and a picked one alike. Browse Tables opens at the table the field holds, and tags the tables your other table fields hold with their labels ("Source table"), so a second pick starts where the first one is. Label the field with a `<label for>`, or give it a `label` attribute.
+
+For a list of tables, put one field below the list to add to it: take its value on `change`, add it to the list, and empty the field. Set the field's `tagged` to the list's tables (`field.tagged = urls.map(url => ({url, label: 'Added'}))`) and Browse Tables marks them as this field's selection, so it shows what is already in the list.
+
+A Hub before 1.2 doesn't define the element, so a plugin that uses it sets `min_frontend_version = "1.2.0"` in `plugin.toml`. The bare `openTablePicker(inputId)` still works for a field you build yourself, without the double-click or the tags. See `TlcTableFieldElement` in `plugin-api.d.ts`.
+
 ### Buttons
 
 Use `.btn` plus one variant. Never define your own button styles.
