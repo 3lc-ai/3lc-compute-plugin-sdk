@@ -763,9 +763,10 @@ export interface TlcTableFieldElement extends HTMLElement {
   /** What the table picker tags this field's table with; '' when the field has no label. */
   readonly labelText: string;
   /**
-   * Tables the picker also tags when opened from this field. A field that adds to a list sets it to
-   * the list's tables, e.g. `{url, label: 'Added'}`, so the picker shows what is in the list. Reading
-   * it gives a copy; assign a new list to change it.
+   * This field's selection besides its value: the picker, opened from this field, marks these tables
+   * as its own, like its current table. A field that adds to a list sets it to the list's tables, e.g.
+   * `{url, label: 'Added'}`, so the picker shows what is in the list. Reading it gives a copy; assign
+   * a new list to change it.
    */
   tagged: Array<{ url: string; label?: string }>;
 }
