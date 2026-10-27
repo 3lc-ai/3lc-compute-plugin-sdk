@@ -147,8 +147,8 @@ function _tlcPluginPresets(opts) {
 
   var ID_FIELDS = { id: 1, name: 1, created: 1, last_run: 1 };
   var CSS =
-    ".tlc-presets select { max-width: 460px; }" +
-    ".tlc-presets input.form-control { flex: 1; max-width: 460px; font-size: 12px; }" +
+    ".tlc-presets select { max-width: 640px; }" +
+    ".tlc-presets input.form-control { flex: 1; max-width: 640px; font-size: 12px; }" +
     ".tlc-presets .tlc-presets-note { font-size: 11px; color: var(--text-muted); }" +
     ".tlc-presets .tlc-presets-note.is-error { color: var(--danger); }" +
     ".tlc-presets .tlc-presets-icon { display: inline-flex; padding: 4px 6px; line-height: 0; }" +
