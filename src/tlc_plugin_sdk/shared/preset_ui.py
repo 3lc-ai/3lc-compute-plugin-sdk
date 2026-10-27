@@ -150,7 +150,8 @@ function _tlcPluginPresets(opts) {
   // place and nothing moves sideways.
   var CSS =
     ".tlc-presets select, .tlc-presets input.form-control" +
-    " { flex: 0 1 640px; min-width: 0; max-width: 640px; font-size: 12px; font-weight: 500; }" +
+    " { flex: 0 1 640px; min-width: 0; max-width: 640px; height: 36px; box-sizing: border-box;" +
+    " font-size: 12px; font-weight: 500; }" +
     ".tlc-presets .tlc-presets-mode { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }" +
     ".tlc-presets .tlc-presets-note { font-size: 11px; color: var(--text-muted); }" +
     ".tlc-presets .tlc-presets-note.is-error { color: var(--danger); }" +
