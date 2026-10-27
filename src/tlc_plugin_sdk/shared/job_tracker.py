@@ -171,6 +171,14 @@ JOB_TRACKER_JS = r"""
       buffer = [];
       pending.forEach(dispatch);
       return resp;
+    }, function(err){
+      // A start the compute refused (a 409 with its reason, a 403, an unreachable service): the Hub's
+      // authFetch rejects with the reason, and the card's onError is where the person reads it. Without
+      // this the rejection escaped run() unhandled and the card showed nothing.
+      cleanup();
+      var emsg = (err && err.message) || (err ? String(err) : '') || 'Failed to start job';
+      if (handlers.onError) { handlers.onError({ status: 'failed', error: emsg, subtitle: emsg }); }
+      return { error: emsg };
     });
   }
 
