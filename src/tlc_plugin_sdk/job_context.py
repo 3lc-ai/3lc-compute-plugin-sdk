@@ -19,7 +19,7 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 IDENTITY_KEY = "_identity"
 #: The run-body key carrying the project root the job writes to; the host stamps it at submit.
 PROJECT_ROOT_KEY = "project_root_url"
+#: The host-owned top-level run-body key carrying the aliases it re-pointed at staged data
+#: (``{"enabled": true, "overrides": [{"token": …, "path": …}]}``). Read it as
+#: :attr:`JobContext.alias_overrides`; a plugin never sets it.
+ALIAS_OVERRIDES_KEY = "_alias_overrides"
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,52 @@ def _str_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+@dataclass(frozen=True)
+class AliasOverride:
+    """One URL alias the host re-pointed for a run, because it staged the alias's data elsewhere.
+
+    The host copies a table's data to where the run target can read it (a folder on a GPU node)
+    and sends, for each alias the table refers to, where the copy is. Reading the table through
+    the alias then reads the copy. See :attr:`JobContext.alias_overrides`.
+
+    Attributes:
+        token: The alias name, bare: ``COCO_IMAGES``, without angle brackets.
+        path: The folder or URL the alias points to for this run.
+
+    """
+
+    token: str
+    path: str
+
+
+def _parse_alias_overrides(raw: object) -> tuple[AliasOverride, ...]:
+    """The overrides in a run body's :data:`ALIAS_OVERRIDES_KEY` value, tolerating anything.
+
+    Absent, disabled or malformed reads as none; an entry without a token or a path is skipped,
+    and the first entry for a token wins. The host is the only writer, and a job must not fail
+    over a stale entry.
+    """
+    if not isinstance(raw, dict) or raw.get("enabled") is not True:
+        return ()
+    entries = raw.get("overrides")
+    if not isinstance(entries, list):
+        return ()
+    overrides: dict[str, AliasOverride] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        token, path = entry.get("token"), entry.get("path")
+        if not isinstance(token, str) or not isinstance(path, str):
+            continue
+        token = token.strip()
+        if token.startswith("<") and token.endswith(">"):
+            token = token[1:-1].strip()
+        path = path.strip()
+        if token and path and token not in overrides:
+            overrides[token] = AliasOverride(token=token, path=path)
+    return tuple(overrides.values())
+
+
 class JobFailed(Exception):
     """Fail the current job with a clean, user-facing message.
 
@@ -95,7 +145,16 @@ class JobFailed(Exception):
     prefix); any *other* exception is reported as ``f"{type}: {exc}"``. So a plugin
     reaches for this (or ``ctx.fail``) when it has a message worth showing the user,
     and lets ordinary exceptions propagate for genuine faults.
+
+    The rule behind it is the class attribute :attr:`user_facing`: the worker shows the message
+    of any exception whose class sets ``user_facing = True`` verbatim. A library whose errors are
+    written for people (3LC's alias errors, say) sets it on its own exception classes, so they
+    reach the job card as written without importing this SDK or being wrapped in ``JobFailed``.
     """
+
+    #: The worker reports an exception whose class sets this to ``True`` with its message alone.
+    #: Only ``True`` itself counts, and only on the class (an instance attribute does not).
+    user_facing: ClassVar[bool] = True
 
 
 class JobContext:
@@ -117,7 +176,8 @@ class JobContext:
             job, and ``None`` (with a warning) for several. Token values never belong in saved
             parameters or output.
 
-    ``project_root_url`` (a property) is the root the job writes to — see there.
+    ``project_root_url`` (a property) is the root the job writes to, and ``alias_overrides`` (a
+    property) the aliases the host re-pointed at data it staged for this run — see there.
 
     """
 
@@ -161,6 +221,8 @@ class JobContext:
         self._sink = sink
         self._cancel = cancel_event
         self._project_root: str | None = None
+        self._alias_overrides = _parse_alias_overrides(self.params.get(ALIAS_OVERRIDES_KEY))
+        self._alias_overrides_read = False
 
     @property
     def credential(self) -> SecretToken | None:
@@ -209,6 +271,30 @@ class JobContext:
             except Exception:
                 self._project_root = ""
         return self._project_root
+
+    @property
+    def alias_overrides(self) -> tuple[AliasOverride, ...]:
+        """The URL aliases the host re-pointed for this run, because it staged their data elsewhere.
+
+        When a run target cannot read a table's data where it is (a GPU node and a folder on the
+        compute host), the host copies the data there before the run and sends, for each alias
+        the table refers to, where the copy is. A table read through ``<TOKEN>`` reads the copy
+        only while that override is applied, so a plugin that reads tables applies them around
+        everything the job does. Empty when nothing was staged for this run.
+
+        Applying them is the plugin's part: it declares
+        :attr:`~tlc_plugin_sdk.ComputePlugin.applies_alias_overrides` and, with 3lc 3.5, runs
+        the job inside ``with tlc.integration.compute.job_scope(ctx):``. The worker then leaves
+        them alone. For a plugin that does not declare it, the worker still applies them
+        process-wide around ``run_job``, which SDK 0.6 stops doing.
+
+        Parsed from the run body's ``_alias_overrides``: tokens bare (no angle brackets), entries
+        without a token or a path skipped, the first entry for a token kept, and a malformed value
+        read as empty. Reading this property records that the plugin looked: the worker warns when
+        a plugin that declared it applies overrides never reads them.
+        """
+        self._alias_overrides_read = True
+        return self._alias_overrides
 
     @property
     def cancelled(self) -> bool:

@@ -50,6 +50,8 @@ def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
         # the venv unless the worker says so. The host compares it against its own on
         # MAJOR.MINOR and flags skew on the plugin card. Additive wire capabilities are
         # advertised separately so a staged rollout never sends secrets to an older worker.
+        # ``applies_alias_overrides`` says whether the plugin applies a run's staged data itself
+        # (SDK >= 0.5.5); a host can refuse to stage data for one that does not.
         from tlc_plugin_sdk import SDK_CONTRACT_VERSION
 
         return {
@@ -57,6 +59,7 @@ def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
             "plugin": getattr(plugin, "id", "?"),
             "sdk_version": SDK_CONTRACT_VERSION,
             "capabilities": ["job_credentials_by_service"],
+            "applies_alias_overrides": getattr(plugin, "applies_alias_overrides", False) is True,
         }
 
     # def + sync_to_thread: get_ui_fragment()/compute() are synchronous and may do

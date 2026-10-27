@@ -15,6 +15,12 @@ package's own docstrings.
 .. autoclass:: tlc_plugin_sdk.JobIdentity
    :members:
 
+.. autoclass:: tlc_plugin_sdk.AliasOverride
+   :members:
+
+.. autoclass:: tlc_plugin_sdk.JobFailed
+   :members:
+
 .. autodata:: tlc_plugin_sdk.SDK_CONTRACT_VERSION
 ```
 

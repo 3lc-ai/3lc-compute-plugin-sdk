@@ -33,7 +33,7 @@ job-queue *lane* (``[runtime] long_running``); each is set independently. There 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from tlc_plugin_sdk.job_context import JobContext
@@ -112,7 +112,20 @@ class ComputePlugin(HubPlugin):
     Job listing, busy checks, and cancellation deliberately do NOT live on the
     plugin: the host owns every job's lifecycle (it started the job via run_job),
     so it lists, gates, and cancels.  A plugin only implements run_job.
+
+    Attributes:
+        applies_alias_overrides: Whether ``run_job`` applies the aliases the host re-pointed at
+            data it staged for the run (:attr:`JobContext.alias_overrides`) itself. Declare it,
+            ``applies_alias_overrides = True`` on the class, when ``run_job`` runs inside
+            ``with tlc.integration.compute.job_scope(ctx):`` (3lc 3.5). The worker then leaves
+            the overrides to the plugin. Left ``False``, the worker applies them process-wide
+            around ``run_job``, which SDK 0.6 stops doing: there an undeclared plugin's job
+            fails before it starts when the host staged data for it. Reported to the host on
+            ``/health``.
+
     """
+
+    applies_alias_overrides: ClassVar[bool] = False
 
     def initialise_runtime(self) -> None:
         """Initialise the plugin's runtime resources (runners, stores, models).

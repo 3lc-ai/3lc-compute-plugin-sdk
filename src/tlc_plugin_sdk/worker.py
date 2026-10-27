@@ -28,6 +28,15 @@ it adds the job channel the host supervisor drives:
 
 Job ids come from the host and are used as a directory name under the state root, so
 they must match ``[A-Za-z0-9_-]{1,64}``; a run for an id that is still live answers 409.
+So does a run whose staged data re-points an alias that a live job here reads from another
+place (see :class:`AliasOverrideConflict`).
+
+A run's alias overrides (:attr:`JobContext.alias_overrides`) are the plugin's to apply when it
+declares :attr:`ComputePlugin.applies_alias_overrides`; otherwise the worker applies them
+process-wide around ``run_job``, shared by the jobs that use the same ones, until SDK 0.6.
+
+An exception whose class sets ``user_facing = True`` (:class:`JobFailed` among them) ends the
+job with its message verbatim; any other with ``"TypeName: message"``.
 
 GPU memory is reclaimed automatically after every job, before the terminal event is
 emitted. ``/reclaim`` exists because only the host can see *across* workers: this
@@ -57,7 +66,7 @@ import sys
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import anyio
 from litestar import Request, Response, get, post
@@ -71,7 +80,7 @@ from tlc_plugin_sdk.connections import (
     bound_credential,
     bound_credentials,
 )
-from tlc_plugin_sdk.job_context import IDENTITY_KEY, JobContext, JobFailed, JobIdentity
+from tlc_plugin_sdk.job_context import IDENTITY_KEY, AliasOverride, JobContext, JobFailed, JobIdentity
 
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
@@ -133,6 +142,34 @@ class JobAlreadyRunning(RuntimeError):
     """A ``/jobs/{id}/run`` arrived for an id whose job is still live here."""
 
 
+class AliasOverrideConflict(RuntimeError):
+    """A run's staged data re-points an alias that a job still live here reads from another place.
+
+    Alias overrides are process-wide: one worker resolves an alias one way at a time. Two jobs that
+    stage the same data at the same place share the override; a job that needs it elsewhere waits
+    until the other has ended. Answered with 409 and the message.
+    """
+
+
+def _same_place(a: str, b: str) -> bool:
+    return (a.rstrip("/") or a) == (b.rstrip("/") or b)
+
+
+def _override_conflict(job: _Job, live: list[_Job]) -> str | None:
+    """The sentence refusing *job*, when one of its overrides disagrees with a live job's; else None."""
+    for other in live:
+        theirs = {o.token: o.path for o in other.alias_overrides}
+        for override in job.alias_overrides:
+            path = theirs.get(override.token)
+            if path is not None and not _same_place(path, override.path):
+                return (
+                    f"This run's data for <{override.token}> was staged at {override.path}, but job "
+                    f"{other.job_id}, still running on this worker, reads <{override.token}> from {path}, and "
+                    "one worker resolves an alias one way at a time. Run it again when that job has ended."
+                )
+    return None
+
+
 class _Worker:
     """Holds the single plugin instance and its in-flight jobs."""
 
@@ -158,6 +195,11 @@ class _Worker:
                 # uncounted by /busy (the node could be terminated under it).
                 msg = f"job {job_id!r} is still running on this worker"
                 raise JobAlreadyRunning(msg)
+            # Overrides are process-wide, whoever applies them (this worker or the plugin through
+            # 3LC): refuse a job that needs an alias elsewhere than a live job, before it starts.
+            conflict = _override_conflict(job, [j for j in self._jobs.values() if j.is_alive()])
+            if conflict is not None:
+                raise AliasOverrideConflict(conflict)
             self._jobs[job_id] = job
         try:
             state_dir.mkdir(parents=True, exist_ok=True)
@@ -311,6 +353,9 @@ class _Job:
             credential=credential,
             credentials=credentials,
         )
+        # Read here without marking them read: the worker's own use must not hide a plugin that
+        # declared it applies them but never looks.
+        self.alias_overrides: tuple[AliasOverride, ...] = self.ctx._alias_overrides
         self._plugin = plugin
         self._thread = threading.Thread(target=self._run, name=f"job-{job_id}", daemon=True)
 
@@ -353,6 +398,50 @@ class _Job:
             return
         self.events.put(event)
 
+    @contextlib.contextmanager
+    def _staged_aliases(self) -> Iterator[None]:
+        """Around ``run_job``: the run's alias overrides, applied by the plugin or by the worker.
+
+        A plugin that declares ``applies_alias_overrides`` applies them itself, so the worker
+        only checks afterwards that it read them. For any other plugin the worker applies them
+        process-wide, as every SDK before 0.5.5 did, and says in the job log that SDK 0.6 stops.
+        """
+        overrides = self.alias_overrides
+        if not overrides:
+            yield
+            return
+        plugin_id = getattr(self._plugin, "id", "?")
+        tokens = ", ".join(f"<{o.token}>" for o in overrides)
+        if getattr(self._plugin, "applies_alias_overrides", False) is True:
+            try:
+                yield
+            finally:
+                if not self.ctx._alias_overrides_read:
+                    message = (
+                        f"Plugin {plugin_id} declares applies_alias_overrides, but this job never read "
+                        f"ctx.alias_overrides, so it may have read {tokens} from their original locations "
+                        "instead of the data staged for this run. Apply them with "
+                        "tlc.integration.compute.job_scope(ctx)."
+                    )
+                    logger.warning("Job %s: %s", self.job_id, message)
+                    self.ctx.log(message)
+            return
+        applied = _SHARED_OVERRIDES.acquire(overrides)
+        if applied:
+            self.ctx.log(f"Applied {applied} alias override(s)")
+        message = (
+            f"This run's data was staged for this machine ({tokens}); the worker applied the alias overrides "
+            f"for plugin {plugin_id}. From plugin SDK 0.6 the plugin applies them itself: it sets "
+            "applies_alias_overrides = True and runs the job inside tlc.integration.compute.job_scope(ctx) "
+            "(3lc 3.5)."
+        )
+        logger.warning("Job %s: %s", self.job_id, message)
+        self.ctx.log(message)
+        try:
+            yield
+        finally:
+            _SHARED_OVERRIDES.release(overrides)
+
     def _run(self) -> None:
         try:
             # The job's own thread, so current_credential() is this job's alone (the SDK sets no
@@ -360,16 +449,20 @@ class _Job:
             # A legacy token that names no service is the job's single credential only: it is
             # bound for no-argument ``current_credential()`` and never keyed in the service map.
             unkeyed = None if self.ctx.credentials else self.ctx.credential
-            with _alias_overrides(self.ctx), bound_credentials(self.ctx.credentials), bound_credential(unkeyed):
+            with self._staged_aliases(), bound_credentials(self.ctx.credentials), bound_credential(unkeyed):
                 self._plugin.run_job(self.ctx)
             status = "cancelled" if self.ctx.cancelled else "completed"
             terminal: dict[str, Any] = {"event": "done", "status": status, "job_id": self.job_id}
-        except JobFailed as exc:  # a clean, user-facing failure (ctx.fail / raise JobFailed)
-            logger.info("run_job for job %s failed: %s", self.job_id, exc)
-            terminal = {"event": "error", "message": str(exc), "job_id": self.job_id}
-        except Exception as exc:  # any other exception: surfaced with its type prefix
-            logger.exception("run_job failed for job %s", self.job_id)
-            terminal = {"event": "error", "message": f"{type(exc).__name__}: {exc}", "job_id": self.job_id}
+        except Exception as exc:
+            if _is_user_facing(exc):  # written for people: ctx.fail, JobFailed, a library's typed error
+                message = str(exc) or type(exc).__name__
+                logger.info(
+                    "run_job for job %s failed: %s", self.job_id, message, exc_info=not isinstance(exc, JobFailed)
+                )
+            else:  # any other exception: surfaced with its type prefix
+                logger.exception("run_job failed for job %s", self.job_id)
+                message = f"{type(exc).__name__}: {exc}"
+            terminal = {"event": "error", "message": message, "job_id": self.job_id}
         # Reclaim *before* announcing the terminal state, not after: the host may dispatch
         # the next GPU job the moment it sees this event, and it would then be racing this
         # job's still-cached allocation. Runs for the error path too — see
@@ -381,33 +474,74 @@ class _Job:
             self._on_end(self.job_id)
 
 
-@contextlib.contextmanager
-def _alias_overrides(ctx: JobContext) -> Iterator[None]:
-    """Apply the run body's ``_alias_overrides`` around ``run_job``; restore afterwards.
+def _is_user_facing(exc: BaseException) -> bool:
+    """Whether *exc*'s class says its message is written for people (``user_facing = True``).
 
-    The host places ``{"enabled": true, "overrides": [{"token": …, "path": …}]}`` at the top
-    level of the run body when a table's data has been staged somewhere else for this worker
-    (a copy on a GPU node). Applying it here, once, means no plugin reads the key: the alias
-    already resolves to the staged copy by the time ``run_job`` opens the table. A plugin that
-    still applies the same overrides itself keeps working — re-registering an alias to the path
-    it already has is a no-op. Overrides that are absent, disabled or malformed apply nothing.
+    Only ``True`` itself, and only on the class: a mock or an unrelated attribute does not count.
     """
-    raw = ctx.params.get("_alias_overrides")
-    entries = raw.get("overrides") if isinstance(raw, dict) and raw.get("enabled") else None
-    overrides = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
-    if not overrides:
-        yield
-        return
-    from tlc_plugin_sdk.shared.aliases import apply_alias_overrides, restore_aliases
+    return getattr(type(exc), "user_facing", False) is True
 
-    originals = apply_alias_overrides(cast("list[dict[str, str]]", overrides))
-    if originals:
-        ctx.log(f"Applied {len(originals)} alias override(s)")
-    try:
-        yield
-    finally:
-        if originals:
-            restore_aliases(originals)
+
+class _SharedOverrides:
+    """The alias overrides the worker applied for plugins that do not apply them, shared by their jobs.
+
+    Applied process-wide through ``tlc``. Jobs that overlap in one worker (a stream the host gave
+    up on, a cancel still running out) and stage the same data share an override: it is applied
+    by the first and restored after the last, never under a job still reading through it. A job
+    that needs an alias elsewhere is refused before it starts (:class:`AliasOverrideConflict`).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # token -> (path, jobs holding it, what restore_aliases needs, or None when nothing changed)
+        self._held: dict[str, tuple[str, int, dict[str, str] | None]] = {}
+
+    def acquire(self, overrides: tuple[AliasOverride, ...]) -> int:
+        """Apply *overrides* for one job; returns how many this call re-pointed."""
+        from tlc_plugin_sdk.shared.aliases import apply_alias_overrides
+
+        with self._lock:
+            fresh = [o for o in overrides if o.token not in self._held]
+            originals = apply_alias_overrides([{"token": o.token, "path": o.path} for o in fresh]) if fresh else []
+            restore = {entry["token"]: entry for entry in originals}
+            for override in overrides:
+                held = self._held.get(override.token)
+                if held is None:
+                    self._held[override.token] = (override.path, 1, restore.get(override.token))
+                    continue
+                path, count, original = held
+                if not _same_place(path, override.path):  # start_job refuses this; never re-point under a job
+                    logger.error(
+                        "Alias <%s> stays at %s for a job still running here; not re-pointed to %s",
+                        override.token,
+                        path,
+                        override.path,
+                    )
+                self._held[override.token] = (path, count + 1, original)
+            return len(originals)
+
+    def release(self, overrides: tuple[AliasOverride, ...]) -> None:
+        """Release one job's hold on *overrides*; restore those no other job holds."""
+        from tlc_plugin_sdk.shared.aliases import restore_aliases
+
+        with self._lock:
+            originals: list[dict[str, str]] = []
+            for override in overrides:
+                held = self._held.get(override.token)
+                if held is None:
+                    continue
+                path, count, original = held
+                if count > 1:
+                    self._held[override.token] = (path, count - 1, original)
+                    continue
+                del self._held[override.token]
+                if original is not None:
+                    originals.append(original)
+            if originals:
+                restore_aliases(originals)
+
+
+_SHARED_OVERRIDES = _SharedOverrides()
 
 
 def _stream_keepalive_seconds() -> float | None:
@@ -441,7 +575,7 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
             job = worker.start_job(job_id, params)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except JobAlreadyRunning as exc:
+        except (JobAlreadyRunning, AliasOverrideConflict) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         keepalive = _stream_keepalive_seconds()
 

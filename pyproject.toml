@@ -7,7 +7,7 @@ name = "3lc-compute-plugin-sdk"
 # The plugin-contract (ABI) version. This IS tlc_plugin_sdk.SDK_CONTRACT_VERSION
 # (read back via importlib.metadata) — one source of truth. SemVer MAJOR.MINOR.PATCH;
 # the 0.x line is additive-only (see README → Status).
-version = "0.5.4"
+version = "0.5.5"
 description = "Public Python SDK for building 3LC compute-service plugins."
 # The ceiling matches the host's: the core publishes no wheels for Python 3.15 yet, and uv 0.13 refuses to
 # lock a Python range it cannot resolve. Raise it when 3lc ships 3.15 wheels.

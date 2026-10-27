@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from tlc_plugin_sdk import JobContext, JobFailed, JobIdentity
+from tlc_plugin_sdk import AliasOverride, JobContext, JobFailed, JobIdentity
 from tlc_plugin_sdk.connections import SecretToken
 
 
@@ -213,3 +213,146 @@ def test_project_root_is_empty_only_when_nobody_can_say(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(builtins, "__import__", no_tlc)
     assert _ctx_with({}).project_root_url == ""
+
+
+# ── alias overrides: parsed from the run body, never applied here ─────────────
+
+
+def _overrides(raw: object) -> tuple[AliasOverride, ...]:
+    return _ctx_with({"_alias_overrides": raw}).alias_overrides
+
+
+def test_alias_overrides_are_parsed_from_the_run_body() -> None:
+    raw = {
+        "enabled": True,
+        "overrides": [{"token": "COCO_IMAGES", "path": "/staged/coco"}, {"token": "LABELS", "path": "s3://b/l"}],
+    }
+    assert _overrides(raw) == (
+        AliasOverride(token="COCO_IMAGES", path="/staged/coco"),
+        AliasOverride(token="LABELS", path="s3://b/l"),
+    )
+
+
+def test_alias_overrides_are_empty_when_nothing_was_staged() -> None:
+    assert _ctx_with({}).alias_overrides == ()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        "garbage",
+        [{"token": "DATA", "path": "/x"}],
+        {"overrides": [{"token": "DATA", "path": "/x"}]},  # enabled missing
+        {"enabled": False, "overrides": [{"token": "DATA", "path": "/x"}]},
+        {"enabled": "true", "overrides": [{"token": "DATA", "path": "/x"}]},  # only True itself
+        {"enabled": True},
+        {"enabled": True, "overrides": "not-a-list"},
+        {"enabled": True, "overrides": []},
+    ],
+)
+def test_absent_disabled_or_malformed_alias_overrides_read_as_none(raw: object) -> None:
+    assert _overrides(raw) == ()
+
+
+def test_alias_override_entries_are_cleaned_and_bad_ones_skipped() -> None:
+    raw = {
+        "enabled": True,
+        "overrides": [
+            "not-a-dict",
+            {"token": " <DATA> ", "path": " /staged/data/ "},  # bracketed, padded: bare token, trimmed path
+            {"token": "", "path": "/x"},
+            {"token": "EMPTY", "path": "  "},
+            {"token": "NUMBER", "path": 3},
+            {"token": None, "path": "/x"},
+            {"path": "/x"},
+            {"token": "DATA", "path": "/second/wins/not"},  # the first entry for a token is kept
+            {"token": "OTHER", "path": "/other"},
+        ],
+    }
+    assert _overrides(raw) == (
+        AliasOverride(token="DATA", path="/staged/data/"),
+        AliasOverride(token="OTHER", path="/other"),
+    )
+
+
+def test_reading_alias_overrides_is_recorded() -> None:
+    ctx = _ctx_with({"_alias_overrides": {"enabled": True, "overrides": [{"token": "DATA", "path": "/x"}]}})
+    assert not ctx._alias_overrides_read
+    assert ctx.alias_overrides
+    assert ctx._alias_overrides_read
+
+
+def test_alias_overrides_stay_in_params_on_the_05_line() -> None:
+    raw = {"enabled": True, "overrides": [{"token": "DATA", "path": "/x"}]}
+    ctx = _ctx_with({"_alias_overrides": raw})
+    assert ctx.params["_alias_overrides"] is raw  # plugins that read the key themselves keep working
+
+
+def test_alias_override_is_a_frozen_value() -> None:
+    override = AliasOverride(token="DATA", path="/x")
+    with pytest.raises(AttributeError):
+        override.path = "/y"  # type: ignore[misc]
+    assert override == AliasOverride("DATA", "/x")
+    assert hash(override) == hash(AliasOverride("DATA", "/x"))
+
+
+# ── user-facing errors: one rule, the class attribute ──────────────────────────
+
+
+class _UserFacingError(ValueError):
+    user_facing = True
+
+
+class _TruthyButNotTrue(ValueError):
+    user_facing = "yes"
+
+
+def test_jobfailed_declares_itself_user_facing() -> None:
+    assert JobFailed.user_facing is True
+
+
+def test_worker_shows_any_user_facing_exception_verbatim() -> None:
+    def run_job(ctx: JobContext) -> None:
+        msg = "The alias <DATA> in '<DATA>/a.jpg' is not registered in this process."
+        raise _UserFacingError(msg)
+
+    assert _terminal_event(run_job) == {
+        "event": "error",
+        "message": "The alias <DATA> in '<DATA>/a.jpg' is not registered in this process.",
+        "job_id": "j",
+    }
+
+
+def test_a_subclass_of_a_user_facing_error_is_user_facing() -> None:
+    class _Narrower(_UserFacingError):
+        pass
+
+    def run_job(ctx: JobContext) -> None:
+        msg = "narrower"
+        raise _Narrower(msg)
+
+    assert _terminal_event(run_job)["message"] == "narrower"
+
+
+def test_a_user_facing_exception_without_a_message_shows_its_type_name() -> None:
+    def run_job(ctx: JobContext) -> None:
+        raise _UserFacingError
+
+    assert _terminal_event(run_job)["message"] == "_UserFacingError"
+
+
+@pytest.mark.parametrize("make", [lambda: _TruthyButNotTrue("x"), lambda: _instance_flagged("x")])
+def test_only_true_on_the_class_counts(make: Any) -> None:
+    exc = make()
+
+    def run_job(ctx: JobContext) -> None:
+        raise exc
+
+    assert _terminal_event(run_job)["message"] == f"{type(exc).__name__}: x"
+
+
+def _instance_flagged(message: str) -> ValueError:
+    exc = ValueError(message)
+    exc.user_facing = True  # type: ignore[attr-defined]
+    return exc

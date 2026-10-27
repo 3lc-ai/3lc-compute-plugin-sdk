@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`JobContext.alias_overrides`: the aliases the host re-pointed at data it staged for the run**, as
+  a tuple of `AliasOverride(token, path)` values (tokens bare, entries without a token or path
+  skipped, a malformed value read as none). Parsed by the SDK, applied by the plugin: a plugin that
+  sets **`ComputePlugin.applies_alias_overrides = True`** applies them itself (with 3lc 3.5:
+  `with tlc.integration.compute.job_scope(ctx):` around `run_job`'s work), and the worker leaves them
+  alone. The worker reports the declaration on `/health` (`applies_alias_overrides`), and warns in the
+  job log when a plugin that declared it never read `ctx.alias_overrides` in a job with staged data.
+- **A plugin that does not declare it keeps today's behaviour, with notice.** The worker still applies
+  the overrides process-wide around `run_job`, and the job log says that SDK 0.6 stops doing so.
+- **The worker refuses a run whose staged data re-points an alias that a job still running on it reads
+  from elsewhere** (409, with a sentence naming the alias, both places and the other job). Overrides
+  are process-wide, so two overlapping jobs cannot see one alias two ways; jobs that stage the same
+  data at the same place run side by side.
+- **One rule for errors written for people: `user_facing = True` on the exception's class.** The worker
+  ends a job with such an exception's message verbatim, as it always did for `JobFailed` (which now
+  declares `JobFailed.user_facing = True`); any other exception keeps the `TypeName: message` form. A
+  library marks its own error classes (3lc 3.5 marks its alias errors) without importing the SDK. Only
+  `True` on the class counts. A user-facing exception with an empty message shows its class name.
 - `tlc_plugin_sdk.lint` checks a plugin's UI fragment against the Hub's styling conventions: no hardcoded
   colours, no inline `background`/`box-shadow`/`color`, no `!important` or `position: fixed`, and every rule in
   the fragment's `<style>` scoped by a class or id named after the plugin. Run it as
@@ -27,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Overlapping jobs of a plugin whose overrides the worker applies (a job whose stream the host gave up
+  on, a cancel still running out) no longer lose their staged data mid-run: an override two jobs share
+  is restored after the last of them ends, not the first.
 - `PluginJobs.run` delivers a start the compute refused (a 409 with its reason, a 403, an unreachable
   service) to the card's `onError`, and resolves `{error}`. The Hub's `authFetch` rejects on an error
   status, and `run` had no handler for it: the refusal escaped as an unhandled rejection and the card
