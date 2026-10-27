@@ -382,9 +382,6 @@ def register_source_alias(
     )
 
 
-_ENABLED = ("true", True, "1", 1)
-
-
 def register_run_alias(
     params: dict[str, Any],
     read_folder: str,
@@ -414,14 +411,17 @@ def register_run_alias(
         JobFailed: As :func:`register_source_alias`.
 
     """
-    if params.get("alias_enabled", True) not in _ENABLED:
+    from tlc_plugin_sdk.shared.alias_ui import parse_alias_card
+
+    card = parse_alias_card(params)
+    if not card.enabled:
         return None
     return register_source_alias(
         project_name,
         read_folder,
-        source_folder=source_folder or str(params.get("alias_source_folder", "") or ""),
-        alias_folder=str(params.get("alias_folder", "") or ""),
-        alias_token=str(params.get("alias_token", "") or "").strip() or None,
+        source_folder=source_folder or card.source_folder,
+        alias_folder=card.alias_folder,
+        alias_token=card.token,
         root_url=root_url,
     )
 

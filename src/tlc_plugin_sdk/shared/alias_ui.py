@@ -13,9 +13,15 @@ Usage in a plugin's ``get_ui_fragment()``::
 
     raw = Path("ui.html").read_text()
     html = inject_scripts(raw, alias_ui_script())
+
+On the job side, :func:`parse_alias_card` reads what the card put in the run body.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from tlc_plugin_sdk.shared.run_target_ui import RUN_TARGET_JS
 
@@ -359,3 +365,59 @@ def alias_ui_script() -> str:
 
     """
     return ALIAS_UI_JS + "\n" + PROJECT_LOCATION_JS
+
+
+@dataclass(frozen=True)
+class AliasCard:
+    """What the alias card asked for, as the run body carries it to the job.
+
+    Read with :func:`parse_alias_card`. Registering the alias is 3LC's part (with 3lc 3.5,
+    ``tlc.integration.compute.register_run_alias``, which reads the card through this).
+
+    Attributes:
+        enabled: Whether the person wants the alias. The card sends it on; a body without the key
+            counts as on.
+        token: The alias name the person typed, trimmed; ``None`` when blank, meaning the name is
+            derived from the project (:func:`tlc_plugin_sdk.shared.aliases.default_alias_token`).
+        alias_folder: The folder the alias points to (the source root), trimmed; ``None`` when blank,
+            meaning the folder the source was picked from.
+        source_folder: The folder the card's source field held when the run was submitted, trimmed;
+            ``None`` when blank. The host never rewrites it, so it says where the data was picked even
+            when the run reads a copy staged elsewhere.
+
+    """
+
+    enabled: bool
+    token: str | None
+    alias_folder: str | None
+    source_folder: str | None
+
+
+#: The values of ``alias_enabled`` that mean on. Anything else the key holds means off.
+_ENABLED: tuple[object, ...] = ("true", True, "1", 1)
+
+
+def parse_alias_card(params: Mapping[str, Any]) -> AliasCard:
+    """Read the alias card's keys from a run body.
+
+    The card (``_tlcGetAliasValues``) sends ``alias_enabled``, ``alias_token``, ``alias_folder`` and
+    ``alias_source_folder``. A body without them, from a fragment without the card, reads as the card
+    left at its defaults: on, the name derived, the folder the source was picked from.
+
+    Args:
+        params: The run body (``ctx.params``).
+
+    Returns:
+        What the card asked for. Pure: nothing is registered or read from storage.
+
+    """
+
+    def text(key: str) -> str | None:
+        return str(params.get(key) or "").strip() or None
+
+    return AliasCard(
+        enabled=params.get("alias_enabled", True) in _ENABLED,
+        token=text("alias_token"),
+        alias_folder=text("alias_folder"),
+        source_folder=text("alias_source_folder"),
+    )

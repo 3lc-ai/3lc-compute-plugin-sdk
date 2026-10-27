@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deleted, `(written_urls, deleted_urls)`. Storage plugins pass `tlc.discovery.notify_storage_changes`
   (3lc 3.5), which picks the 3LC objects out of them; `on_change=None` tells nobody. A callback that
   raises is a warning in the transfer's status, not a failed transfer.
+- **`shared.alias_ui.parse_alias_card(params)`**: what the shared alias card put in a run body, as an
+  `AliasCard(enabled, token, alias_folder, source_folder)` (trimmed; blank is `None`; `enabled` by the
+  card's rule, on when absent). Pure, and next to the card's JS, so the SDK keeps the knowledge of what
+  its own card sends; 3lc 3.5's `register_run_alias` reads the card through it.
+  `shared.aliases.register_run_alias` uses it too, with no change in behaviour.
 - `tlc_plugin_sdk.lint` checks a plugin's UI fragment against the Hub's styling conventions: no hardcoded
   colours, no inline `background`/`box-shadow`/`color`, no `!important` or `position: fixed`, and every rule in
   the fragment's `<style>` scoped by a class or id named after the plugin. Run it as
