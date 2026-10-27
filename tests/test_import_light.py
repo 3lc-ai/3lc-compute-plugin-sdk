@@ -13,15 +13,19 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
 # ``tlc`` (the data plane) is a base dep, used only lazily by ``shared.*`` — importing the
 # contract surface must not pull it either: it is by far the heaviest import a worker does.
 _HEAVY = ("litestar", "socketio", "uvicorn", "tlc")
 
 
-def test_import_is_light() -> None:
+@pytest.mark.parametrize("module", ["tlc_plugin_sdk", "tlc_plugin_sdk.lint"])
+def test_import_is_light(module: str) -> None:
+    # The UI lint runs in a plugin's CI and a pre-commit hook: it reads files and nothing else.
     code = (
         "import sys, importlib;"
-        "importlib.import_module('tlc_plugin_sdk');"
+        f"importlib.import_module({module!r});"
         f"heavy=[m for m in {_HEAVY!r} if m in sys.modules];"
         "sys.exit('IMPORT-LIGHT VIOLATION: ' + ','.join(heavy) if heavy else 0)"
     )

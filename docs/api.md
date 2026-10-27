@@ -75,6 +75,15 @@ A plugin's own routes, called in-process without a compute service.
    :members:
 ```
 
+## The UI lint
+
+A UI fragment checked against the Hub's styling conventions.
+
+```{eval-rst}
+.. automodule:: tlc_plugin_sdk.lint
+   :members:
+```
+
 ## The worker
 
 ```{eval-rst}
