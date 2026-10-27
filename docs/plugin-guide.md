@@ -1621,6 +1621,27 @@ Wrap each field in `.form-group`; label it with `.form-label`; use `.form-contro
 - Placeholders render dimmed + italic automatically.
 - **Required-field cue — worth adopting:** put both `required` **and** a `placeholder` on a required text field. While the field is empty (its placeholder still showing) the host paints it with a muted red wash (`:required:placeholder-shown`), which clears the instant the user types. A free "you still need to fill this in" signal — no JS.
 
+**Dropdowns.** On a Hub 1.2 or later, a `<select>` opens the Hub's own list, in the theme's colours, instead of the operating system's menu. There is nothing to do for it: the `<select>` stays the control your code reads and sets, and a pick fires `input` and `change` as before. So don't build a dropdown of your own just to pick a value. Multi-select lists, `size > 1` and touch devices keep the native control. To keep the system menu for one select, put `data-native-select` on it or on an element around it.
+
+For a menu that is not a plain select, such as rows with a hint or rows that can be removed, show the same list with `TlcPicker.open(anchor, {items, value, onPick})`. A Hub before 1.2 has no `TlcPicker`, so feature-detect it and fall back to a `<select>`:
+
+```js
+if (typeof TlcPicker !== 'undefined') {
+  TlcPicker.open(button, {
+    value: currentPresetId,
+    items: [
+      { value: 'defaults', label: 'Defaults' },
+      { separator: true },
+      { value: 'p1', label: 'Small objects 1280', hint: '2 days ago',
+        remove: { confirm: 'Delete this preset?', run: item => deletePreset(item.value) } },
+    ],
+    onPick: item => applyPreset(item.value),
+  });
+}
+```
+
+Items can also be `{group: 'Saved'}` headers. `remove.run` returns a promise: the row goes when it resolves, and shows the error when it rejects. See `TlcPickerApi` in `plugin-api.d.ts` for the rest.
+
 ### Buttons
 
 Use `.btn` plus one variant. Never define your own button styles.

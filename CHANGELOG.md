@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The contract declares `TlcPicker`, the list a dropdown opens on a Hub 1.2 or later, in place of the
+  operating system's menu. A plain `<select>` gets it with no change to the plugin;
+  `TlcPicker.open()` shows it for other menus, with hints and removable rows. The guide's Forms
+  section describes both, and `data-native-select`, which keeps the system menu.
+
 ### Fixed
 
 - Plugin workers no longer resolve multidict 7.2.0, whose stricter `CIMultiDictProxy` constructor made
