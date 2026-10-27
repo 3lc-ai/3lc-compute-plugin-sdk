@@ -97,8 +97,9 @@ window.localStorage = {
   setItem: function (k, v) { LS[k] = String(v); },
   removeItem: function (k) { delete LS[k]; },
 };
-['m', 'm-bar', 'm-select', 'm-saveas', 'm-delete', 'm-note', 'm-save', 'm-name', 'm-save-btn', 'm-cancel-btn',
- 'm-save-note', 'm-confirm', 'm-confirm-text', 'm-confirm-ok', 'm-confirm-cancel', 'root'].forEach(addEl);
+['m', 'm-bar', 'm-select', 'm-name', 'm-mode-pick', 'm-saveas', 'm-delete', 'm-note', 'm-mode-save', 'm-save-btn',
+ 'm-cancel-btn', 'm-save-note', 'm-mode-confirm', 'm-confirm-text', 'm-confirm-ok', 'm-confirm-cancel',
+ 'root'].forEach(addEl);
 function options() {
   var out = [];
   _els['m-select'].options.forEach(function (o) {
@@ -123,8 +124,9 @@ function state(p) {
   return {
     options: options(), value: _els['m-select'].value, origin: p.origin(), modified: p.modified(),
     presetId: p.presetId(), presetName: p.presetName(), form: collect(),
-    deleteShown: _els['m-delete'].style.display !== 'none', barShown: _els['m-bar'].style.display !== 'none',
-    saveShown: _els['m-save'].style.display === '', confirmShown: _els['m-confirm'].style.display === '',
+    deleteShown: _els['m-delete'].style.display !== 'none', barShown: _els['m-mode-pick'].style.display !== 'none',
+    saveShown: _els['m-mode-save'].style.display === '', confirmShown: _els['m-mode-confirm'].style.display === '',
+    selectShown: _els['m-select'].style.display !== 'none', nameShown: _els['m-name'].style.display === '',
     name: _els['m-name'].value, saveBtn: _els['m-save-btn'].textContent, saveNote: _els['m-save-note'].textContent,
     saveNoteError: _els['m-save-note'].classList.contains('is-error'),
     confirmText: _els['m-confirm-text'].textContent, note: _els['m-note'].textContent,
@@ -360,9 +362,11 @@ def test_save_as_prefills_a_free_name_and_enter_saves(tmp_path: Path) -> None:
     )
     opened = out["opened"]
     assert opened["saveShown"] is True and opened["barShown"] is False
+    assert opened["nameShown"] is True and opened["selectShown"] is False  # the field takes the select's slot
     assert opened["name"] == "yolo11n today" and opened["saveBtn"] == "Save"
     assert out["enter"] == {"prevented": True, "stopped": True}
     after = out["after"]
+    assert after["selectShown"] is True and after["nameShown"] is False
     saved = [p for p in after["store"] if p["name"] == "My run"]
     assert len(saved) == 1 and saved[0]["epochs"] == 42 and saved[0]["id"] == "p3"
     assert after["origin"] == {"kind": "preset", "id": "p3", "name": "My run"}

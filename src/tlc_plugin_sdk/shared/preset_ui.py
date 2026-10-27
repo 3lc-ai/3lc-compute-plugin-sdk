@@ -146,9 +146,12 @@ function _tlcPluginPresets(opts) {
   var draftDelay = opts.draftDelay == null ? 300 : opts.draftDelay;
 
   var ID_FIELDS = { id: 1, name: 1, created: 1, last_run: 1 };
+  // The select and the name field share one slot, with the same basis, so Save as… swaps them in
+  // place and nothing moves sideways.
   var CSS =
-    ".tlc-presets select { max-width: 640px; }" +
-    ".tlc-presets input.form-control { flex: 1; max-width: 640px; font-size: 12px; }" +
+    ".tlc-presets select, .tlc-presets input.form-control" +
+    " { flex: 0 1 640px; min-width: 0; max-width: 640px; font-size: 12px; font-weight: 500; }" +
+    ".tlc-presets .tlc-presets-mode { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }" +
     ".tlc-presets .tlc-presets-note { font-size: 11px; color: var(--text-muted); }" +
     ".tlc-presets .tlc-presets-note.is-error { color: var(--danger); }" +
     ".tlc-presets .tlc-presets-icon { display: inline-flex; padding: 4px 6px; line-height: 0; }" +
@@ -213,26 +216,35 @@ function _tlcPluginPresets(opts) {
       '<div class="plugin-config-bar tlc-presets" id="' + m + '-bar">' +
         '<span class="bar-label">Preset</span>' +
         '<select id="' + m + '-select" class="form-control" aria-label="Preset"></select>' +
-        '<button type="button" class="btn btn-secondary btn-sm" id="' + m + '-saveas">Save as…</button>' +
-        '<button type="button" class="btn btn-ghost btn-sm tlc-presets-icon" id="' + m + '-delete"' +
-          ' title="Delete this preset" aria-label="Delete this preset">' + TRASH + '</button>' +
-        '<span class="tlc-presets-note" id="' + m + '-note"></span>' +
-      '</div>' +
-      '<div class="plugin-config-bar tlc-presets" id="' + m + '-save" style="display:none">' +
-        '<span class="bar-label">Name</span>' +
         '<input type="text" id="' + m + '-name" class="form-control" maxlength="120" autocomplete="off"' +
-          ' aria-label="Preset name">' +
-        '<button type="button" class="btn btn-primary btn-sm" id="' + m + '-save-btn">Save</button>' +
-        '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-cancel-btn">Cancel</button>' +
-        '<span class="tlc-presets-note" id="' + m + '-save-note"></span>' +
-      '</div>' +
-      '<div class="plugin-config-bar tlc-presets" id="' + m + '-confirm" style="display:none">' +
-        '<span class="tlc-presets-text" id="' + m + '-confirm-text"></span>' +
-        '<button type="button" class="btn btn-danger btn-sm" id="' + m + '-confirm-ok">Delete</button>' +
-        '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-confirm-cancel">Cancel</button>' +
+          ' aria-label="Preset name" style="display:none">' +
+        '<span class="tlc-presets-mode" id="' + m + '-mode-pick">' +
+          '<button type="button" class="btn btn-secondary btn-sm" id="' + m + '-saveas">Save as…</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm tlc-presets-icon" id="' + m + '-delete"' +
+            ' title="Delete this preset" aria-label="Delete this preset">' + TRASH + '</button>' +
+          '<span class="tlc-presets-note" id="' + m + '-note"></span>' +
+        '</span>' +
+        '<span class="tlc-presets-mode" id="' + m + '-mode-save" style="display:none">' +
+          '<button type="button" class="btn btn-primary btn-sm" id="' + m + '-save-btn">Save</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-cancel-btn">Cancel</button>' +
+          '<span class="tlc-presets-note" id="' + m + '-save-note"></span>' +
+        '</span>' +
+        '<span class="tlc-presets-mode" id="' + m + '-mode-confirm" style="display:none">' +
+          '<span class="tlc-presets-text" id="' + m + '-confirm-text"></span>' +
+          '<button type="button" class="btn btn-danger btn-sm" id="' + m + '-confirm-ok">Delete</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-confirm-cancel">Cancel</button>' +
+        '</span>' +
       '</div>';
-    ["bar", "select", "saveas", "delete", "note", "save", "name", "save-btn", "cancel-btn", "save-note",
-     "confirm", "confirm-text", "confirm-ok", "confirm-cancel"].forEach(function (s) { els[s] = el(s); });
+    ["bar", "select", "name", "mode-pick", "saveas", "delete", "note", "mode-save", "save-btn", "cancel-btn",
+     "save-note", "mode-confirm", "confirm-text", "confirm-ok", "confirm-cancel"].forEach(function (s) { els[s] = el(s); });
+  }
+
+  /* One row, three modes: the select or the name field in the same slot, and that mode's buttons after it. */
+  function setMode(mode) {
+    if (mode === "save") { hide(els.select); show(els.name); } else { show(els.select); hide(els.name); }
+    if (mode === "pick") show(els["mode-pick"]); else hide(els["mode-pick"]);
+    if (mode === "save") show(els["mode-save"]); else hide(els["mode-save"]);
+    if (mode === "confirm") show(els["mode-confirm"]); else hide(els["mode-confirm"]);
   }
 
   function bind() {
@@ -435,8 +447,7 @@ function _tlcPluginPresets(opts) {
     setText(els["save-btn"], "Save");
     setText(els["save-note"], "");
     if (els["save-note"]) els["save-note"].classList.remove("is-error");
-    hide(els.bar);
-    show(els.save);
+    setMode("save");
     if (els.name) {
       if (els.name.focus) els.name.focus();
       if (els.name.select) els.name.select();
@@ -444,8 +455,7 @@ function _tlcPluginPresets(opts) {
   }
   function closeSave() {
     confirmReplaceId = "";
-    hide(els.save);
-    show(els.bar);
+    setMode("pick");
   }
   function save() {
     var name = els.name ? String(els.name.value || "").trim() : "";
@@ -496,12 +506,10 @@ function _tlcPluginPresets(opts) {
     if (origin.kind !== "preset") return;
     closeSave();
     setText(els["confirm-text"], "Delete “" + origin.name + "”?");
-    hide(els.bar);
-    show(els.confirm);
+    setMode("confirm");
   }
   function closeDelete() {
-    hide(els.confirm);
-    show(els.bar);
+    setMode("pick");
   }
   function remove() {
     if (origin.kind !== "preset") return Promise.resolve(false);
