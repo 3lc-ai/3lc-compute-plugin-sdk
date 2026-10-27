@@ -10,6 +10,10 @@ helper called from another SDK module does not warn.
 from __future__ import annotations
 
 import importlib
+import logging
+import subprocess
+import sys
+import threading
 import types
 import warnings
 from pathlib import Path
@@ -17,8 +21,9 @@ from typing import Any
 
 import pytest
 
-from tlc_plugin_sdk.shared import aliases, images, labels, modality, model_storage, url_utils
+from tlc_plugin_sdk.shared import _deprecation, aliases, images, labels, modality, model_storage, url_utils
 from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
+from tlc_plugin_sdk.shared.storage_transfer import TransferRegistry
 
 # Every name SDK 0.6 removes, with the replacement its warning must name (api-spec section 10,
 # decisions 2026-10-28).
@@ -190,3 +195,112 @@ def test_the_docstring_gains_the_deprecation() -> None:
         "Do a thing.\n\n.. deprecated:: 0.5.5\n   "
         f"{__name__}._helper is deprecated and is removed in SDK 0.6: use tlc.thing (3lc 3.5) instead.\n"
     )
+
+
+# ── the log line: once per name per process, so worker logs show what still needs migrating ────
+
+
+@pytest.fixture
+def fresh_log(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
+    """A process in which no deprecated name has been used yet, with the SDK's log captured."""
+    monkeypatch.setattr(_deprecation, "_logged", set())
+    caplog.set_level(logging.WARNING, logger="tlc_plugin_sdk.shared._deprecation")
+    return caplog
+
+
+def _deprecation_logs(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "tlc_plugin_sdk.shared._deprecation"]
+
+
+def test_the_first_use_of_a_name_is_logged_with_the_plugins_call_site(
+    fresh_log: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    (tmp_path / "a.txt").write_text("hello")
+    with pytest.warns(DeprecationWarning) as record:
+        line = sys._getframe().f_lineno + 1
+        url_utils.read_text(str(tmp_path / "a.txt"))
+    [log] = _deprecation_logs(fresh_log)
+    assert log == f"{record[0].message} (first use in this process: {__file__}:{line})"
+    assert [r.levelno for r in fresh_log.records] == [logging.WARNING]
+
+
+def test_later_uses_warn_but_are_not_logged_again(fresh_log: pytest.LogCaptureFixture) -> None:
+    with pytest.warns(DeprecationWarning) as record:
+        for _ in range(3):
+            aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/p/data/tok")
+    assert len(record) == 3
+    assert len(_deprecation_logs(fresh_log)) == 1
+
+
+def test_each_name_is_logged_once(fresh_log: pytest.LogCaptureFixture) -> None:
+    with pytest.warns(DeprecationWarning):
+        for _ in range(2):
+            aliases.relative_alias_value("s3://b/projects", "p", "s3://b/projects/p/data/tok")
+            url_utils.get_url_column_names(object())
+    logs = _deprecation_logs(fresh_log)
+    assert len(logs) == 2
+    assert logs[0].startswith("tlc_plugin_sdk.shared.aliases.relative_alias_value is deprecated")
+    assert logs[1].startswith("tlc_plugin_sdk.shared.url_utils.get_url_column_names is deprecated")
+
+
+def test_concurrent_first_uses_log_once(fresh_log: pytest.LogCaptureFixture) -> None:
+    moved = moved_to_3lc("use tlc.thing (3lc 3.5) instead")(_helper)
+    start = threading.Barrier(16)
+
+    def call() -> None:
+        start.wait()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            moved()
+
+    threads = [threading.Thread(target=call) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert len(_deprecation_logs(fresh_log)) == 1
+
+
+def test_calls_from_inside_the_sdk_are_not_logged(fresh_log: pytest.LogCaptureFixture) -> None:
+    moved = moved_to_3lc("use tlc.thing (3lc 3.5) instead")(_helper)
+    _module_calling(moved, "tlc_plugin_sdk.shared.images")()
+    assert _deprecation_logs(fresh_log) == []
+
+
+def test_the_log_line_is_written_even_when_warnings_are_errors(fresh_log: pytest.LogCaptureFixture) -> None:
+    moved = moved_to_3lc("use tlc.thing (3lc 3.5) instead")(_helper)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(DeprecationWarning):
+            moved()
+    assert len(_deprecation_logs(fresh_log)) == 1
+
+
+def test_a_transfer_registry_without_on_change_is_logged_once(fresh_log: pytest.LogCaptureFixture) -> None:
+    calls = {
+        "list_objects": lambda _url: [],
+        "head_object": lambda _url: None,
+        "copy_object": lambda _src, _dst: None,
+        "delete_object": lambda _url: None,
+    }
+    with pytest.warns(DeprecationWarning):
+        TransferRegistry(**calls)
+        TransferRegistry(**calls)
+        TransferRegistry(**calls, notify_change=lambda _u, _o: None)
+    logs = _deprecation_logs(fresh_log)
+    assert len(logs) == 2
+    assert logs[0].startswith("TransferRegistry without on_change")
+    assert logs[1].startswith("TransferRegistry(notify_change=...) is deprecated")
+    assert all(f"first use in this process: {__file__}:" in log for log in logs)
+
+
+def test_warning_and_logging_never_import_3lc() -> None:
+    code = (
+        "import sys, warnings;"
+        "warnings.simplefilter('ignore');"
+        "from tlc_plugin_sdk.shared import url_utils;"
+        "url_utils.get_url_column_names(object());"
+        "sys.exit('tlc imported' if 'tlc' in sys.modules else 0)"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

@@ -41,14 +41,13 @@ import logging
 import threading
 import time
 import uuid
-import warnings
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc, warn_deprecated
 
 logger = logging.getLogger(__name__)
 
@@ -256,19 +255,17 @@ class TransferRegistry:
             msg = "TransferRegistry takes on_change or the deprecated notify_change, not both"
             raise TypeError(msg)
         if notify_change is not None:
-            warnings.warn(
+            warn_deprecated(
+                "TransferRegistry(notify_change=...)",
                 "TransferRegistry(notify_change=...) is deprecated and is removed in SDK 0.6: pass on_change, "
                 "which is called once with every URL written and deleted "
                 "(on_change=tlc.discovery.notify_storage_changes from 3lc 3.5).",
-                DeprecationWarning,
-                stacklevel=2,
             )
         elif on_change is _Unset.TOKEN:
-            warnings.warn(
+            warn_deprecated(
+                "TransferRegistry() without on_change",
                 "TransferRegistry without on_change notifies 3LC discovery through the SDK, which SDK 0.6 "
                 "stops doing: pass on_change=tlc.discovery.notify_storage_changes (3lc 3.5), or on_change=None.",
-                DeprecationWarning,
-                stacklevel=2,
             )
         self._on_change: ChangeCallback | None = None if on_change is _Unset.TOKEN else on_change
         self._notify_change: Callable[[str, str], None] | None = (

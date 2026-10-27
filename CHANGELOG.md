@@ -88,6 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `join_path_or_url`, `parent_of`, `name_of`, `stem_of`, `suffix_of`, `is_absolute`) and
   `aliases.is_remote_url` and `default_alias_token`. A plugin that uses a replacement declares `3lc`
   in its own dependencies.
+- **Deprecated names show in worker logs.** Python hides a `DeprecationWarning` in a running worker,
+  so the first use of each deprecated name (the moved helpers above, `TransferRegistry`'s
+  `notify_change`, a `TransferRegistry` without `on_change`) in a process is also logged once, as a
+  warning on the `tlc_plugin_sdk.shared._deprecation` logger, with the warning's text and the
+  plugin's call site (`file:line`). Later uses still warn but are not logged again.
 - `TransferRegistry`'s per-object `notify_change`, and constructing a `TransferRegistry` without
   `on_change` (which notifies 3LC discovery through the SDK, as before). Both warn
   (`DeprecationWarning`); SDK 0.6 requires `on_change`. Giving both is a `TypeError`.
