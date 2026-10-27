@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `PluginJobs.run` delivers a start the compute refused (a 409 with its reason, a 403, an unreachable
+  service) to the card's `onError`, and resolves `{error}`. The Hub's `authFetch` rejects on an error
+  status, and `run` had no handler for it: the refusal escaped as an unhandled rejection and the card
+  showed nothing.
 - Plugin workers no longer resolve multidict 7.2.0, whose stricter `CIMultiDictProxy` constructor made
   Litestar answer every request with 500; the release is excluded from the SDK's dependencies (7.2.1
   works again).
