@@ -236,7 +236,9 @@ function _tlcPluginPresets(opts) {
         '</span>' +
       '</div>';
     ["bar", "select", "name", "mode-pick", "saveas", "delete", "note", "mode-save", "save-btn", "cancel-btn",
-     "save-note", "mode-confirm", "confirm-text", "confirm-ok", "confirm-cancel"].forEach(function (s) { els[s] = el(s); });
+     "save-note", "mode-confirm", "confirm-text", "confirm-ok", "confirm-cancel"].forEach(function (s) {
+      els[s] = el(s);
+    });
   }
 
   /* One row, three modes: the select or the name field in the same slot, and that mode's buttons after it. */
