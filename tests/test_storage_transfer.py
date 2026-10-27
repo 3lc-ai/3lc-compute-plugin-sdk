@@ -52,6 +52,8 @@ class _Store:
 
 
 def _registry(store: _Store, **kw: Any) -> TransferRegistry:
+    if "notify_change" not in kw:
+        kw.setdefault("on_change", None)
     return TransferRegistry(
         list_objects=store.list_objects,
         head_object=store.head_object,
@@ -71,6 +73,10 @@ def _wait(registry: TransferRegistry, tid: str) -> dict[str, Any]:
         time.sleep(0.01)
     msg = "transfer never finished"
     raise AssertionError(msg)
+
+
+# The deprecated per-object ``notify_change`` (SDK 0.6 removes it); its warning is pinned below.
+_LEGACY = pytest.mark.filterwarnings("ignore:TransferRegistry\\(notify_change=:DeprecationWarning")
 
 
 _OBJECTS = {
@@ -159,6 +165,7 @@ def test_bad_requests_fail_before_a_thread_exists() -> None:
     assert registry.status("nope") is None and registry.active() == 0
 
 
+@_LEGACY
 def test_project_copy_notifies_after_all_files_and_markers_are_copied() -> None:
     src = "s3://b/source/p"
     dst = "s3://b/target/p"
@@ -182,6 +189,7 @@ def test_project_copy_notifies_after_all_files_and_markers_are_copied() -> None:
     assert not st["warnings"]
 
 
+@_LEGACY
 def test_partial_copy_notifies_only_successful_objects() -> None:
     store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
     store.fail_on.add("s3://b/src/b/object.3lc.json")
@@ -192,6 +200,7 @@ def test_partial_copy_notifies_only_successful_objects() -> None:
     assert notifications == [("s3://b/dst/a", "write")]
 
 
+@_LEGACY
 def test_cancelled_copy_still_notifies_the_completed_object() -> None:
     store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
     notifications = []
@@ -208,6 +217,7 @@ def test_cancelled_copy_still_notifies_the_completed_object() -> None:
     assert notifications == [("s3://b/dst/a", "write")]
 
 
+@_LEGACY
 def test_move_notifies_only_successful_source_deletions() -> None:
     store = _Store({"s3://b/src/a/object.3lc.json": 1, "s3://b/src/b/object.3lc.json": 1})
     notifications = []
@@ -225,6 +235,7 @@ def test_move_notifies_only_successful_source_deletions() -> None:
     assert set(notifications) == {("s3://b/dst/a", "write"), ("s3://b/dst/b", "write"), ("s3://b/src/a", "delete")}
 
 
+@_LEGACY
 def test_notification_failure_is_reported_without_hiding_copy_success() -> None:
     store = _Store({"s3://b/src/a/object.3lc.json": 1})
 
@@ -273,7 +284,7 @@ def test_raw_delete_notification_failure_is_one_warning(monkeypatch: pytest.Monk
 def test_a_describer_answering_a_non_str_never_strands_the_transfer() -> None:
     store = _Store(_OBJECTS)
     store.fail_on.add("s3://b/data/fire/train/1.jpg")
-    registry = _registry(store, workers=2, notify_change=lambda _u, _o: None, describe_error=lambda exc: 403)
+    registry = _registry(store, workers=2, on_change=None, describe_error=lambda exc: 403)
     st = registry.start("s3://b/data/fire", "s3://b/copy", ["train/"], mode="copy")
     done = _wait(registry, st["transfer_id"])
     assert done["state"] == "failed"
@@ -323,7 +334,7 @@ def test_a_transfer_started_by_a_request_keeps_the_requests_connection_in_every_
     monkeypatch.setattr(connections, "_RESOLVERS", {})
     connections.register_resolver("aws", "KEYLESS", lambda b: AwsSession("AKIA123", "secret", "session-1"))
     store = _RecordingStore(_OBJECTS)
-    registry = _registry(store, workers=4, notify_change=lambda _u, _o: None)
+    registry = _registry(store, workers=4, on_change=None)
 
     # Sync, like the infrastructure routes: the handler runs in a thread with a copy of the context.
     @post("/transfer", sync_to_thread=True)
@@ -353,3 +364,119 @@ def test_a_transfer_started_by_a_request_keeps_the_requests_connection_in_every_
         st = registry.start("s3://b/moved", "s3://b/data/fire", ["a.jpg"], mode="move")
         assert _wait(registry, st["transfer_id"])["state"] == "done"
         assert {tuple(entry[1:]) for entry in store.seen} == {(None, None)}
+
+
+# ── on_change: one call per finished transfer, with every URL written and deleted ──────────────
+
+
+class _Changes:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], list[str]]] = []
+
+    def __call__(self, written: Any, deleted: Any) -> list[str]:  # returns, as notify_storage_changes does
+        self.calls.append((list(written), list(deleted)))
+        return []
+
+
+def test_on_change_gets_every_written_and_deleted_url_once() -> None:
+    store = _Store(_OBJECTS)
+    changes = _Changes()
+    registry = _registry(store, on_change=changes)
+    st = _wait(
+        registry, registry.start("s3://b/data/fire", "s3://b/moved", ["train/", "a.jpg"], mode="move")["transfer_id"]
+    )
+    assert st["state"] == "done"
+    assert changes.calls == [
+        (
+            ["s3://b/moved/a.jpg", "s3://b/moved/train/1.jpg", "s3://b/moved/train/deep/2.jpg"],
+            ["s3://b/data/fire/a.jpg", "s3://b/data/fire/train/1.jpg", "s3://b/data/fire/train/deep/2.jpg"],
+        )
+    ]
+    assert not st["warnings"]
+
+
+def test_on_change_gets_the_raw_urls_and_leaves_picking_to_the_listener() -> None:
+    """Unlike the deprecated notify_change, data files and markers alike: 3LC picks its own objects."""
+    store = _Store({"s3://b/src/t/object.3lc.json": 1, "s3://b/src/t/data.parquet": 9})
+    changes = _Changes()
+    registry = _registry(store, on_change=changes)
+    _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["t/"])["transfer_id"])
+    assert changes.calls == [(["s3://b/dst/t/data.parquet", "s3://b/dst/t/object.3lc.json"], [])]
+
+
+def test_on_change_hears_only_what_succeeded_of_a_failed_transfer() -> None:
+    store = _Store({"s3://b/src/a.jpg": 1, "s3://b/src/b.jpg": 1})
+    store.fail_on.add("s3://b/src/b.jpg")
+    changes = _Changes()
+    registry = _registry(store, on_change=changes)
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a.jpg", "b.jpg"], mode="move")["transfer_id"])
+    assert st["state"] == "failed"
+    assert changes.calls == [(["s3://b/dst/a.jpg"], ["s3://b/src/a.jpg"])]
+
+
+def test_on_change_is_not_called_when_nothing_changed() -> None:
+    store = _Store({"s3://b/src/a.jpg": 1})
+    store.fail_on.add("s3://b/src/a.jpg")
+    changes = _Changes()
+    registry = _registry(store, on_change=changes)
+    assert _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a.jpg"])["transfer_id"])["state"] == "failed"
+    assert changes.calls == []
+
+
+def test_an_on_change_that_raises_is_a_warning_not_a_failed_transfer() -> None:
+    store = _Store({"s3://b/src/a.jpg": 1})
+
+    def on_change(written: Any, deleted: Any) -> None:
+        message = "marker write denied"
+        raise OSError(message)
+
+    registry = _registry(store, on_change=on_change)
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["a.jpg"])["transfer_id"])
+    assert st["state"] == "done"
+    assert st["warnings"] == [
+        "Files were transferred, but storage listings could not be refreshed. They may not show the changes yet."
+    ]
+    assert "3LC" not in st["warnings"][0]
+
+
+def test_on_change_none_tells_nobody_and_never_touches_3lc(monkeypatch: pytest.MonkeyPatch) -> None:
+    def tripwire(url: str, op: str) -> None:
+        raise AssertionError(url)
+
+    monkeypatch.setattr(storage_transfer, "_notify_discovery", tripwire)
+    store = _Store({"s3://b/src/t/object.3lc.json": 1})
+    registry = _registry(store, on_change=None)
+    st = _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["t/"])["transfer_id"])
+    assert st["state"] == "done"
+    assert not st["warnings"]
+
+
+def test_without_on_change_the_registry_still_notifies_3lc_discovery_and_warns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(storage_transfer, "_notify_discovery", lambda url, op: notifications.append((url, op)))
+    store = _Store({"s3://b/src/t/object.3lc.json": 1})
+    with pytest.warns(
+        DeprecationWarning, match=r"without on_change .*on_change=tlc\.discovery\.notify_storage_changes"
+    ):
+        registry = TransferRegistry(
+            list_objects=store.list_objects,
+            head_object=store.head_object,
+            copy_object=store.copy_object,
+            delete_object=store.delete_object,
+        )
+    _wait(registry, registry.start("s3://b/src", "s3://b/dst", ["t/"])["transfer_id"])
+    assert notifications == [("s3://b/dst/t", "write")]
+
+
+def test_notify_change_is_deprecated_in_favour_of_on_change() -> None:
+    store = _Store({})
+    with pytest.warns(DeprecationWarning, match=r"notify_change=\.\.\.\) is deprecated .*pass on_change") as record:
+        _registry(store, notify_change=lambda _u, _o: None)
+    assert record[0].filename == __file__  # points at the plugin's construction, not the SDK
+
+
+def test_on_change_and_notify_change_cannot_both_be_given() -> None:
+    with pytest.raises(TypeError, match="not both"):
+        _registry(_Store({}), on_change=None, notify_change=lambda _u, _o: None)

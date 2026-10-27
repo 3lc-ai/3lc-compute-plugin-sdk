@@ -946,7 +946,7 @@ class FakeProvider(InfrastructurePlugin, StorageFacet, CatalogFacet, WorkspaceFa
                 head_object=head,
                 copy_object=copy,
                 delete_object=remove,
-                notify_change=lambda _url, _op: None,
+                on_change=None,
             )
             self._transfers[bucket] = registry
         return registry

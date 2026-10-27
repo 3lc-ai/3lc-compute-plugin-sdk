@@ -14,6 +14,7 @@ machinery; a plugin supplies four calls that speak its client:
         head_object=lambda url: size_or_None,                   # one object's size; None when absent
         copy_object=lambda src_url, dst_url: None,              # server-side copy of one object
         delete_object=lambda url: None,                         # one object
+        on_change=tlc.discovery.notify_storage_changes,         # told what changed (3lc 3.5), or None
     )
     plan = transfers.plan(src_url, dst_url, items=["a.jpg", "train/"])            # counts, no side effects
     status = transfers.start(src_url, dst_url, items=[...], mode="move")          # {transfer_id, state, ...}
@@ -25,19 +26,26 @@ Existing objects at the destination are overwritten — the copy semantics of ev
 and the caller's confirmation says so. A move deletes each source object only after its copy
 succeeded, so a failure mid-way leaves the source complete. Finished transfers stay in the
 registry for :data:`TRANSFER_TTL_S` so a page can still read the outcome.
+
+When a transfer has finished, whatever its outcome, ``on_change`` is told once which objects it
+wrote and which it deleted, so whoever lists the storage can catch up without a rescan. A storage
+plugin passes 3LC's ``tlc.discovery.notify_storage_changes`` (3lc 3.5), which picks the 3LC
+tables, runs and ``.3lc.yaml`` objects out of them. The registry calls it, and knows nothing of 3LC.
 """
 
 from __future__ import annotations
 
 import contextvars
+import enum
 import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterable
+import warnings
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -184,6 +192,14 @@ def notify_storage_deletes(urls: Iterable[str], *, removed_folders: Iterable[str
     return warnings
 
 
+class _Unset(enum.Enum):
+    TOKEN = enum.auto()
+
+
+#: ``(written_urls, deleted_urls)``: the objects one finished transfer wrote and deleted.
+ChangeCallback = Callable[[Sequence[str], Sequence[str]], object]
+
+
 class TransferRegistry:
     """Plans, starts, tracks and cancels transfers for one plugin worker."""
 
@@ -196,7 +212,8 @@ class TransferRegistry:
         delete_object: Callable[[str], None],
         workers: int = 16,
         max_files: int = MAX_TRANSFER_FILES,
-        notify_change: Callable[[str, str], None] = _notify_discovery,
+        on_change: ChangeCallback | None | Literal[_Unset.TOKEN] = _Unset.TOKEN,
+        notify_change: Callable[[str, str], None] | None = None,
         describe_error: Callable[[Exception], str] | None = None,
     ) -> None:
         """
@@ -209,20 +226,55 @@ class TransferRegistry:
             delete_object: ``url -> None``.
             workers: Copies in flight at once.
             max_files: Refuse a transfer larger than this (the CLI is the tool then).
-            notify_change: Notify 3LC discovery after successful writes/deletes, including partial transfers.
+            on_change: ``(written_urls, deleted_urls) -> None``, called once when a transfer has
+                finished (done, failed or cancelled) and wrote or deleted anything, with the URLs
+                of the objects that were written and deleted, sorted. Pass
+                ``tlc.discovery.notify_storage_changes`` (3lc 3.5) so the Object Service lists
+                the changes without a rescan, or ``None`` when nobody needs telling. It runs on
+                the transfer's thread; an exception from it becomes a warning in the status, not
+                a failed transfer. SDK 0.6 requires it.
+            notify_change: Deprecated: ``(url, "write" | "delete") -> None`` for each 3LC object
+                written or deleted, the SDK picking the objects. Without ``on_change`` the
+                registry still notifies 3LC discovery this way, by default; SDK 0.6 removes it.
+                Pass ``on_change`` instead (not both).
             describe_error: ``exception -> sentence`` for a failed transfer's ``error`` and each
                 failure's ``reason`` (default: the exception's text). The registry itself has no
                 secrets to scrub with: an infrastructure plugin's routes set it to the plugin's
                 ``describe_error`` when it is unset, and scrub the answer of one given here with
                 the plugin's secrets.
+
+        Raises:
+            TypeError: Both ``on_change`` and ``notify_change`` were given.
+
         """
+        if on_change is not _Unset.TOKEN and notify_change is not None:
+            msg = "TransferRegistry takes on_change or the deprecated notify_change, not both"
+            raise TypeError(msg)
+        if notify_change is not None:
+            warnings.warn(
+                "TransferRegistry(notify_change=...) is deprecated and is removed in SDK 0.6: pass on_change, "
+                "which is called once with every URL written and deleted "
+                "(on_change=tlc.discovery.notify_storage_changes from 3lc 3.5).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif on_change is _Unset.TOKEN:
+            warnings.warn(
+                "TransferRegistry without on_change notifies 3LC discovery through the SDK, which SDK 0.6 "
+                "stops doing: pass on_change=tlc.discovery.notify_storage_changes (3lc 3.5), or on_change=None.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        self._on_change: ChangeCallback | None = None if on_change is _Unset.TOKEN else on_change
+        self._notify_change: Callable[[str, str], None] | None = (
+            (notify_change or _notify_discovery) if on_change is _Unset.TOKEN else None
+        )
         self._list = list_objects
         self._head = head_object
         self._copy = copy_object
         self._delete = delete_object
         self._workers = max(1, workers)
         self._max_files = max_files
-        self._notify_change = notify_change
         self.describe_error = describe_error
         self._transfers: dict[str, Transfer] = {}
         self._lock = threading.Lock()
@@ -423,10 +475,28 @@ class TransferRegistry:
         # The worker has joined every copy thread before finishing. Notify even
         # after cancellation or partial failure; never announce unsuccessful IO.
         # Do this before publishing the terminal state, independent of UI polling.
+        if self._notify_change is not None:
+            self._notify_each(transfer, self._notify_change)
+        elif self._on_change is not None and (transfer._writes or transfer._deletes):
+            try:
+                self._on_change(sorted(transfer._writes), sorted(transfer._deletes))
+            except Exception:
+                logger.warning("Transfer %s: on_change failed", transfer.id, exc_info=True)
+                transfer.warnings.append(
+                    "Files were transferred, but storage listings could not be refreshed. "
+                    "They may not show the changes yet."
+                )
+        transfer.state = state
+        transfer.error = error
+        transfer.finished_at = time.time()
+
+    @staticmethod
+    def _notify_each(transfer: Transfer, notify: Callable[[str, str], None]) -> None:
+        """The deprecated ``notify_change`` path: one call per 3LC object written or deleted."""
         for operation, urls in (("write", transfer._writes), ("delete", transfer._deletes)):
             for url in _discovery_objects(urls):
                 try:
-                    self._notify_change(url, operation)
+                    notify(url, operation)
                 except Exception:
                     logger.warning("Transfer %s: discovery notification failed for %s", transfer.id, url, exc_info=True)
                     if not transfer.warnings:
@@ -434,6 +504,3 @@ class TransferRegistry:
                             "Files were transferred, but 3LC discovery could not be refreshed. "
                             "The Object Service may not show the changes yet."
                         )
-        transfer.state = state
-        transfer.error = error
-        transfer.finished_at = time.time()

@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declares `JobFailed.user_facing = True`); any other exception keeps the `TypeName: message` form. A
   library marks its own error classes (3lc 3.5 marks its alias errors) without importing the SDK. Only
   `True` on the class counts. A user-facing exception with an empty message shows its class name.
+- **`TransferRegistry(on_change=...)`: one call per finished transfer** — done, failed or cancelled,
+  when it wrote or deleted anything — with the sorted URLs of every object written and every object
+  deleted, `(written_urls, deleted_urls)`. Storage plugins pass `tlc.discovery.notify_storage_changes`
+  (3lc 3.5), which picks the 3LC objects out of them; `on_change=None` tells nobody. A callback that
+  raises is a warning in the transfer's status, not a failed transfer.
 - `tlc_plugin_sdk.lint` checks a plugin's UI fragment against the Hub's styling conventions: no hardcoded
   colours, no inline `background`/`box-shadow`/`color`, no `!important` or `position: fixed`, and every rule in
   the fragment's `<style>` scoped by a class or id named after the plugin. Run it as
@@ -42,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operating system's menu. A plain `<select>` gets it with no change to the plugin;
   `TlcPicker.open()` shows it for other menus, with hints and removable rows. The guide's Forms
   section describes both, and `data-native-select`, which keeps the system menu.
+
+### Deprecated
+
+- `TransferRegistry`'s per-object `notify_change`, and constructing a `TransferRegistry` without
+  `on_change` (which notifies 3LC discovery through the SDK, as before). Both warn
+  (`DeprecationWarning`); SDK 0.6 requires `on_change`. Giving both is a `TypeError`.
 
 ### Fixed
 
