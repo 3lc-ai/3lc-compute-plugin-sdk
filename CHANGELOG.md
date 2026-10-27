@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tlc_plugin_sdk.shared.preset_ui`: the preset bar, `_tlcPluginPresets()`, one line at the top of a
+  plugin's form. A select lists Default settings and the saved presets, each with a hint and its age;
+  Save as… opens a prefilled name field in the bar (Enter saves, a taken name asks before replacing);
+  the trash icon asks in the bar too; the selected entry gains "· modified" once the form differs
+  from it. A preset is a template of the whole form, inputs included: picking one fills the form, only
+  Save writes one, a run never does. A table the plugin was opened from replaces the inputs and stays
+  while the page is open. The page opens as it was last left in this browser. The bar runs on the
+  plugin's existing config routes, so saved configs appear as presets unchanged. It supersedes
+  `shared.config_ui`'s config bar, whose Train saved into the selected config. Declared as
+  `TlcPresetOptions` / `TlcPresetControl` in the contract; guide → "Presets".
 - `tlc_plugin_sdk.lint` checks a plugin's UI fragment against the Hub's styling conventions: no hardcoded
   colours, no inline `background`/`box-shadow`/`color`, no `!important` or `position: fixed`, and every rule in
   the fragment's `<style>` scoped by a class or id named after the plugin. Run it as

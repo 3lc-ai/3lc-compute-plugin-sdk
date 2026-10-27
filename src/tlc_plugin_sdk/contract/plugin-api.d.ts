@@ -771,6 +771,64 @@ export interface TlcTableFieldElement extends HTMLElement {
   tagged: Array<{ url: string; label?: string }>;
 }
 
+// ── The preset bar (`shared.preset_ui`) ─────────────────────────────────────────
+
+/**
+ * What `_tlcPluginPresets(opts)` needs from a plugin. The bar renders into `mount`; the plugin's
+ * config CRUD routes under `apiPath` (`GET`, `POST`, `GET /{id}`, `POST /{id}/delete`) store the
+ * presets. `collect` and `apply` move the whole form, inputs included, in and out; `inputs` names
+ * the keys that are inputs, which `contextInputs()` replaces for the page's life when the plugin
+ * was opened from a table. See the plugin guide, "Presets".
+ */
+export interface TlcPresetOptions {
+  pluginId: string;
+  apiPath: string;
+  mount: string;
+  /** Id of the form's root: `input` and `change` events under it mark the form as changed. */
+  formRoot?: string;
+  /** The form's values, without `id` and `name`. */
+  collect(): Record<string, any>;
+  /** Fill the form; return a promise when that takes a round trip. */
+  apply(values: Record<string, any>): void | Promise<unknown>;
+  defaults(): Record<string, any>;
+  inputs?: string[];
+  /** The launch context's inputs, or null when the page was opened bare. */
+  contextInputs?(): Record<string, any> | null;
+  /** The suggested name for a new preset. */
+  autoName?(values: Record<string, any>): string;
+  /** A short hint shown after the name in the list, e.g. "yolo11n · detect". */
+  summary?(values: Record<string, any>): string;
+  /** The old config bar's localStorage key; its remembered config opens once, as the draft takes over. */
+  legacyKey?: string;
+  /** Milliseconds before a change is written as the draft (default 300). */
+  draftDelay?: number;
+}
+
+/** The bar `_tlcPluginPresets()` returns. */
+export interface TlcPresetControl {
+  /** Render, load the list and open on the draft, the old key, or the defaults, plus the context's inputs. */
+  init(): Promise<void>;
+  /** The form changed in a way no DOM event reports (JS state): recompute and keep the draft. */
+  changed(): void;
+  refresh(): Promise<void>;
+  /** Apply a preset by id, or Default settings with ''. */
+  pick(id: string): Promise<void>;
+  openSave(): void;
+  closeSave(): void;
+  /** Save under the name in the field; false when a taken name is still to be confirmed, or on an error. */
+  save(): Promise<boolean>;
+  openDelete(): void;
+  closeDelete(): void;
+  remove(): Promise<boolean>;
+  origin(): { kind: 'defaults' | 'preset'; id: string; name: string };
+  modified(): boolean;
+  /** The selected preset's id while the form is unchanged from it, else ''. */
+  presetId(): string;
+  /** Its name likewise: send it as `project_config.name` so the job card can show it. */
+  presetName(): string;
+  contextInputs(): Record<string, any> | null;
+}
+
 declare global {
   interface HTMLElementTagNameMap {
     'tlc-table-field': TlcTableFieldElement;
@@ -795,7 +853,7 @@ declare global {
   // (e.g. under `PLUGIN_API`), so treat them as legacy: prefer the documented bridge
   // where one exists. The `_tlc*` helpers are injected by the shared UI scripts
   // (`shared.alias_ui` / `shared.alias_override_ui` / `shared.data_source_ui` /
-  // `shared.config_ui`); the picker/cancel/cssVar globals come from the frontend.
+  // `shared.config_ui` / `shared.preset_ui`); the picker/cancel/cssVar globals come from the frontend.
   // NOTE: there is no bare `showToast` — use `PLUGIN_API.showToast`.
 
   /**
@@ -878,6 +936,8 @@ declare global {
   /** The root to send as an override: '' when the selection is the host's default. */
   function _tlcGetProjectRoot(idPrefix: string): string;
   function _tlcPluginConfig(opts?: any): any;
+  /** The preset bar (`shared.preset_ui`); supersedes `_tlcPluginConfig`. */
+  function _tlcPluginPresets(opts: TlcPresetOptions): TlcPresetControl;
   /** The "Create project in" field's HTML; bind it with `_tlcBindProjectLocation`. */
   function _tlcProjectLocationHtml(idPrefix: string): string;
   /** Deprecated (`shared.alias_override_ui`). */

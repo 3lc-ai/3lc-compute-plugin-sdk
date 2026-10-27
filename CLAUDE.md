@@ -115,8 +115,10 @@ section is the condensed working order.
 **Config store** (if the plugin has saved configurations):
 - Use the shared `PluginConfigStore` from `tlc_plugin_sdk.shared.config_store`
   (generic over your config dataclass; JSON persistence under the plugin's config dir).
-- Pair it with `config_ui_script()` from `tlc_plugin_sdk.shared.config_ui` for the config bar
-  (inject via `inject_scripts()`). See the sam3 / timm plugins.
+- Pair it with `preset_ui_script()` from `tlc_plugin_sdk.shared.preset_ui` for the preset bar
+  (inject via `inject_scripts()`; guide → "Presets"). See the yolo / timm plugins.
+  `config_ui_script()` (`shared.config_ui`) is the earlier config bar, superseded; it stays for
+  the plugins still on it.
 
 **Long-running jobs** (training, inference, multi-step import):
 - Implement `run_job(ctx)` — the host owns the queue, GPU/CPU slot, progress fan-out,

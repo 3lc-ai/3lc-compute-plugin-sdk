@@ -1657,6 +1657,47 @@ For a list of tables, put one field below the list to add to it: take its value 
 
 A Hub before 1.2 doesn't define the element, so a plugin that uses it sets `min_frontend_version = "1.2.0"` in `plugin.toml`. The bare `openTablePicker(inputId)` still works for a field you build yourself, without the double-click or the tags. See `TlcTableFieldElement` in `plugin-api.d.ts`.
 
+### Presets
+
+A plugin whose form is worth keeping (a training setup, a metric selection) gets the Hub's preset bar from the SDK rather than a bar of its own. It is one line at the top of the form:
+
+```
+Preset  [ Small objects 1280 · modified          ⌄ ]  Save as…  🗑
+```
+
+A preset is a named template of the whole form, inputs included. Picking one copies its values into the form; only Save writes a preset, and a run never does. The select lists Default settings and then the saved presets, each with a hint and its age. The selected entry gains "· modified" once the form differs from it, and picking it again reverts the form. Save as… turns the bar into a name field, prefilled with a free name and selected: Enter saves, Escape cancels, and a taken name asks "Replace …?" first. The trash icon asks in the bar too. The page opens as it was last left in this browser, else on Default settings.
+
+Inject `preset_ui_script()` from `tlc_plugin_sdk.shared.preset_ui` with `inject_scripts()`, put an empty `<div id="my-presets"></div>` where the bar goes, and wire it:
+
+```js
+var presets = _tlcPluginPresets({
+  pluginId: 'my-plugin',
+  apiPath: '/api/plugins/my-plugin/configs',   // the config CRUD routes, see below
+  mount: 'my-presets',
+  formRoot: 'my-form',                          // input/change events under it mark the form as changed
+  collect: function () { return { table_url: field('table').value, epochs: +field('epochs').value }; },
+  apply: function (v) { field('table').value = v.table_url || ''; field('epochs').value = v.epochs; },
+  defaults: function () { return { table_url: '', epochs: 10 }; },
+  inputs: ['table_url'],
+  contextInputs: function () {
+    var urls = PLUGIN_API.context.resourceUrls || [];
+    return urls.length ? { table_url: urls[0] } : null;   // null when opened bare
+  },
+  autoName: function (v) { return 'resnet50 · ' + new Date().toISOString().slice(0, 10); },
+  summary: function (v) { return v.epochs + ' epochs'; },
+  legacyKey: 'my_selected_config',              // the old config bar's key, honoured once
+});
+presets.init();
+```
+
+- **Routes.** The config CRUD a `PluginConfigStore` plugin already serves: `GET /configs`, `POST /configs` (an empty `id` creates, an `id` replaces), `GET /configs/{id}`, `POST /configs/{id}/delete`. Saved configs appear as presets as they are.
+- **`collect` and `apply`** move the whole form, without `id` and `name`. Return a promise from `apply` when filling the form takes a round trip (a model's parameters fetched after the model is set): the bar compares the form only once it resolves.
+- **Inputs.** `inputs` names the keys that are inputs (tables, folders). When the plugin is opened from a table, `contextInputs()` returns them: they replace the whole input set, inputs it does not name are cleared, and they stay while the page is open, also when a preset is picked. They never count as a modification.
+- **JS state.** Call `presets.changed()` after a change no DOM event reports, such as a card toggled in a JS object.
+- **The run body.** Send `project_config: Object.assign(collect(), { id: presets.presetId(), name: presets.presetName() })`. Both are set while the form is unchanged from a preset, so the job card can name it, and empty otherwise. A run never saves a preset.
+
+`_tlcPluginConfig` (`shared.config_ui`), the earlier config bar whose Train saved into the selected config, is superseded by this; it stays for the plugins still on it. See `TlcPresetOptions` and `TlcPresetControl` in `plugin-api.d.ts`.
+
 ### Buttons
 
 Use `.btn` plus one variant. Never define your own button styles.
@@ -2025,7 +2066,7 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 - [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`). The alias is not optional — the shared widget no longer offers to turn it off (a table written without one is full of absolute paths that resolve on one machine only); the token and folder stay editable in the alias card, and data inside the project is aliased relative to the table so the token survives a move. Register the alias before writing rows, from the durable folder (`alias_folder`), not a declared input the host may rewrite for the run (see [Data inputs and run targets](#data-inputs-and-run-targets))
 - [ ] UI follows the page structure and card conventions from "Styling & UI Conventions" above
 - [ ] Hero section with icon, title, description, and 3 feature badges
-- [ ] Config bar if plugin has saved configurations
+- [ ] Preset bar (`preset_ui_script()`, guide → Presets) if the plugin has saved setups
 - [ ] Dark mode works correctly (no hardcoded colors)
 
 ---
