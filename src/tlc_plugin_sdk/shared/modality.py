@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared modality detection — single source of truth for all table/schema inspection.
 
+Deprecated in SDK 0.5.5: use ``tlc.helpers.AnnotationHelper.detect_task`` (3lc 3.5), which decides
+the task from the schema alone; SDK 0.6 removes this module.
+
 Detects whether a table represents a detection, classification, segmentation,
 pose, or OBB task by walking the schema tree. Used by insights, training, and
 auto-labeling plugins.
@@ -13,6 +16,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +44,13 @@ _SAMPLE_TYPE_MAP: dict[str, str] = {
 
 @dataclass
 class ModalityInfo:
-    """Result of modality detection."""
+    """Result of modality detection.
+
+    .. deprecated:: 0.5.5
+       Returned by :func:`detect_modality_from_table`, which SDK 0.6 removes: use
+       ``tlc.helpers.AnnotationHelper.detect_task`` (3lc 3.5), which returns a
+       ``tlc.helpers.AnnotationTask``.
+    """
 
     modality: str = "unknown"
     """Detected modality: detection, segmentation, classification, pose, obb, or unknown."""
@@ -402,6 +413,10 @@ def _detect_from_json(schema: Any, info: ModalityInfo) -> ModalityInfo:
 # ---------------------------------------------------------------------------
 
 
+@moved_to_3lc(
+    "use tlc.helpers.AnnotationHelper.detect_task (3lc 3.5) instead, and "
+    "tlc.helpers.ImageHelper.image_columns for the image columns"
+)
 def detect_modality_from_table(table: Any) -> ModalityInfo:
     """Detect modality from a loaded table object.
 

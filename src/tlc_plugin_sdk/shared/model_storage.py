@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared utility for saving and copying model checkpoints to Run folders.
 
+Deprecated in SDK 0.5.5: use ``tlc.helpers.ModelHelper`` (3lc 3.5); SDK 0.6 removes this module.
+
 Handles both local filesystem and cloud storage (S3, GCS, Azure) via the
 ``tlc.Url`` abstraction. The compute service is assumed to have write access
 to the Run folder location.
@@ -14,6 +16,8 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,7 @@ def _resolve_to_local_path(url_str: str) -> Path | None:
     return None
 
 
+@moved_to_3lc("use tlc.helpers.ModelHelper.save_to_run (3lc 3.5) instead")
 def save_model_to_run(
     run_url: str,
     model_data: Any,
@@ -120,6 +125,7 @@ def save_model_to_run(
     return relative_path
 
 
+@moved_to_3lc("use tlc.helpers.ModelHelper.set_run_model_info (3lc 3.5) instead")
 def store_model_info_in_run(
     run: Any,
     model_name: str,

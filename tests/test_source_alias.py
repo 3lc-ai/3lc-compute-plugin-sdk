@@ -11,6 +11,9 @@ import pytest
 from tlc_plugin_sdk import JobFailed
 from tlc_plugin_sdk.shared import aliases
 
+# These helpers move to 3lc and SDK 0.6 removes them; their warnings are pinned in test_moved_to_3lc.py.
+pytestmark = pytest.mark.filterwarnings("ignore:tlc_plugin_sdk.shared:DeprecationWarning")
+
 
 @pytest.fixture
 def registered(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:

@@ -250,6 +250,7 @@ def test_notification_failure_is_reported_without_hiding_copy_success() -> None:
     assert "discovery could not be refreshed" in st["warnings"][0]
 
 
+@pytest.mark.filterwarnings("ignore:tlc_plugin_sdk.shared:DeprecationWarning")
 def test_raw_deletes_notify_one_object_per_folder_and_collapse_removed_folders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -270,6 +271,7 @@ def test_raw_deletes_notify_one_object_per_folder_and_collapse_removed_folders(
     ]
 
 
+@pytest.mark.filterwarnings("ignore:tlc_plugin_sdk.shared:DeprecationWarning")
 def test_raw_delete_notification_failure_is_one_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     def notify(url: str, op: str) -> None:
         message = "marker write denied"

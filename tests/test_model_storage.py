@@ -10,6 +10,9 @@ import pytest
 
 from tlc_plugin_sdk.shared.model_storage import save_model_to_run
 
+# These helpers move to 3lc and SDK 0.6 removes them; their warnings are pinned in test_moved_to_3lc.py.
+pytestmark = pytest.mark.filterwarnings("ignore:tlc_plugin_sdk.shared:DeprecationWarning")
+
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_cloud_checkpoint_upload_uses_url_write_bytes(monkeypatch, tmp_path: Path, fail: bool) -> None:

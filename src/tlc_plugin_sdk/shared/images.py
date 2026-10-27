@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared helpers for discovering and reading image data from 3LC tables.
 
+Deprecated in SDK 0.5.5: every helper here moves to 3lc 3.5 (``tlc.helpers.ImageHelper``,
+``tlc.Url.iter_files`` with ``tlc.constants.IMAGE_FILE_EXTENSIONS``), and SDK 0.6 removes this
+module. Each function's warning names its replacement.
+
 Centralizes the image-column discovery and image-reading pattern used across
 plugins. Raw paths are read from ``table.table_rows`` (the row view — paths as
 stored, no sample-view decoding) and resolved with ``tlc.Url.to_absolute``
@@ -41,6 +45,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
+
 if TYPE_CHECKING:
     import tlc
     from PIL.Image import Image
@@ -55,6 +61,7 @@ _IMAGE_COLUMN_CANDIDATES = ("image", "image_path", "file_name", "filename")
 _IMAGE_FILE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 
 
+@moved_to_3lc("use tlc.helpers.ImageHelper.find_image_column (3lc 3.5) instead")
 def get_image_column(table: Any, override: str | None = None) -> str:
     """Discover the name of the image column in a table.
 
@@ -109,6 +116,7 @@ def get_image_column(table: Any, override: str | None = None) -> str:
     raise ValueError(msg)
 
 
+@moved_to_3lc("use tlc.Url(img_path).to_absolute(table_url, allow_unexpanded=False) instead")
 def resolve_image_url(img_path: str, table_url: Any = None) -> tlc.Url:
     """Resolve an image path (possibly relative or aliased) against a table URL.
 
@@ -144,6 +152,7 @@ def resolve_image_url(img_path: str, table_url: Any = None) -> tlc.Url:
     return tlc.Url(img_path).expand_aliases(allow_unexpanded=False).to_absolute(owner)
 
 
+@moved_to_3lc("use tlc.helpers.ImageHelper.open (3lc 3.5) instead")
 def load_image(img_path: str, table_url: Any = None) -> Image:
     """Load an image from a stored path as an RGB PIL image.
 
@@ -173,6 +182,9 @@ def load_image(img_path: str, table_url: Any = None) -> Image:
     return image.convert("RGB")
 
 
+@moved_to_3lc(
+    "use tlc.helpers.ImageHelper.get_exif_image_dimensions instead, which returns (height, width), EXIF-rotated"
+)
 def read_image_size(img_path: str, table_url: Any = None) -> tuple[int, int]:
     """Return a stored image's ``(width, height)`` without decoding its pixels.
 
@@ -204,6 +216,7 @@ def read_image_size(img_path: str, table_url: Any = None) -> tuple[int, int]:
         return image.width, image.height
 
 
+@moved_to_3lc("use tlc.helpers.ImageHelper.open with tlc.helpers.ImageHelper.get_image_url (3lc 3.5) instead")
 def read_image_from_table(table: Any, idx: int, image_column: str | None = None) -> Image:
     """Read a single image from a table row as an RGB PIL image.
 
@@ -235,6 +248,7 @@ def read_image_from_table(table: Any, idx: int, image_column: str | None = None)
     return load_image(str(img_path), table.url)
 
 
+@moved_to_3lc("use tlc.helpers.ImageHelper.get_image_urls (3lc 3.5) instead")
 def get_image_paths(table: Any, image_column: str | None = None) -> list[str]:
     """Read all image paths from a table, resolved to absolute URLs.
 
@@ -265,6 +279,7 @@ def get_image_paths(table: Any, image_column: str | None = None) -> list[str]:
     return paths
 
 
+@moved_to_3lc("use tlc.Url.iter_files with extensions=tlc.constants.IMAGE_FILE_EXTENSIONS (3lc 3.5) instead")
 def list_image_urls(folder: Any, max_count: int = 10000) -> list[str]:
     """List image files under a folder, recursively, on any storage backend.
 

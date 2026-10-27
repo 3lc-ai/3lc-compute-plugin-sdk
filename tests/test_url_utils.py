@@ -8,6 +8,9 @@ import pytest
 
 from tlc_plugin_sdk.shared.url_utils import get_url_column_names, normalize_local_path, normalize_url
 
+# These helpers move to 3lc and SDK 0.6 removes them; their warnings are pinned in test_moved_to_3lc.py.
+pytestmark = pytest.mark.filterwarnings("ignore:tlc_plugin_sdk.shared:DeprecationWarning")
+
 HOME = os.path.expanduser("~")
 
 

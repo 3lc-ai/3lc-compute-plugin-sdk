@@ -4,6 +4,12 @@
 
 Ensures file-path URLs are absolute before passing to the tlc SDK,
 preventing the CWD from being prepended to relative-looking paths.
+
+Deprecated in SDK 0.5.5: the helpers that read or list storage (and ``normalize_url`` and
+``get_url_column_names``, which read 3LC's configuration and tables) leave the SDK in 0.6, for
+``tlc.Url`` and its listing methods in 3lc 3.5. The pure string helpers stay: ``is_url``,
+``normalize_local_path``, ``normalize_path_or_url``, ``join_path_or_url``, ``parent_of``, ``name_of``,
+``stem_of``, ``suffix_of`` and ``is_absolute``.
 """
 
 from __future__ import annotations
@@ -15,9 +21,12 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
+
 logger = logging.getLogger(__name__)
 
 
+@moved_to_3lc("it reads 3LC's configuration, which the SDK no longer does, and 3lc has no replacement for it yet")
 def normalize_url(url: str) -> str:
     """Normalize a 3LC URL for use with the tlc SDK.
 
@@ -88,6 +97,7 @@ def normalize_local_path(path: str) -> str:
     return expanded
 
 
+@moved_to_3lc("use tlc.helpers.SchemaHelper.nested_url_columns(table.rows_schema) instead")
 def get_url_column_names(table: Any) -> list[str]:
     """Return the names of a table's URL/path-valued columns.
 
@@ -183,6 +193,7 @@ def is_absolute(value: str) -> bool:
     return is_url(value) or Path(value).is_absolute()
 
 
+@moved_to_3lc("use tlc.Url.is_dir (3lc 3.5) instead")
 def is_folder(value: str) -> bool:
     """True when *value* is a local directory or a URL prefix with content under it."""
     if not is_url(value):
@@ -202,6 +213,7 @@ def is_folder(value: str) -> bool:
         return False
 
 
+@moved_to_3lc("use tlc.Url.is_file (3lc 3.5) instead")
 def is_file(value: str) -> bool:
     """True when *value* is a local file or an object that exists at the URL."""
     if not is_url(value):
@@ -214,6 +226,7 @@ def is_file(value: str) -> bool:
         return False
 
 
+@moved_to_3lc("use tlc.Url.read_bytes instead")
 def read_bytes(value: str) -> bytes:
     """Read a local file or a URL."""
     if not is_url(value):
@@ -224,11 +237,13 @@ def read_bytes(value: str) -> bytes:
     return data
 
 
+@moved_to_3lc("use tlc.Url.read_text instead")
 def read_text(value: str, *, encoding: str = "utf-8") -> str:
     """Read a local file or a URL as text."""
     return read_bytes(value).decode(encoding)
 
 
+@moved_to_3lc("use tlc.Url.list_dir (3lc 3.5) instead")
 def list_folder(value: str) -> list[tuple[str, bool]]:
     """One level of a folder: ``(child path or URL, is_dir)`` pairs, sorted by name."""
     if not is_url(value):
@@ -248,6 +263,7 @@ def list_folder(value: str) -> list[tuple[str, bool]]:
     return sorted(out, key=lambda t: t[0])
 
 
+@moved_to_3lc("use tlc.Url.iter_files (3lc 3.5) instead")
 def iter_files(folder: str, *, extensions: Collection[str] | None = None, recursive: bool = True) -> list[str]:
     """Files under a folder path or URL, sorted; hidden files skipped, optionally filtered by extension.
 

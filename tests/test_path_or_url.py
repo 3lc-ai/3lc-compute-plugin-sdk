@@ -10,6 +10,9 @@ import pytest
 
 from tlc_plugin_sdk.shared import url_utils as pu
 
+# These helpers move to 3lc and SDK 0.6 removes them; their warnings are pinned in test_moved_to_3lc.py.
+pytestmark = pytest.mark.filterwarnings("ignore:tlc_plugin_sdk.shared:DeprecationWarning")
+
 
 def test_is_url_and_normalize() -> None:
     assert pu.is_url("s3://b/x") and pu.is_url(" abfs://c/x ") and not pu.is_url("/data/x") and not pu.is_url("C:\\x")

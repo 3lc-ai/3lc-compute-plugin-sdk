@@ -48,6 +48,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
+
 logger = logging.getLogger(__name__)
 
 TRANSFER_TTL_S = 6 * 3600.0
@@ -167,6 +169,9 @@ def _notify_discovery(url: str, operation: str) -> None:
         discovery.notify_delete(url)
 
 
+@moved_to_3lc(
+    "use tlc.discovery.notify_storage_changes (3lc 3.5) instead, with the deleted URLs as its second argument"
+)
 def notify_storage_deletes(urls: Iterable[str], *, removed_folders: Iterable[str] = ()) -> list[str]:
     """Announce successful raw-storage deletes, collapsing fully removed folders.
 

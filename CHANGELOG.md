@@ -55,6 +55,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- **The `shared.*` helpers that work with 3LC data move to 3lc 3.5; SDK 0.6 removes them.** Each one
+  still works as before and warns (`DeprecationWarning`, at the plugin's call), naming its replacement:
+
+  | SDK 0.5 | 3lc 3.5 |
+  |---|---|
+  | `url_utils.is_folder`, `is_file`, `list_folder`, `iter_files` | `tlc.Url.is_dir`, `is_file`, `list_dir`, `iter_files` |
+  | `url_utils.read_bytes`, `read_text` | `tlc.Url.read_bytes`, `read_text` |
+  | `url_utils.get_url_column_names` | `tlc.helpers.SchemaHelper.nested_url_columns(table.rows_schema)` |
+  | `url_utils.normalize_url` | none yet |
+  | `images.get_image_column` | `tlc.helpers.ImageHelper.find_image_column` |
+  | `images.resolve_image_url` | `tlc.Url(path).to_absolute(table_url, allow_unexpanded=False)` |
+  | `images.load_image`, `read_image_from_table` | `tlc.helpers.ImageHelper.open` (with `ImageHelper.get_image_url`) |
+  | `images.read_image_size` | `tlc.helpers.ImageHelper.get_exif_image_dimensions`, which returns `(height, width)` |
+  | `images.get_image_paths` | `tlc.helpers.ImageHelper.get_image_urls` |
+  | `images.list_image_urls` | `tlc.Url.iter_files(extensions=tlc.constants.IMAGE_FILE_EXTENSIONS)` |
+  | `labels.*` | `tlc.Table.get_simple_value_map` with `tlc.helpers.AnnotationHelper` |
+  | `modality.detect_modality_from_table`, `ModalityInfo` | `tlc.helpers.AnnotationHelper.detect_task` |
+  | `model_storage.save_model_to_run`, `store_model_info_in_run` | `tlc.helpers.ModelHelper.save_to_run`, `set_run_model_info` |
+  | `aliases.register_alias`, `validate_alias_location`, `relative_alias_value` | `tlc.helpers.ProjectHelper.register_data_alias` |
+  | `aliases.register_source_alias`, `register_run_alias` | `tlc.integration.compute.register_source_alias`, `register_run_alias` |
+  | `aliases.get_table_aliases` | `tlc.url.get_table_url_aliases` |
+  | `aliases.apply_alias_overrides`, `restore_aliases` | `tlc.url.override_url_aliases`; in a job, `tlc.integration.compute.job_scope` |
+  | `aliases.copy_folder_to_url`, `CopyProgress` | none |
+  | `storage_transfer.notify_storage_deletes` | `tlc.discovery.notify_storage_changes` |
+
+  What stays: `url_utils`' string helpers (`is_url`, `normalize_local_path`, `normalize_path_or_url`,
+  `join_path_or_url`, `parent_of`, `name_of`, `stem_of`, `suffix_of`, `is_absolute`) and
+  `aliases.is_remote_url` and `default_alias_token`. A plugin that uses a replacement declares `3lc`
+  in its own dependencies.
 - `TransferRegistry`'s per-object `notify_change`, and constructing a `TransferRegistry` without
   `on_change` (which notifies 3LC discovery through the SDK, as before). Both warn
   (`DeprecationWarning`); SDK 0.6 requires `on_change`. Giving both is a `TypeError`.

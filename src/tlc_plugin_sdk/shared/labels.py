@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared helpers for discovering and reading class labels from 3LC tables.
 
+Deprecated in SDK 0.5.5: label maps come from 3lc itself (``tlc.Table.get_simple_value_map`` with
+``tlc.helpers.AnnotationHelper``, 3lc 3.5), and SDK 0.6 removes this module. Each function's
+warning names its replacement.
+
 Centralizes the label-handling pattern used across plugins. The actual value
 map reading is core SDK API — ``table.get_value_map(path)`` and
 ``table.get_simple_value_map(path)`` (which canonicalize on
@@ -28,6 +32,8 @@ this module, so the port touches exactly this file.
 from __future__ import annotations
 
 from typing import Any
+
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
 
 # Nested sub-paths where instance labels live, in preference order. Verified
 # against tlc 3.1: BoundingBoxes2D produces instances_additional_data.label,
@@ -98,6 +104,9 @@ def _find_label_path(table: Any, column: str | None = None) -> str | None:
     return None
 
 
+@moved_to_3lc(
+    "use tlc.Table.get_simple_value_map with the label_path of tlc.helpers.AnnotationHelper.get (3lc 3.5) instead"
+)
 def get_label_map(table: Any, column: str | None = None, *, path: str | None = None) -> dict[int, str]:
     """Read a table's label map as ``{class index: internal name}``.
 
@@ -122,6 +131,10 @@ def get_label_map(table: Any, column: str | None = None, *, path: str | None = N
     return dict(simple) if simple else {}
 
 
+@moved_to_3lc(
+    "use tlc.Table.get_simple_value_map with the label_path of tlc.helpers.AnnotationHelper.get (3lc 3.5) "
+    "instead, ordered by class index"
+)
 def get_label_names(table: Any, column: str | None = None, *, path: str | None = None) -> list[str]:
     """Read a table's class names, ordered by class index.
 
@@ -138,6 +151,7 @@ def get_label_names(table: Any, column: str | None = None, *, path: str | None =
     return [label_map[k] for k in sorted(label_map)]
 
 
+@moved_to_3lc("build the lookup from tlc.Table.get_simple_value_map instead")
 def get_class_name_lookup(table: Any, column: str | None = None, *, path: str | None = None) -> dict[str, str]:
     """Read a table's label map as a string-keyed lookup table.
 
@@ -174,6 +188,7 @@ def get_class_name_lookup(table: Any, column: str | None = None, *, path: str | 
     return names
 
 
+@moved_to_3lc("use tlc.Table.get_simple_value_map with use_display_names=True (3lc 3.5) instead")
 def get_display_value_map(table: Any, path: str) -> dict[float, str] | None:
     """Read a value map as ``{float key: display name}`` for UI purposes.
 
@@ -202,6 +217,9 @@ def get_display_value_map(table: Any, path: str) -> dict[float, str] | None:
     return result or None
 
 
+@moved_to_3lc(
+    "use tlc.helpers.AnnotationHelper.find_all with type=tlc.helpers.AnnotationType.CATEGORICAL_LABEL (3lc 3.5) instead"
+)
 def find_label_column(table: Any) -> str | None:
     """Find a top-level categorical label column in a table, if any.
 

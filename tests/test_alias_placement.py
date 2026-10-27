@@ -20,6 +20,9 @@ from tlc_plugin_sdk.shared import aliases
 from tlc_plugin_sdk.shared.alias_ui import alias_ui_script
 from tlc_plugin_sdk.shared.data_source_ui import data_source_ui_script
 
+# These helpers move to 3lc and SDK 0.6 removes them; their warnings are pinned in test_moved_to_3lc.py.
+pytestmark = pytest.mark.filterwarnings("ignore:tlc_plugin_sdk.shared:DeprecationWarning")
+
 
 class _LocalUrl:
     """The two ``tlc.Url`` calls the copy makes, backed by the filesystem."""

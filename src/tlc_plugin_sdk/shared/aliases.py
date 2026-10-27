@@ -12,6 +12,11 @@ Three concerns:
 3. **Override** — when consuming an existing table, temporarily override an
    alias so ``<TOKEN>`` resolves to a fast local path (e.g. SSD) instead of
    the default (e.g. S3).  Overrides are session-scoped and never persisted.
+
+Deprecated in SDK 0.5.5: all three move to 3lc 3.5 (``tlc.helpers.ProjectHelper.register_data_alias``,
+``tlc.integration.compute``, ``tlc.url``), and SDK 0.6 keeps only :func:`is_remote_url` and
+:func:`default_alias_token` here. Each function's warning names its replacement. The alias card's
+run-body keys are read by :func:`tlc_plugin_sdk.shared.alias_ui.parse_alias_card`.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,9 +43,13 @@ def is_remote_url(value: str) -> bool:
 
 
 CopyProgress = Callable[[int, int, int, int], None]
-"""``(files_done, files_total, bytes_done, bytes_total)`` — called after every file."""
+"""``(files_done, files_total, bytes_done, bytes_total)`` — called after every file.
+
+Deprecated in SDK 0.5.5 with :func:`copy_folder_to_url`, which SDK 0.6 removes.
+"""
 
 
+@moved_to_3lc("it has no replacement")
 def copy_folder_to_url(
     src_dir: str,
     dst_url: str,
@@ -156,6 +167,10 @@ def default_alias_token(project_name: str) -> str:
 _TABLE_DEPTH_BELOW_PROJECT = 4
 
 
+@moved_to_3lc(
+    "use tlc.helpers.ProjectHelper.register_data_alias (3lc 3.5) instead, which writes a folder inside "
+    "the project as a $./ value itself"
+)
 def relative_alias_value(root_url: str | None, project_name: str, target: str) -> str | None:
     """The value to register for *target* when it lives inside the project — else ``None``.
 
@@ -186,6 +201,10 @@ def relative_alias_value(root_url: str | None, project_name: str, target: str) -
     return "../" * _TABLE_DEPTH_BELOW_PROJECT + inside[len(project_dir) + 1 :]
 
 
+@moved_to_3lc(
+    "use tlc.helpers.ProjectHelper.register_data_alias (3lc 3.5) instead, which refuses a local folder "
+    "for a cloud project itself (tlc.url.AliasLocationError)"
+)
 def validate_alias_location(source: str, root_url: str | None = None) -> None:
     """Refuse a machine-local default alias in a cloud project before any writes.
 
@@ -208,6 +227,7 @@ def validate_alias_location(source: str, root_url: str | None = None) -> None:
         raise JobFailed(msg)
 
 
+@moved_to_3lc("use tlc.helpers.ProjectHelper.register_data_alias (3lc 3.5) instead")
 def register_alias(
     project_name: str,
     image_folder: str,
@@ -327,6 +347,7 @@ def _session_alias_folder(read_folder: str, source_folder: str, alias_folder: st
     raise JobFailed(msg)
 
 
+@moved_to_3lc("use tlc.integration.compute.register_source_alias (3lc 3.5) instead")
 def register_source_alias(
     project_name: str,
     read_folder: str,
@@ -382,6 +403,7 @@ def register_source_alias(
     )
 
 
+@moved_to_3lc("use tlc.integration.compute.register_run_alias (3lc 3.5) instead")
 def register_run_alias(
     params: dict[str, Any],
     read_folder: str,
@@ -433,6 +455,7 @@ def register_run_alias(
 _ALIAS_TOKEN_RE = re.compile(r"<([A-Z][A-Z0-9_]*)>")
 
 
+@moved_to_3lc("use tlc.url.get_table_url_aliases (3lc 3.5) instead")
 def get_table_aliases(table_url: str) -> list[dict[str, str]]:
     """Discover which URL aliases a table uses.
 
@@ -498,6 +521,10 @@ def get_table_aliases(table_url: str) -> list[dict[str, str]]:
     return result
 
 
+@moved_to_3lc(
+    "use tlc.url.override_url_aliases (3lc 3.5) instead, or in a job tlc.integration.compute.job_scope "
+    "with ComputePlugin.applies_alias_overrides = True"
+)
 def apply_alias_overrides(overrides: list[dict[str, str]]) -> list[dict[str, str]]:
     """Temporarily override alias paths for the current session.
 
@@ -537,6 +564,10 @@ def apply_alias_overrides(overrides: list[dict[str, str]]) -> list[dict[str, str
     return originals
 
 
+@moved_to_3lc(
+    "use tlc.url.override_url_aliases (3lc 3.5) instead, or in a job tlc.integration.compute.job_scope "
+    "with ComputePlugin.applies_alias_overrides = True"
+)
 def restore_aliases(originals: list[dict[str, str]]) -> None:
     """Restore aliases to their original paths after an override.
 
