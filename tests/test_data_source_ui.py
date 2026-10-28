@@ -108,11 +108,12 @@ def _run(tmp_path: Path, body: str, *, routes: dict[str, Any] | None = None, tar
         + " fetched: api.fetched.slice(), open: _els['f-ds-panel'].classList.contains('open'),"
         + " value: _els['f'].value }; }\n"
         # A row of the listing, built by hand (innerHTML is never parsed): `rowWith({'data-ds-nav': '/x'})`, or
-        # the name inside one, `rowWith({}, row)`. `clickOn` sends the panel a click that landed on it.
+        # the name inside one, `rowWith({}, row)`. `clickOn` sends the panel a click that landed on it and returns
+        # the event: `stopped` says the widget ended it there (the fake document has no listeners of its own).
         + "function rowWith(attrs, parent) { var el = new FakeEl(''); Object.keys(attrs).forEach(function (k) {"
         + " el.setAttribute(k, attrs[k]); }); el.parentNode = parent || null; return el; }\n"
         + "function clickOn(el) { var ev = new Event('click'); ev.target = el;"
-        + " _els['f-ds-panel'].dispatchEvent(ev); }\n"
+        + " _els['f-ds-panel'].dispatchEvent(ev); return ev; }\n"
         + "(async function () {\n"
         + body
         + "\n})().then(function (out) { process.stdout.write(JSON.stringify(out)); });\n"
@@ -350,15 +351,15 @@ def test_a_click_anywhere_on_a_file_row_picks_it(tmp_path: Path) -> None:
         "_els['f-ds-browse-btn'].click(); await tick();\n"
         "var listed = els();\n"
         # The click lands on the name inside the row, as a real one does.
-        "clickOn(rowWith({}, rowWith({'data-ds-select': '/Users/me/a.yaml'})));\n"
-        "var picked = els(); picked.fired = fired; return [listed, picked];",
+        "var ev = clickOn(rowWith({}, rowWith({'data-ds-select': '/Users/me/a.yaml'})));\n"
+        "var picked = els(); picked.fired = fired; picked.stopped = ev.stopped; return [listed, picked];",
         routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
     )
     listed, picked = out
     assert '<div class="tlc-ds-entry" data-ds-select="/Users/me/a.yaml">' in listed["panel"]
     assert 'class="ds-select-btn">Select</button>' in listed["panel"]  # the cue stays, with no target of its own
     assert listed["open"] and picked["value"] == "/Users/me/a.yaml" and not picked["open"]
-    assert picked["fired"] == ["input", "change"]
+    assert picked["fired"] == ["input", "change"] and picked["stopped"]
 
 
 @needs_node
@@ -368,10 +369,12 @@ def test_a_folder_picker_picks_a_folder_from_its_select_and_opens_it_from_the_re
         "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder'});\n"
         "_els['f-ds-browse-btn'].click(); await tick();\n"
         "var listed = els();\n"
-        "clickOn(rowWith({'data-ds-nav': '/Users/me/data'})); await tick();\n"
-        "var opened = els();\n"
-        "clickOn(rowWith({'data-ds-select-folder': '/Users/me/data'}, rowWith({'data-ds-nav': '/Users/me/data'})));\n"
-        "return [listed, opened, els()];",
+        "var navEv = clickOn(rowWith({'data-ds-nav': '/Users/me/data'})); await tick();\n"
+        "var opened = els(); opened.stopped = navEv.stopped;\n"
+        "var pickEv = clickOn(rowWith({'data-ds-select-folder': '/Users/me/data'},"
+        " rowWith({'data-ds-nav': '/Users/me/data'})));\n"
+        "var picked = els(); picked.stopped = pickEv.stopped; picked.idle = clickOn(rowWith({})).stopped;\n"
+        "return [listed, opened, picked];",
         routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
     )
     listed, opened, picked = out
@@ -383,7 +386,11 @@ def test_a_folder_picker_picks_a_folder_from_its_select_and_opens_it_from_the_re
     assert '<div class="tlc-ds-entry tlc-ds-entry-disabled" title="Choose a folder">' in panel
     assert "data-ds-select=" not in panel
     assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
-    assert picked["value"] == "/Users/me/data" and not picked["open"]
+    # Opening replaces the listing, so the clicked row is gone by the time the click would reach the document's
+    # outside-click check: the panel ends the click itself, or that check closes it on every folder click.
+    assert opened["stopped"]
+    assert picked["value"] == "/Users/me/data" and not picked["open"] and picked["stopped"]
+    assert picked["idle"] is False  # a click on nothing in particular goes on to the page
 
 
 @needs_node

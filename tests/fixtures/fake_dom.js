@@ -58,7 +58,8 @@ FakeEl.prototype.appendChild = function (el) { this.options.push(el); return el;
 FakeEl.prototype.setAttribute = function (k, v) { this._attrs[k] = String(v); };
 FakeEl.prototype.getAttribute = function (k) { return k in this._attrs ? this._attrs[k] : null; };
 
-function Event(type) { this.type = type; }
+function Event(type) { this.type = type; this.stopped = false; }
+Event.prototype.stopPropagation = function () { this.stopped = true; };
 
 var _els = {};
 function addEl(id) { _els[id] = new FakeEl(id); return _els[id]; }
