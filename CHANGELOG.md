@@ -58,11 +58,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The data-source picker (`shared.data_source_ui`) picks a file from a click anywhere on its row, not
-  only on its Select button. In a folder picker each folder row has its own Select, a click elsewhere on
-  the row opens it, as `..` does, and files are listed dimmed and cannot be picked, so a folder field no
-  longer accepts a file. A double-click in the empty field opens the picker, as it does in
-  `<tlc-table-field>`.
+- The data-source picker (`shared.data_source_ui`) is a file chooser. One path bar: the place being
+  browsed (a machine's folder, a bucket) is its first crumb and the switcher when there are several, the
+  path below it follows the browsing, and an arrow at its end goes up; the "Location" row and the `..`
+  row are gone. A click highlights a row, a double-click opens a folder or picks a file, and the arrow
+  keys, Enter, Backspace and Escape work. A footer holds Cancel and the one action (Select; "Select this
+  folder" in a folder picker with nothing highlighted; Open for a highlighted folder in a file picker),
+  in place of the per-row Select buttons and the breadcrumb's "Select This Folder". Files in a folder
+  picker are dimmed and cannot be picked, so a folder field no longer accepts a file. The rows stay while
+  the next listing loads, so opening a folder no longer flashes. A double-click in the empty field opens
+  the chooser, as it does in `<tlc-table-field>`.
+- An output field (`purpose: 'output'`) is a Save dialog: the footer has a name box, prefilled from the
+  new `suggestedName`, and the pick is `<folder shown>/<name>`. A file output's Save adds the first
+  extension `accept` names when the name has none, and a highlighted file puts its name in the box
+  ("Replaces <name>"); a folder output's box names a new folder under the one shown, or an existing one
+  ("Adds to <name>"), and empty picks the folder shown. `mode`, `accept` and `suggestedName` may be
+  functions, read on every open. Declared in the contract; guide → Forms → "Path fields".
 - The contract documents that `PLUGIN_API.planRun` always resolves to a plan on a Hub 1.2 host and
   rejects when the run cannot be planned; the browser never sends `_alias_overrides`.
 - The supported Python range is `>=3.10,<3.15`, matching the host: the core has no Python 3.15 wheels yet,

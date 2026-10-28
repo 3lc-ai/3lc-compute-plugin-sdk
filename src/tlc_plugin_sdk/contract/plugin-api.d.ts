@@ -922,21 +922,31 @@ declare global {
   /** Bind the "Create project in" select; resolves the selected root once the roots are known. */
   function _tlcBindProjectLocation(idPrefix: string, pluginId?: string): Promise<string>;
   /**
-   * Bind a data-source field. `config.mode`: `'file'` (default) or `'folder'` (`'dir'` reads as
-   * `'folder'`); `config.purpose`: `'input'` (default) or `'output'`; `config.accept`: a glob list.
-   * The locations follow `PLUGIN_API.getRunTarget()`.
+   * Bind a data-source field: a file chooser under it. `config.mode`: `'file'` (default) or
+   * `'folder'` (`'dir'` reads as `'folder'`); `config.accept`: a glob list (`'*.csv,*.tsv'`);
+   * `config.purpose`: `'input'` (default), or `'output'` for a Save dialog, whose name box starts
+   * with `config.suggestedName` and whose pick is `<folder shown>/<name>` (a file output adds the
+   * first extension `accept` names when the name has none; a folder output with an empty box picks
+   * the folder shown). `mode`, `accept` and `suggestedName` may be functions, read on every open,
+   * for a form whose choice changes them. The places follow `PLUGIN_API.getRunTarget()`.
    */
   function _tlcBindDataSource(
     idPrefix: string,
     computeUrl: string,
     pluginId: string,
-    config?: { accept?: string; mode?: 'file' | 'folder' | 'dir'; purpose?: 'input' | 'output' },
+    config?: {
+      accept?: string | (() => string);
+      mode?: 'file' | 'folder' | 'dir' | (() => 'file' | 'folder' | 'dir');
+      purpose?: 'input' | 'output';
+      suggestedName?: string | (() => string);
+    },
   ): void;
   /** True when the compute URL is a loopback address: the compute host is this browser's machine. */
   function _tlcComputeIsHere(computeUrl: string): boolean;
+  /** The field's markup: the text input (id `idPrefix`), Browse…, and the panel. Bind it once it is in the DOM. */
   function _tlcDataSourceHtml(
     idPrefix: string,
-    config?: { placeholder?: string; accept?: string; allowUpload?: boolean },
+    config?: { placeholder?: string; accept?: string; allowUpload?: boolean; mode?: 'file' | 'folder' | 'dir' },
   ): string;
   function _tlcDefaultAliasToken(projectName: string): string;
   /** The compute host's default project root (`GET /api/deployment/storage`), '' when it cannot say. */
