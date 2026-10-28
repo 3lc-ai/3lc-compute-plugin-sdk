@@ -807,8 +807,8 @@ def test_failed_retention_is_explicit_and_unsupported_by_default(tmp_path: Path)
             return NodeStateResponse(state="running", detail=f"{provider_id} isolated")
 
     with PluginHarness(Retaining(), plugin_id="fake", config_root=tmp_path) as h:
-        response = h.post("/infra/workspace-retain/vm-1", json={})
+        response = h.post("/infra/workspace-retain/vm-1", json_body={})
         assert response.status_code == 200
         assert response.json()["detail"] == "vm-1 isolated"
     with PluginHarness(FakeProvider(), plugin_id="fake", config_root=tmp_path) as h:
-        assert h.post("/infra/workspace-retain/vm-1", json={}).status_code == 501
+        assert h.post("/infra/workspace-retain/vm-1", json_body={}).status_code == 501
