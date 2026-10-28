@@ -43,9 +43,9 @@ bucket) is the first crumb and switches places when there are several, the path 
 follows the browsing, and an arrow at its end goes up. Its rows: a click opens a folder, or
 picks a file (an output picker puts the file's name in its box instead); the arrow keys
 highlight a row, Enter opens a highlighted folder or does the footer's action, Backspace goes
-up, Escape closes. Its footer: Cancel and the one action: a file picker's Select (Open for a
-highlighted folder), a folder picker's "Select this folder". In a folder picker files are listed
-dimmed and cannot be picked. A double-click in the empty field opens the panel, as Browse… does
+up, Escape closes. A folder picker's footer has Cancel and "Select this folder", for the folder
+shown; files there are listed dimmed and cannot be picked. A file picker has no buttons: the
+click on the file is the pick. A double-click in the empty field opens the panel, as Browse… does
 (the Hub's ``<tlc-table-field>`` does the same for a table URL).
 
 An output picker (``purpose: 'output'``) saves: its footer has a name box, prefilled from
@@ -875,24 +875,30 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    });\n"
     "    h += '</div>';\n"
     "    // The footer: an output picker's name box with its note, else the filter (only files are filtered, see\n"
-    "    // data_source_routes.py); then Cancel and the one action.\n"
+    "    // data_source_routes.py); then Cancel and the one action. A file picker has no buttons: the click on\n"
+    "    // the file is the pick (Enter from the keyboard), and Escape or a click outside closes.\n"
     "    var p = _primary();\n"
-    "    h += '<div class=\"tlc-ds-footer\">';\n"
-    "    if (output) {\n"
-    "      h += '<label class=\"ds-name-label\">' + (mode === 'folder' ? 'New folder' : 'File name') + '</label>';\n"
-    "      h += '<input type=\"text\" class=\"form-control form-control-sm\" data-ds-name autocomplete=\"off\"'\n"
-    "        + ' spellcheck=\"false\" value=\"' + _esc(_name) + '\"'\n"
-    "        + (mode === 'folder' ? ' placeholder=\"none: the folder shown\"' : '') + '>';\n"
-    "      h += '<span class=\"ds-note\" data-ds-note>' + _esc(p.note || '') + '</span>';\n"
-    "    } else {\n"
-    "      h += '<span class=\"ds-note\">' + (glob ? 'Showing ' + _esc(glob) : '') + '</span>';\n"
+    "    var buttons = output || mode === 'folder';\n"
+    "    if (buttons || glob || data.truncated) {\n"
+    "      h += '<div class=\"tlc-ds-footer\">';\n"
+    "      if (output) {\n"
+    "        h += '<label class=\"ds-name-label\">' + (mode === 'folder' ? 'New folder' : 'File name') + '</label>';\n"
+    "        h += '<input type=\"text\" class=\"form-control form-control-sm\" data-ds-name autocomplete=\"off\"'\n"
+    "          + ' spellcheck=\"false\" value=\"' + _esc(_name) + '\"'\n"
+    "          + (mode === 'folder' ? ' placeholder=\"none: the folder shown\"' : '') + '>';\n"
+    "        h += '<span class=\"ds-note\" data-ds-note>' + _esc(p.note || '') + '</span>';\n"
+    "      } else {\n"
+    "        h += '<span class=\"ds-note\">' + (glob ? 'Showing ' + _esc(glob) : '') + '</span>';\n"
+    "      }\n"
+    "      if (data.truncated) h += '<span class=\"ds-note\">More items than shown here.</span>';\n"
+    "      if (buttons) {\n"
+    "        h += '<button type=\"button\" class=\"btn btn-ghost btn-sm\" data-ds-cancel>Cancel</button>';\n"
+    "        h += '<button type=\"button\" class=\"btn btn-primary btn-sm\" data-ds-primary'\n"
+    "          + (p.disabled ? ' disabled' : '') + (p.title ? ' title=\"' + _esc(p.title) + '\"' : '') + '>'\n"
+    "          + _esc(p.label) + '</button>';\n"
+    "      }\n"
+    "      h += '</div>';\n"
     "    }\n"
-    "    if (data.truncated) h += '<span class=\"ds-note\">More items than shown here.</span>';\n"
-    "    h += '<button type=\"button\" class=\"btn btn-ghost btn-sm\" data-ds-cancel>Cancel</button>';\n"
-    "    h += '<button type=\"button\" class=\"btn btn-primary btn-sm\" data-ds-primary'\n"
-    "      + (p.disabled ? ' disabled' : '') + (p.title ? ' title=\"' + _esc(p.title) + '\"' : '') + '>'\n"
-    "      + _esc(p.label) + '</button>';\n"
-    "    h += '</div>';\n"
     "    panel.innerHTML = h;\n"
     "    // A change of place: the run target's disk, or a bucket\n"
     "    var locSel = panel.querySelector('[data-ds-loc]');\n"

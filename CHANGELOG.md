@@ -58,16 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The data-source picker (`shared.data_source_ui`) is a file chooser. One path bar: the place being
-  browsed (a machine's folder, a bucket) is its first crumb and the switcher when there are several, the
-  path below it follows the browsing, and an arrow at its end goes up; the "Location" row and the `..`
-  row are gone. A click opens a folder or picks a file; the arrow keys highlight a row, Enter opens a
-  highlighted folder or does the action, Backspace goes up and Escape closes. A footer holds Cancel and
-  the one action (a file picker's Select, Open for a highlighted folder; a folder picker's "Select this
-  folder"), in place of the per-row Select buttons and the breadcrumb's "Select This Folder". Files in a folder
-  picker are dimmed and cannot be picked, so a folder field no longer accepts a file. The rows stay while
-  the next listing loads, so opening a folder no longer flashes. A double-click in the empty field opens
-  the chooser, as it does in `<tlc-table-field>`.
+- The data-source picker (`shared.data_source_ui`) is a file chooser. A Location line names the place
+  being browsed (a machine's folder, a bucket), as the Hub's dropdown when there are several; under it a
+  path bar follows the browsing, from the place's root, with an arrow at its end that goes up (the `..`
+  row is gone); only the rows scroll. A click opens a folder or picks a file; the arrow keys highlight a
+  row, Enter opens a highlighted folder or picks a highlighted file, Backspace goes up and Escape closes.
+  A file picker has no buttons: the click is the pick. A folder picker's footer holds Cancel and "Select
+  this folder", in place of the per-row Select buttons and the breadcrumb's "Select This Folder"; its
+  files are dimmed and cannot be picked, so a folder field no longer accepts a file. The rows stay while
+  the next listing loads (fading when it takes a while), so opening a folder no longer flashes. A
+  double-click in the empty field opens the chooser, as it does in `<tlc-table-field>`.
 - An output field (`purpose: 'output'`) is a Save dialog: the footer has a name box, prefilled from the
   new `suggestedName`, and the pick is `<folder shown>/<name>`. A file output's Save adds the first
   extension `accept` names when the name has none, and a click on a file puts its name in the box

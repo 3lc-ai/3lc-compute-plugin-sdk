@@ -405,20 +405,17 @@ def test_a_file_picker_picks_a_file_on_a_click_and_opens_a_folder_on_one(tmp_pat
     assert '<span class="sep">/</span><span data-ds-nav="/Users/me">me</span>' in panel
     assert 'class="ds-up" title="Up" data-ds-nav="/Users">' in panel
     assert ">..<" not in panel  # the way up is the arrow, not a row
-    # Rows, and a footer with the filter, Cancel and the one action, disabled until a file is highlighted.
+    # Rows, and a footer with the filter only: a file picker has no buttons, the click is the pick.
     assert '<div class="tlc-ds-entry" data-ds-row="2">' in panel and "a.yaml" in panel
     assert '<span class="ds-note">Showing *.yaml</span>' in panel
-    assert "data-ds-cancel>Cancel</button>" in panel
-    assert 'data-ds-primary disabled title="Choose a file to enable Select.">Select</button>' in panel
+    assert "data-ds-cancel" not in panel and "data-ds-primary" not in panel
     assert picked["value"] == "/Users/me/a.yaml" and not picked["open"] and picked["stopped"]
     assert picked["fired"] == ["input", "change"]
     # The rows stay while the folder's listing loads: no flash through "Loading…" on a quick listing.
     assert 'data-ds-row="0"' in opened["during"] and "Loading" not in opened["during"]
     assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
     assert '<div class="tlc-ds-entry is-selected" data-ds-row="0">' in dir_hl["panel"]
-    assert "data-ds-primary>Open</button>" in dir_hl["panel"]
     assert '<div class="tlc-ds-entry is-selected" data-ds-row="2">' in file_hl["panel"]
-    assert "data-ds-primary>Select</button>" in file_hl["panel"]
     assert by_key["value"] == "/Users/me/a.yaml" and not by_key["open"]
 
 
