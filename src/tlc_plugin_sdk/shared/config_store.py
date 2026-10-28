@@ -118,7 +118,18 @@ class PluginConfigStore(Generic[T]):
         return self._read(self._path(config_id))
 
     def save_config(self, config: T) -> T:
-        """Save a config, assigning ``id`` and ``created`` on first save."""
+        """Save a config, assigning ``id`` and ``created`` on first save.
+
+        A save of a stored id that leaves ``created`` empty or ``last_run`` unset keeps the stored
+        values: a page that does not send them back must not make an old config look new or unused.
+        """
+        if getattr(config, "id", ""):
+            stored = self.get_config(config.id)  # type: ignore[attr-defined]
+            if stored is not None:
+                if not getattr(config, "created", ""):
+                    config.created = getattr(stored, "created", "")  # type: ignore[attr-defined]
+                if getattr(config, "last_run", None) is None:
+                    config.last_run = getattr(stored, "last_run", None)  # type: ignore[attr-defined]
         if not getattr(config, "id", ""):
             config.id = str(uuid.uuid4())  # type: ignore[attr-defined]
         if not getattr(config, "created", ""):

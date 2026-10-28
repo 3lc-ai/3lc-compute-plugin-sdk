@@ -702,14 +702,16 @@ export interface TlcPickerItem {
   /** A rule between rows. */
   separator?: boolean;
   /**
-   * Makes the row removable: a trash button on hover, or Delete on the active row (Shift+Delete
-   * when the anchor is a text field), turns the row into the confirmation in place. When `run`
-   * resolves the row goes away; when it rejects the row comes back with the error as its hint.
+   * Makes the row removable: a trash button on hover, in the column under the chevron, or Delete
+   * on the active row (Shift+Delete when the anchor is a text field). Without `confirm` it runs
+   * `run` at once, and the row dims meanwhile; with it, the row asks first. When `run` resolves
+   * the row goes away and the list stays open; when it rejects the row comes back with the error
+   * as its hint.
    */
   remove?: {
-    /** The confirming button's text; "Delete" by default. */
+    /** The trash button's title and the confirming button's text; "Delete" by default. */
     label?: string;
-    /** The question in the row; "Delete “<label>”?" by default. */
+    /** A question to ask in the row first, such as "Delete this preset?"; none by default. */
     confirm?: string;
     run(item: TlcPickerItem): unknown;
   };
@@ -731,6 +733,11 @@ export interface TlcPickerOptions {
  * `<select>` in a fragment opens it by itself; `open()` shows it for a menu that is not a
  * select. Focus stays on the anchor, which carries `aria-expanded`, `aria-controls` and
  * `aria-activedescendant` while the list is open. A Hub before 1.2 has no `TlcPicker`.
+ *
+ * A row has the ✓ on the left, then the label and the hint; in a list with removable rows, the
+ * trash is in a column on the right, under the chevron. A select's own options can be such rows:
+ * `<option data-hint="2 days ago">` shows a muted hint, and `<option data-removable>` gets the
+ * trash once the page has said how to remove an option with `onRemove()`.
  */
 export interface TlcPickerApi {
   /** Show the list under `anchor`, closing any other list first. */
@@ -739,6 +746,13 @@ export interface TlcPickerApi {
   close(): void;
   /** Whether the list is open under `anchor`, or open at all without one. */
   isOpen(anchor?: HTMLElement): boolean;
+  /**
+   * How to remove an option of `select` with `data-removable`: the list's trash calls `run(option)`
+   * at once. The list stays open; the page removes the option itself, and the list follows the
+   * options as they are. A rejection shows its message in the row. `null` takes it back. Not on a
+   * Hub 1.2 build from before it; feature-detect it.
+   */
+  onRemove?(select: HTMLSelectElement, run: ((option: HTMLOptionElement) => Promise<unknown>) | null): void;
 }
 
 // ── The table field (Hub 1.2 and later) ─────────────────────────────────────────
@@ -797,7 +811,8 @@ export interface TlcPresetOptions {
   /** The suggested name for a new preset. */
   autoName?(values: Record<string, any>): string;
   /** A short hint shown after the name in the list, e.g. "yolo11n · detect". */
-  summary?(values: Record<string, any>): string;
+  /** Shown after the name; a list of parts is joined with " · ", leaving out the empty ones. */
+  summary?(values: Record<string, any>): string | Array<string | null | undefined>;
   /** The old config bar's localStorage key; its remembered config opens once, as the draft takes over. */
   legacyKey?: string;
   /** Milliseconds before a change is written as the draft (default 300). */
@@ -817,9 +832,8 @@ export interface TlcPresetControl {
   closeSave(): void;
   /** Save under the name in the field; false when a taken name is still to be confirmed, or on an error. */
   save(): Promise<boolean>;
-  openDelete(): void;
-  closeDelete(): void;
-  remove(): Promise<boolean>;
+  /** Delete a preset, the selected one without an id. Asks nothing; false when it failed. */
+  remove(id?: string): Promise<boolean>;
   origin(): { kind: 'defaults' | 'preset'; id: string; name: string };
   modified(): boolean;
   /** The selected preset's id while the form is unchanged from it, else ''. */

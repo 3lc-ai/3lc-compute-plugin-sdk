@@ -45,7 +45,16 @@ PRESET_UI_JS = r"""
  *
  * Save as… turns the bar into a name field, prefilled with a free name (the preset the form came
  * from, else the plugin's auto name), text selected: Enter or Save saves, Escape or Cancel closes.
- * A taken name asks "Replace “name”?" first. The trash icon asks "Delete “name”?" in the bar.
+ * A taken name asks "Replace “name”?" first.
+ *
+ * Each saved preset says when it was last used for a run ("used 2 days ago", from the `last_run` the
+ * plugin stamps), else when it was saved ("saved last week").
+ *
+ * Deleting asks nothing. On a Hub whose dropdown list can remove options (`TlcPicker.onRemove`),
+ * each saved preset has a trash button in the list, which keeps the list open, and the time is the
+ * row's muted hint. On an older Hub the trash sits beside the select and deletes the selected
+ * preset, and the time is part of the label. Deleting the preset the form came from leaves the form
+ * as it is, now from Default settings, modified.
  *
  * The page opens as it was last left in this browser: a draft (the form, and the preset it came
  * from) is kept in localStorage on every change. Without one it opens on Default settings, or
@@ -66,7 +75,8 @@ PRESET_UI_JS = r"""
  *   inputs        {string[]}  the keys that are inputs (tables, folders)
  *   contextInputs {function}  () => {key: value} | null
  *   autoName      {function}  (values) => string
- *   summary       {function}  (values) => string, shown after the name in the list (optional)
+ *   summary       {function}  (values) => string or [part, …], shown after the name; empty parts
+ *                             are left out (optional)
  *   legacyKey     {string}    the old config bar's localStorage key (optional)
  *   draftDelay    {number}    ms before a change is written as the draft (default 300)
  *
@@ -76,7 +86,7 @@ PRESET_UI_JS = r"""
  *   refresh()      reload the list
  *   pick(id)       apply a preset ("" for Default settings), as the select does
  *   openSave()     show the name field; save() saves it; closeSave() hides it
- *   openDelete()   ask to delete the selected preset; remove() deletes it; closeDelete() cancels
+ *   remove(id)     delete a preset (the selected one without an id); asks nothing
  *   origin()       {kind: "defaults"|"preset", id, name}: where the form came from
  *   modified()     whether the form differs from its origin
  *   presetId()     the selected preset's id when the form is unchanged from it, else ""
@@ -170,6 +180,7 @@ function _tlcPluginPresets(opts) {
   var isModified = false;
   var draftTimer = null;
   var confirmReplaceId = "";                           // the preset a second Save will replace
+  var inList = false;                                  // the Hub's list deletes presets (TlcPicker.onRemove)
   var els = {};
 
   /* ── Host access ── */
@@ -230,34 +241,26 @@ function _tlcPluginPresets(opts) {
           '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-cancel-btn">Cancel</button>' +
           '<span class="tlc-presets-note" id="' + m + '-save-note"></span>' +
         '</span>' +
-        '<span class="tlc-presets-mode" id="' + m + '-mode-confirm" style="display:none">' +
-          '<span class="tlc-presets-text" id="' + m + '-confirm-text"></span>' +
-          '<button type="button" class="btn btn-danger btn-sm" id="' + m + '-confirm-ok">Delete</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-confirm-cancel">Cancel</button>' +
-        '</span>' +
       '</div>';
     ["bar", "select", "name", "mode-pick", "saveas", "delete", "note", "mode-save", "save-btn", "cancel-btn",
-     "save-note", "mode-confirm", "confirm-text", "confirm-ok", "confirm-cancel"].forEach(function (s) {
+     "save-note"].forEach(function (s) {
       els[s] = el(s);
     });
   }
 
-  /* One row, three modes: the select or the name field in the same slot, and that mode's buttons after it. */
+  /* One row, two modes: the select or the name field in the same slot, and that mode's buttons after it. */
   function setMode(mode) {
     if (mode === "save") { hide(els.select); show(els.name); } else { show(els.select); hide(els.name); }
-    if (mode === "pick") show(els["mode-pick"]); else hide(els["mode-pick"]);
-    if (mode === "save") show(els["mode-save"]); else hide(els["mode-save"]);
-    if (mode === "confirm") show(els["mode-confirm"]); else hide(els["mode-confirm"]);
+    if (mode === "save") { hide(els["mode-pick"]); show(els["mode-save"]); }
+    else { show(els["mode-pick"]); hide(els["mode-save"]); }
   }
 
   function bind() {
     if (els.select) els.select.addEventListener("change", function () { pick(els.select.value); });
     if (els.saveas) els.saveas.addEventListener("click", openSave);
-    if (els["delete"]) els["delete"].addEventListener("click", openDelete);
+    if (els["delete"]) els["delete"].addEventListener("click", function () { remove(); });
     if (els["save-btn"]) els["save-btn"].addEventListener("click", function () { save(); });
     if (els["cancel-btn"]) els["cancel-btn"].addEventListener("click", closeSave);
-    if (els["confirm-ok"]) els["confirm-ok"].addEventListener("click", function () { remove(); });
-    if (els["confirm-cancel"]) els["confirm-cancel"].addEventListener("click", closeDelete);
     if (els.name) {
       els.name.addEventListener("keydown", function (ev) {
         if (ev.key === "Enter") {
@@ -331,10 +334,24 @@ function _tlcPluginPresets(opts) {
   }
 
   /* ── The list ── */
+  /* The plugin's summary of a preset, without the parts it does not know. */
+  function summaryOf(p) {
+    var parts;
+    try { parts = summary(valuesOf(p)); } catch (e) { parts = ""; }
+    if (!Array.isArray(parts)) parts = [parts];
+    return parts.filter(function (x) { return x != null && String(x).trim() !== ""; }).join(" · ");
+  }
+  /* When the preset was last used for a run (`last_run`, stamped by the plugin), else when it was saved. */
+  function ageOf(p) {
+    var used = _tlcPresetAge(p.last_run);
+    if (used) return "used " + used;
+    var saved = _tlcPresetAge(p.created);
+    return saved ? "saved " + saved : "";
+  }
+  /* "Name — summary"; the age joins it only where the list cannot show it as a muted hint. */
   function labelFor(p) {
-    var hint = "";
-    try { hint = summary(valuesOf(p)) || ""; } catch (e) { hint = ""; }
-    var age = _tlcPresetAge(p.created);
+    var hint = summaryOf(p);
+    var age = inList ? "" : ageOf(p);
     var label = p.name || "Untitled";
     if (hint) label += " — " + hint;
     if (age) label += (hint ? " · " : " — ") + age;
@@ -357,12 +374,18 @@ function _tlcPluginPresets(opts) {
       var group = document.createElement("optgroup");
       group.label = "Saved presets";
       list.forEach(function (p) {
-        group.appendChild(option(p.id, labelFor(p) + (origin.kind === "preset" && origin.id === p.id ? mark : "")));
+        var o = option(p.id, labelFor(p) + (origin.kind === "preset" && origin.id === p.id ? mark : ""));
+        if (inList) {
+          o.setAttribute("data-removable", "");
+          var age = ageOf(p);
+          if (age) o.setAttribute("data-hint", age);
+        }
+        group.appendChild(o);
       });
       sel.appendChild(group);
     }
     sel.value = origin.kind === "preset" ? origin.id : "";
-    if (origin.kind === "preset") show(els["delete"]); else hide(els["delete"]);
+    if (!inList && origin.kind === "preset") show(els["delete"]); else hide(els["delete"]);
   }
   function loadList() {
     return fetchJson(base()).then(function (data) {
@@ -433,7 +456,6 @@ function _tlcPluginPresets(opts) {
   }
   function pick(id) {
     closeSave();
-    closeDelete();
     var p = id ? byId(id) : null;
     var own = p ? valuesOf(p) : (defaults() || {});
     var newOrigin = p ? { kind: "preset", id: p.id, name: p.name || "" } : { kind: "defaults", id: "", name: "" };
@@ -442,7 +464,6 @@ function _tlcPluginPresets(opts) {
 
   /* ── Save as… ── */
   function openSave() {
-    closeDelete();
     confirmReplaceId = "";
     var suggested;
     try { suggested = origin.kind === "preset" ? origin.name : autoName(collect()); } catch (e) { suggested = ""; }
@@ -479,7 +500,9 @@ function _tlcPluginPresets(opts) {
     try { body = collect() || {}; } catch (e) { body = {}; }
     body.id = existing ? existing.id : "";
     body.name = existing ? existing.name : name;
+    // A replaced preset keeps when it was made and when it was last used.
     body.created = existing ? (existing.created || "") : "";
+    body.last_run = existing ? (existing.last_run || null) : null;
     return fetchJson(base(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -504,32 +527,28 @@ function _tlcPluginPresets(opts) {
     });
   }
 
-  /* ── Delete ── */
-  function openDelete() {
-    if (origin.kind !== "preset") return;
-    closeSave();
-    setText(els["confirm-text"], "Delete “" + origin.name + "”?");
-    setMode("confirm");
-  }
-  function closeDelete() {
-    setMode("pick");
-  }
-  function remove() {
-    if (origin.kind !== "preset") return Promise.resolve(false);
-    var id = origin.id, name = origin.name;
+  /* ── Delete: asks nothing ── */
+  function deletePreset(id) {
+    var p = byId(id);
+    var name = p ? (p.name || "") : "";
     return fetchJson(base() + "/" + encodeURIComponent(id) + "/delete", { method: "POST" }).then(function (resp) {
       if (resp && resp.error) throw new Error(resp.error);
-      // The form stays as it is; it now comes from Default settings, changed.
-      origin = { kind: "defaults", id: "", name: "" };
-      originValues = fromDefaults();
-      closeDelete();
+      if (origin.kind === "preset" && origin.id === id) {
+        // The form stays as it is; it now comes from Default settings, changed.
+        origin = { kind: "defaults", id: "", name: "" };
+        originValues = fromDefaults();
+      }
       return loadList();
     }).then(function () {
       recompute();
-      toast("Deleted preset “" + name + "”", "success");
-      return true;
-    }).catch(function (e) {
-      closeDelete();
+      return name;
+    });
+  }
+  /* The bar's trash, and the API: the given preset, else the selected one. */
+  function remove(id) {
+    var target = id || (origin.kind === "preset" ? origin.id : "");
+    if (!target) return Promise.resolve(false);
+    return deletePreset(target).then(function () { return true; }, function (e) {
       toast("Could not delete the preset: " + (e && e.message ? e.message : e), "error");
       return false;
     });
@@ -539,6 +558,10 @@ function _tlcPluginPresets(opts) {
   function init() {
     render();
     bind();
+    // The Hub's list removes options in place, keeping the list open; the list shows the error itself.
+    var picker = typeof window !== "undefined" ? window.TlcPicker : null;
+    inList = !!(picker && typeof picker.onRemove === "function" && els.select);
+    if (inList) picker.onRemove(els.select, function (option) { return deletePreset(option.value); });
     try { ctx = contextInputs() || null; } catch (e) { ctx = null; }
     if (ctx) setText(els.note, "Opened from a table: presets change the settings, the table stays.");
     return loadList().then(function () {
@@ -574,8 +597,6 @@ function _tlcPluginPresets(opts) {
     openSave: openSave,
     closeSave: closeSave,
     save: save,
-    openDelete: openDelete,
-    closeDelete: closeDelete,
     remove: remove,
     origin: function () { return { kind: origin.kind, id: origin.id, name: origin.name }; },
     modified: function () { return isModified; },

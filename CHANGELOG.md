@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugin's existing config routes, so saved configs appear as presets unchanged. It supersedes
   `shared.config_ui`'s config bar, whose Train saved into the selected config. Declared as
   `TlcPresetOptions` / `TlcPresetControl` in the contract; guide → "Presets".
+- The preset bar deletes in the Hub's list where the Hub can (`TlcPicker.onRemove`): each saved preset
+  has a trash button in the list, which deletes it at once and keeps the list open, and the bar is
+  just `Preset [select] Save as…`. Elsewhere the trash beside the select deletes the selected preset,
+  also at once. Each preset shows, as a muted hint, when it was last used for a run, else when it was
+  saved. A `summary` may return a list of parts; empty ones are left out.
+- The contract declares `TlcPicker.onRemove()`, and the guide's Dropdowns section the option
+  attributes `data-hint` and `data-removable`. `remove.confirm` in `TlcPicker.open()` items is now
+  optional: without it a row is removed at once.
 - `tlc_plugin_sdk.lint` checks a plugin's UI fragment against the Hub's styling conventions: no hardcoded
   colours, no inline `background`/`box-shadow`/`color`, no `!important` or `position: fixed`, and every rule in
   the fragment's `<style>` scoped by a class or id named after the plugin. Run it as
@@ -37,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `PluginConfigStore.save_config` keeps a config's stored `created` and `last_run` when a save of its id
+  leaves them out. The config pages never sent them back, so every save made an old config look new
+  and unused.
 - `PluginJobs.run` delivers a start the compute refused (a 409 with its reason, a 403, an unreachable
   service) to the card's `onError`, and resolves `{error}`. The Hub's `authFetch` rejects on an error
   status, and `run` had no handler for it: the refusal escaped as an unhandled rejection and the card

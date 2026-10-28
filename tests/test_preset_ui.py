@@ -83,7 +83,9 @@ api.authFetch = function (url, o) {
   }
   var del = path.match(/^\/api\/plugins\/x\/presets\/([^/]+)\/delete$/);
   if (method === 'POST' && del) {
-    store = store.filter(function (p) { return p.id !== decodeURIComponent(del[1]); });
+    var id = decodeURIComponent(del[1]);
+    if (!store.some(function (p) { return p.id === id; })) return ok({ error: 'Not found' });
+    store = store.filter(function (p) { return p.id !== id; });
     return ok({ deleted: true });
   }
   return Promise.reject(new Error('HTTP 404 ' + method + ' ' + path));
@@ -98,13 +100,20 @@ window.localStorage = {
   removeItem: function (k) { delete LS[k]; },
 };
 ['m', 'm-bar', 'm-select', 'm-name', 'm-mode-pick', 'm-saveas', 'm-delete', 'm-note', 'm-mode-save', 'm-save-btn',
- 'm-cancel-btn', 'm-save-note', 'm-mode-confirm', 'm-confirm-text', 'm-confirm-ok', 'm-confirm-cancel',
- 'root'].forEach(addEl);
+ 'm-cancel-btn', 'm-save-note', 'root'].forEach(addEl);
 function options() {
   var out = [];
   _els['m-select'].options.forEach(function (o) {
     if (o.options && o.options.length) o.options.forEach(function (c) { out.push([c.value, c.textContent]); });
     else out.push([o.value, o.textContent]);
+  });
+  return out;
+}
+// The data-* attributes of each option, by value.
+function optionAttrs() {
+  var out = {};
+  _els['m-select'].options.forEach(function (o) {
+    (o.options && o.options.length ? o.options : [o]).forEach(function (c) { out[c.value] = c._attrs; });
   });
   return out;
 }
@@ -125,11 +134,11 @@ function state(p) {
     options: options(), value: _els['m-select'].value, origin: p.origin(), modified: p.modified(),
     presetId: p.presetId(), presetName: p.presetName(), form: collect(),
     deleteShown: _els['m-delete'].style.display !== 'none', barShown: _els['m-mode-pick'].style.display !== 'none',
-    saveShown: _els['m-mode-save'].style.display === '', confirmShown: _els['m-mode-confirm'].style.display === '',
+    saveShown: _els['m-mode-save'].style.display === '',
     selectShown: _els['m-select'].style.display !== 'none', nameShown: _els['m-name'].style.display === '',
     name: _els['m-name'].value, saveBtn: _els['m-save-btn'].textContent, saveNote: _els['m-save-note'].textContent,
     saveNoteError: _els['m-save-note'].classList.contains('is-error'),
-    confirmText: _els['m-confirm-text'].textContent, note: _els['m-note'].textContent,
+    note: _els['m-note'].textContent, attrs: optionAttrs(),
     toasts: api.toasts.slice(), calls: calls.slice(), store: JSON.parse(JSON.stringify(store)),
     ls: JSON.parse(JSON.stringify(LS)), applied: applied.slice(),
   };
@@ -464,34 +473,80 @@ def test_a_failed_save_says_so_in_the_bar(tmp_path: Path) -> None:
 
 
 @needs_node
-def test_delete_asks_in_the_bar_then_removes_and_keeps_the_form(tmp_path: Path) -> None:
+def test_on_an_older_hub_the_bars_trash_deletes_the_selected_preset_at_once(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         """
         var p = make(); await p.init(); await settle();
-        p.openDelete();
         var onDefaults = state(p);
         await p.pick('p1'); await settle();
-        _els['m-delete'].click();
-        var asked = state(p);
-        _els['m-confirm-cancel'].click();
-        var cancelled = state(p);
-        p.openDelete(); _els['m-confirm-ok'].click(); await settle();
-        return {onDefaults: onDefaults, asked: asked, cancelled: cancelled, after: state(p)};
+        var picked = state(p);
+        _els['m-delete'].click(); await settle();
+        return {onDefaults: onDefaults, picked: picked, after: state(p)};
         """,
     )
-    assert out["onDefaults"]["confirmShown"] is False
-    asked = out["asked"]
-    assert asked["confirmShown"] is True and asked["barShown"] is False
-    assert asked["confirmText"] == "Delete “Small objects 1280”?"
-    assert out["cancelled"]["confirmShown"] is False and out["cancelled"]["barShown"] is True
+    assert out["onDefaults"]["deleteShown"] is False
+    picked = out["picked"]
+    assert picked["deleteShown"] is True
+    assert picked["options"][1][1].startswith("Small objects 1280 \u2014 yolo11n · 100 · "), "the age is in the label"
+    assert "data-removable" not in picked["attrs"]["p1"]
     after = out["after"]
-    assert [p["id"] for p in after["store"]] == ["p2"]
+    assert [p["id"] for p in after["store"]] == ["p2"], "deleted at once, nothing asked"
     assert [o[0] for o in after["options"]] == ["", "p2"]
-    assert after["form"] == _values(P1)  # the form is left as it was
+    assert after["form"] == _values(P1), "the form is left as it was"
     assert after["origin"]["kind"] == "defaults" and after["modified"] is True and after["deleteShown"] is False
-    assert after["toasts"][-1] == "success: Deleted preset “Small objects 1280”"
-    assert after["confirmShown"] is False and after["barShown"] is True
+    assert after["toasts"] == []
+
+
+@needs_node
+def test_with_the_hubs_list_presets_are_deleted_in_it_and_the_age_is_a_hint(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        window.TlcPicker = { onRemove: function (sel, run) { window.REMOVE = { sel: sel, run: run }; } };
+        var p = make(); await p.init(); await p.pick('p1'); await settle();
+        var opened = state(p);
+        var registered = window.REMOVE.sel === _els['m-select'];
+        await window.REMOVE.run({ value: 'p2' }); await settle();
+        var other = state(p);
+        await window.REMOVE.run({ value: 'p1' }); await settle();
+        var own = state(p);
+        var failed = null;
+        try { await window.REMOVE.run({ value: 'gone' }); } catch (e) { failed = e.message; }
+        return {opened: opened, registered: registered, other: other, own: own, failed: failed};
+        """,
+    )
+    opened = out["opened"]
+    assert out["registered"] is True
+    assert opened["deleteShown"] is False, "no trash beside the select: it is in the list"
+    assert opened["options"][1] == ["p1", "Small objects 1280 \u2014 yolo11n · 100"], "no age in the label"
+    assert opened["attrs"]["p1"]["data-removable"] == ""
+    assert opened["attrs"]["p1"]["data-hint"].startswith("saved "), "never used: when it was saved"
+    assert "data-removable" not in opened["attrs"][""], "Default settings cannot be deleted"
+    other = out["other"]
+    assert [p["id"] for p in other["store"]] == ["p1"]
+    assert other["origin"]["id"] == "p1" and other["modified"] is False, "deleting another preset changes nothing else"
+    own = out["own"]
+    assert own["store"] == []
+    assert own["origin"]["kind"] == "defaults" and own["modified"] is True and own["value"] == ""
+    assert own["form"] == _values(P1)
+    assert own["toasts"] == [], "nothing is announced"
+    assert out["failed"] == "Not found", "a failure reaches the list, which shows it"
+
+
+@needs_node
+def test_a_summary_given_as_parts_leaves_out_the_empty_ones(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        var parts = function (v) { return [v.model === 'yolo11s' ? '' : v.model, null, v.epochs + ' epochs']; };
+        var p = make({summary: parts});
+        await p.init(); await settle();
+        return state(p);
+        """,
+    )
+    assert out["options"][1][1].startswith("Small objects 1280 \u2014 yolo11n · 100 epochs · ")
+    assert out["options"][2][1].startswith("Baseline \u2014 10 epochs · ")
 
 
 @needs_node
@@ -525,3 +580,25 @@ def test_a_list_that_cannot_be_loaded_still_opens_the_form(tmp_path: Path) -> No
 def test_script_is_the_module_constant() -> None:
     assert preset_ui_script() is PRESET_UI_JS
     assert "function _tlcPluginPresets(" in PRESET_UI_JS
+
+
+@needs_node
+def test_the_time_is_the_last_use_else_the_save_and_replace_keeps_both(tmp_path: Path) -> None:
+    used = {**P1, "last_run": "2026-10-26T10:00:00Z"}
+    out = _run(
+        tmp_path,
+        """
+        var p = make(); await p.init(); await p.pick('p1'); await settle();
+        var opened = state(p);
+        edit({epochs: 7}); await settle();
+        p.openSave(); _els['m-name'].value = 'Small objects 1280';
+        await p.save(); await p.save(); await settle();
+        return {opened: opened, after: state(p)};
+        """,
+        store=[used, dict(P2)],
+    )
+    assert out["opened"]["options"][1][1].endswith(" · used yesterday") or " · used " in out["opened"]["options"][1][1]
+    assert " · saved " in out["opened"]["options"][2][1], "never used: when it was saved"
+    replaced = next(p for p in out["after"]["store"] if p["id"] == "p1")
+    assert replaced["epochs"] == 7
+    assert replaced["created"] == P1["created"] and replaced["last_run"] == used["last_run"]
