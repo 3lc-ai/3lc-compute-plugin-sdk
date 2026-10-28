@@ -369,8 +369,9 @@ def test_a_folder_picker_picks_a_folder_from_its_select_and_opens_it_from_the_re
         "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder'});\n"
         "_els['f-ds-browse-btn'].click(); await tick();\n"
         "var listed = els();\n"
-        "var navEv = clickOn(rowWith({'data-ds-nav': '/Users/me/data'})); await tick();\n"
-        "var opened = els(); opened.stopped = navEv.stopped;\n"
+        "var navEv = clickOn(rowWith({'data-ds-nav': '/Users/me/data'}));\n"
+        "var during = els().panel; await tick();\n"
+        "var opened = els(); opened.stopped = navEv.stopped; opened.during = during;\n"
         "var pickEv = clickOn(rowWith({'data-ds-select-folder': '/Users/me/data'},"
         " rowWith({'data-ds-nav': '/Users/me/data'})));\n"
         "var picked = els(); picked.stopped = pickEv.stopped; picked.idle = clickOn(rowWith({})).stopped;\n"
@@ -386,6 +387,8 @@ def test_a_folder_picker_picks_a_folder_from_its_select_and_opens_it_from_the_re
     assert '<div class="tlc-ds-entry tlc-ds-entry-disabled" title="Choose a folder">' in panel
     assert "data-ds-select=" not in panel
     assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
+    # The rows stay while the folder's listing loads: no flash through "Loading…" on a quick listing.
+    assert 'data-ds-nav="/Users/me/data"' in opened["during"] and "Loading" not in opened["during"]
     # Opening replaces the listing, so the clicked row is gone by the time the click would reach the document's
     # outside-click check: the panel ends the click itself, or that check closes it on every folder click.
     assert opened["stopped"]
