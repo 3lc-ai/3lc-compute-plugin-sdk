@@ -1668,6 +1668,8 @@ For a list of tables, put one field below the list to add to it: take its value 
 
 A Hub before 1.2 doesn't define the element, so a plugin that uses it sets `min_frontend_version = "1.2.0"` in `plugin.toml`. The bare `openTablePicker(inputId)` still works for a field you build yourself, without the double-click or the tags. See `TlcTableFieldElement` in `plugin-api.d.ts`.
 
+**Path fields.** For a file or folder on the machine the run reads from, or in a bucket, render the SDK's data-source field: `_tlcDataSourceHtml(id, {placeholder, accept})` for the markup and `_tlcBindDataSource(id, computeUrl, pluginId, {mode, purpose, accept})` once it is in the DOM (`shared.data_source_ui`; its docstring has the full usage). Browse… opens a panel under the field that lists the run target's folders and the buckets. A click anywhere on a file row picks it. In a folder picker (`mode: 'folder'`) a click on a folder row opens it, as `..` does, and the Select at the row's end picks it without opening it; files are listed dimmed and cannot be picked. A double-click in the empty field opens the panel too, as it does in `<tlc-table-field>`. The picked path lands in the field and fires `input` and `change`.
+
 ### Presets
 
 A plugin whose form is worth keeping (a training setup, a metric selection) gets the Hub's preset bar from the SDK rather than a bar of its own. It is one line at the top of the form:

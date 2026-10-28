@@ -44,7 +44,15 @@ FakeEl.prototype.dispatchEvent = function (ev) {
 FakeEl.prototype.click = function () { this.dispatchEvent(new Event('click')); };
 FakeEl.prototype.querySelector = function () { return null; };
 FakeEl.prototype.querySelectorAll = function () { return []; };
-FakeEl.prototype.closest = function () { return null; };
+// `closest` understands attribute selectors (`[data-x]`, comma-separated) on elements built by hand with
+// setAttribute and chained through `parentNode`; HTML in innerHTML is still never parsed.
+FakeEl.prototype.closest = function (sel) {
+  var attrs = String(sel).split(',').map(function (s) { return s.trim().replace(/^\[|\]$/g, ''); });
+  for (var el = this; el; el = el.parentNode || null) {
+    for (var i = 0; i < attrs.length; i++) if (el._attrs && attrs[i] in el._attrs) return el;
+  }
+  return null;
+};
 FakeEl.prototype.contains = function () { return true; };
 FakeEl.prototype.appendChild = function (el) { this.options.push(el); return el; };
 FakeEl.prototype.setAttribute = function (k, v) { this._attrs[k] = String(v); };

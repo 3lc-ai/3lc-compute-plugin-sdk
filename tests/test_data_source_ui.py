@@ -60,6 +60,16 @@ _NODE_FILES = {
     "files": [{"name": "a.yaml", "path": "/home/g/a.yaml", "size": 10}],
 }
 _LOCAL_BROWSE = {"path": "/Users/me", "root": "/", "parent": "/Users", "entries": [{"name": "data", "type": "dir"}]}
+_LOCAL_BROWSE_MIXED = {
+    "path": "/Users/me",
+    "root": "/",
+    "parent": "/Users",
+    "entries": [
+        {"name": "data", "type": "dir"},
+        {"name": "locked", "type": "dir", "writable": False},
+        {"name": "a.yaml", "type": "file", "size": 10},
+    ],
+}
 
 
 def _run(tmp_path: Path, body: str, *, routes: dict[str, Any] | None = None, target: Any = "absent") -> Any:
@@ -95,7 +105,14 @@ def _run(tmp_path: Path, body: str, *, routes: dict[str, Any] | None = None, tar
         + "function retarget(t) { window.TARGET = t; api.listeners.forEach(function (fn) { fn(); }); }\n"
         + "function els() { return { panel: _els['f-ds-panel'].innerHTML, reach: _els['f-ds-reach'].textContent,"
         + " reachShown: _els['f-ds-reach'].style.display !== 'none', upload: _els['f-ds-upload-btn'].style.display,"
-        + " fetched: api.fetched }; }\n"
+        + " fetched: api.fetched.slice(), open: _els['f-ds-panel'].classList.contains('open'),"
+        + " value: _els['f'].value }; }\n"
+        # A row of the listing, built by hand (innerHTML is never parsed): `rowWith({'data-ds-nav': '/x'})`, or
+        # the name inside one, `rowWith({}, row)`. `clickOn` sends the panel a click that landed on it.
+        + "function rowWith(attrs, parent) { var el = new FakeEl(''); Object.keys(attrs).forEach(function (k) {"
+        + " el.setAttribute(k, attrs[k]); }); el.parentNode = parent || null; return el; }\n"
+        + "function clickOn(el) { var ev = new Event('click'); ev.target = el;"
+        + " _els['f-ds-panel'].dispatchEvent(ev); }\n"
         + "(async function () {\n"
         + body
         + "\n})().then(function (out) { process.stdout.write(JSON.stringify(out)); });\n"
@@ -321,6 +338,88 @@ def test_dir_mode_is_a_folder_picker(tmp_path: Path) -> None:
             routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE},
         )
         assert "Select This Folder" in out["panel"], mode
+
+
+@needs_node
+def test_a_click_anywhere_on_a_file_row_picks_it(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "var fired = []; ['input', 'change'].forEach(function (t) {"
+        " _els['f'].addEventListener(t, function () { fired.push(t); }); });\n"
+        "_els['f-ds-browse-btn'].click(); await tick();\n"
+        "var listed = els();\n"
+        # The click lands on the name inside the row, as a real one does.
+        "clickOn(rowWith({}, rowWith({'data-ds-select': '/Users/me/a.yaml'})));\n"
+        "var picked = els(); picked.fired = fired; return [listed, picked];",
+        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    listed, picked = out
+    assert '<div class="tlc-ds-entry" data-ds-select="/Users/me/a.yaml">' in listed["panel"]
+    assert 'class="ds-select-btn">Select</button>' in listed["panel"]  # the cue stays, with no target of its own
+    assert listed["open"] and picked["value"] == "/Users/me/a.yaml" and not picked["open"]
+    assert picked["fired"] == ["input", "change"]
+
+
+@needs_node
+def test_a_folder_picker_picks_a_folder_from_its_select_and_opens_it_from_the_rest_of_the_row(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder'});\n"
+        "_els['f-ds-browse-btn'].click(); await tick();\n"
+        "var listed = els();\n"
+        "clickOn(rowWith({'data-ds-nav': '/Users/me/data'})); await tick();\n"
+        "var opened = els();\n"
+        "clickOn(rowWith({'data-ds-select-folder': '/Users/me/data'}, rowWith({'data-ds-nav': '/Users/me/data'})));\n"
+        "return [listed, opened, els()];",
+        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    listed, opened, picked = out
+    panel = listed["panel"]
+    assert '<div class="tlc-ds-entry" data-ds-nav="/Users/me/data">' in panel
+    assert 'data-ds-select-folder="/Users/me/data">Select</button>' in panel
+    assert "Select This Folder" in panel  # the breadcrumb's, for the folder you are in
+    # A file is no choice here: dimmed, with neither a target nor a button.
+    assert '<div class="tlc-ds-entry tlc-ds-entry-disabled" title="Choose a folder">' in panel
+    assert "data-ds-select=" not in panel
+    assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
+    assert picked["value"] == "/Users/me/data" and not picked["open"]
+
+
+@needs_node
+def test_an_output_folder_picker_disables_select_on_a_folder_it_cannot_write(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder', purpose: 'output'});\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); return els();",
+        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    panel = out["panel"]
+    assert 'data-ds-select-folder="/Users/me/data">Select</button>' in panel
+    assert 'data-ds-select-folder="/Users/me/locked" disabled title="Not writable' in panel
+    assert 'data-ds-nav="/Users/me/locked"' in panel  # still opens, to find a writable folder inside
+
+
+@needs_node
+def test_a_double_click_in_the_empty_field_opens_the_panel(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "var f = _els['f'];\n"
+        "f.dispatchEvent(new Event('dblclick')); await tick(); var opened = els();\n"
+        "f.dispatchEvent(new Event('dblclick')); await tick(); var again = els();\n"
+        "_els['f-ds-browse-btn'].click(); var closed = els();\n"
+        "f.value = '/Users/me/a.yaml'; f.dispatchEvent(new Event('dblclick')); await tick(); var filled = els();\n"
+        "f.value = ''; f.disabled = true; f.dispatchEvent(new Event('dblclick')); await tick();\n"
+        "return [opened, again, closed, filled, els()];",
+        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    opened, again, closed, filled, disabled = out
+    assert opened["open"] and len(opened["fetched"]) == 2  # the storage list, then the folder
+    assert again["open"] and len(again["fetched"]) == 2  # a second double-click neither closes nor lists again
+    assert not closed["open"]
+    assert not filled["open"] and len(filled["fetched"]) == 2  # a filled field keeps the word selection
+    assert not disabled["open"]
 
 
 @needs_node

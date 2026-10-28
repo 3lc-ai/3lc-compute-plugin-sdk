@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The data-source picker (`shared.data_source_ui`) picks a file from a click anywhere on its row, not
+  only on its Select button. In a folder picker each folder row has its own Select, a click elsewhere on
+  the row opens it, as `..` does, and files are listed dimmed and cannot be picked, so a folder field no
+  longer accepts a file. A double-click in the empty field opens the picker, as it does in
+  `<tlc-table-field>`.
 - The contract documents that `PLUGIN_API.planRun` always resolves to a plan on a Hub 1.2 host and
   rejects when the run cannot be planned; the browser never sends `_alias_overrides`.
 - The supported Python range is `>=3.10,<3.15`, matching the host: the core has no Python 3.15 wheels yet,
