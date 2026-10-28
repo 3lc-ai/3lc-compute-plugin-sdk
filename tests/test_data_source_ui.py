@@ -224,7 +224,7 @@ def test_a_node_target_browses_the_node_disk_through_the_host(tmp_path: Path) ->
     panel = out["panel"]
     assert "godfire (node)" in panel and "This computer" not in panel
     # Several places: the switcher is the path bar's first crumb, with the node's place selected.
-    assert '<div class="tlc-ds-place"><label>Browse in</label><select class="form-select" data-ds-loc>' in panel
+    assert '<div class="tlc-ds-place"><label>Location</label><select class="form-select" data-ds-loc>' in panel
     assert '<option value="0" selected>godfire (node)</option>' in panel
     assert '<span data-ds-nav="/home/g">g</span>' in panel  # the path starts from the place's root
     assert 'class="ds-up" title="Up" disabled>' in panel  # at the node's root, nothing is above
@@ -400,11 +400,11 @@ def test_a_file_picker_picks_a_file_on_a_click_and_opens_a_folder_on_one(tmp_pat
     listed, picked, opened, dir_hl, file_hl, by_key = out
     panel = listed["panel"]
     # The place line names the one place; the path bar runs from its root ('/' here) to the folder shown.
-    assert '<div class="tlc-ds-place"><label>Browse in</label><span class="ds-place-one">This computer</span>' in panel
+    assert '<div class="tlc-ds-place"><label>Location</label><span class="ds-place-one">This computer</span>' in panel
     assert '<span data-ds-nav="/">/</span><span class="sep">/</span><span data-ds-nav="/Users">Users</span>' in panel
     assert '<span class="sep">/</span><span data-ds-nav="/Users/me">me</span>' in panel
     assert 'class="ds-up" title="Up" data-ds-nav="/Users">' in panel
-    assert "Location" not in panel and ">..<" not in panel
+    assert ">..<" not in panel  # the way up is the arrow, not a row
     # Rows, and a footer with the filter, Cancel and the one action, disabled until a file is highlighted.
     assert '<div class="tlc-ds-entry" data-ds-row="2">' in panel and "a.yaml" in panel
     assert '<span class="ds-note">Showing *.yaml</span>' in panel
