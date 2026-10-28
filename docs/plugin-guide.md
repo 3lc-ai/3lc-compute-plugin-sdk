@@ -132,6 +132,9 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 # config stores, model catalogs, table reads — so saved configs have one history. A host
 # without remote-node support ignores the key.
 # node_routes = ["/preview", "/model-status"]
+# A service rather than a task (a notebook server): its job runs until someone stops it, on a
+# lane of its own. See "Services: `long_running`" below.
+# long_running = true
 # Services whose stored token (a SECRET Connection) this plugin may be given, and the custom
 # routes that receive it. See "Tokens on runs and routes (SECRET)" below.
 # credentials = [{ service = "huggingface", required = false }]
@@ -156,7 +159,8 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
 - `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
   plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
   (pin the interpreter the plugin's venv is built with), `remote_capable` (a run may target a
-  remote node even though `requires_gpu` is false).
+  remote node even though `requires_gpu` is false), `long_running` (the job is a service that runs
+  until stopped, on a lane of its own; see [Services](#services-long_running)).
 - `[ui]`: `min_input_count` (minimum selected resources an `action` plugin needs — defaults to
   `len(input_types)`; set `0` explicitly to require none), `action_param_names` (query params
   passed through from the action launch), `quick_action_label` / `quick_action_description`
@@ -1214,6 +1218,54 @@ provision_extra = "my-gpu-plugin"   # venv deps installed via `uv sync --extra <
 GPU jobs are serialized — only one runs at a time across every GPU plugin (YOLO, SAM3,
 timm, image-metrics). `requires_gpu = false` jobs run on the CPU queue. Either way the
 plugin never names or touches a queue.
+
+### Services: `long_running`
+
+Some plugins start something that stays up rather than work that finishes: a notebook server, a
+viewer, a live endpoint. On the CPU queue such a job would hold every import and export behind
+it, and on a node's queue every training. Declare it a service instead:
+
+```toml
+[runtime]
+long_running = true
+```
+
+What the host does with it (a host that predates the key ignores it, and the job serializes on
+the CPU, GPU or node queue as before):
+
+- **A lane of its own.** Each run of a `long_running` plugin gets its own serial lane. It never
+  waits behind queued jobs and never holds one up. That includes the shared GPU slot: with
+  `requires_gpu = true` too, a service does **not** take the one-at-a-time GPU lease, and shares
+  the GPU with whatever else runs. With a run target it is still dispatched to that node's worker,
+  beside the node's queue rather than in it.
+- **Two runs can be live at once**, since neither queues behind the other. A plugin that should
+  run one server per machine checks for its own running one in `run_job` and returns (or fails
+  with `ctx.fail`), rather than relying on the queue to serialize.
+- **The job is marked as a service.** The generic job record carries `service: true`. The Hub
+  lists it under running services, not in Queue & Progress, which is about work that finishes. It
+  also does not stamp the page's project on the run.
+- **A running service keeps its node busy.** A node with an active job is not torn down for
+  idleness, and a worker with an active job is not reclaimed. A service on a paid node therefore
+  bills until it ends, so give it an idle limit of its own and return from `run_job` when it is
+  reached.
+
+What the plugin does:
+
+- `run_job(ctx)` starts the service, then stays in a loop until `ctx.cancelled` or the service has
+  ended, and returns. The job is the service's lifetime, and Stop in the Hub is a cancel. The
+  [cancel grace](#long-running-jobs-run_jobctx) applies as for any job, so stop the service promptly
+  once `ctx.cancelled` is set.
+- Report `ctx.progress(percent=-1, label=…)` (indeterminate, with the facts in the label), never a
+  percentage that creeps. `ctx.result` is usually not meaningful.
+- Stop the service in `shutdown_runtime()` too, so a worker that goes away takes it along.
+- Anything that grants access to the service (a token, a URL with credentials) belongs behind a
+  POST route of the plugin's own. GET routes are readable by more callers than the person who
+  started the service, and `ctx.emit` events reach everyone watching the job, so neither should
+  carry it.
+
+`long_running` is independent of `kind` and of placement (`[ui] section`). A service is still a
+`ComputePlugin` with `run_job`: `kind = "service"` names something else, a plugin with no jobs at
+all.
 
 **Implement `run_job(ctx)`.** `ctx` is a `JobContext` (`tlc_plugin_sdk`); the
 host provides it and the surface is identical in both modes:

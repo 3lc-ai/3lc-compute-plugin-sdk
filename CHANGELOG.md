@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Plugin guide: `[runtime] long_running`, "Services: `long_running`". It documents the key the
+  compute service honours from 1.2: a service job (a notebook server) runs on a lane of its own,
+  never queued behind other jobs or holding them up, and it is marked `service` in the job record.
+  The guide covers what that means for the GPU lease, concurrent runs, node idle teardown and
+  billing, and what a service's `run_job` does. Documentation only: the SDK reads no runtime key.
+
 - Deployment placement discovery, actual placement and ingress metadata, launcher identity,
   optional detailed diagnostics, and structured bootstrap stages in the infrastructure contract.
 
