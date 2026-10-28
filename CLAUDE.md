@@ -62,7 +62,7 @@ uv run pytest
 
 ## Conventions
 
-Python 3.10+, uv, Hatchling, Litestar, Ruff (line-length 120), mypy `--strict` clean (no
+Python 3.11+, uv, Hatchling, Litestar, Ruff (line-length 120), mypy `--strict` clean (no
 `# type: ignore`, no `Any` used to silence the checker). Google-style docstrings. Copyright header
 on new files.
 
