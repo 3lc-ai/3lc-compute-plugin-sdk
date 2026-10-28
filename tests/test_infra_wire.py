@@ -47,6 +47,7 @@ from tlc_plugin_sdk.infrastructure import (
     TransferRequest,
     WorkspaceInstance,
     WorkspaceListing,
+    WorkspacePlacement,
     WorkspaceRequest,
     preflight_query,
 )
@@ -78,6 +79,10 @@ ROUND_TRIPS: list[tuple[Any, set[str]]] = [
             "bootstrap_token",
             "region",
             "vpc_id",
+            "subnet_id",
+            "availability_zone",
+            "launcher_service_id",
+            "detailed_diagnostics",
             "dns_zone_id",
             "dns_zone_name",
         },
@@ -472,3 +477,46 @@ def test_every_fixture_names_a_parser() -> None:
     assert FIXTURES, "no fixtures recorded"
     for path in FIXTURES:
         _emit(json.loads(path.read_text())["message"], json.loads(path.read_text())["answer"])
+
+
+def test_deployment_placement_and_ingress_survive_the_typed_boundary() -> None:
+    request = WorkspaceRequest.from_dict({
+        "region": "region-1",
+        "subnet_id": "subnet-a",
+        "availability_zone": "zone-a",
+        "launcher_service_id": "host-1",
+        "detailed_diagnostics": True,
+    })
+    assert request.to_dict()["subnet_id"] == "subnet-a"
+    assert request.detailed_diagnostics
+    response = CreateNodeResponse.from_dict({
+        "provider_id": "vm-1",
+        "placement": {"availability_zone": "zone-a"},
+        "ingress": {"id": "shared-1", "reused": False, "shared_hourly_rate": 0.03},
+    })
+    assert response.to_dict()["ingress"]["reused"] is False
+    assert response.to_dict()["placement"] == {"availability_zone": "zone-a"}
+    assert CreateNodeResponse.from_dict(response.to_dict()) == response
+
+
+def test_placement_discovery_filters_malformed_collections() -> None:
+    result = WorkspacePlacement.from_dict({
+        "regions": [{"id": "r", "name": "Region"}, None],
+        "subnets": "not a list",
+        "defaults": {"region": "r"},
+        "warnings": ["shared cost"],
+        "blockers": None,
+    })
+    assert result.regions == [{"id": "r", "name": "Region"}]
+    assert result.subnets == []
+    assert WorkspacePlacement.from_dict(result.to_dict()) == result
+
+
+def test_structured_diagnostics_preserve_unavailable_source() -> None:
+    status = NodeStateResponse.from_dict({
+        "state": "running",
+        "bootstrap_stage": "services",
+        "diagnostics": [{"source": "console", "status": "unavailable", "detail": "Access denied"}],
+    })
+    assert status.bootstrap_stage == "services"
+    assert status.to_dict()["diagnostics"][0]["status"] == "unavailable"

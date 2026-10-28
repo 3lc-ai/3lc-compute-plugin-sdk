@@ -64,6 +64,7 @@ __all__ = [
     "TransferRequest",
     "WorkspaceInstance",
     "WorkspaceListing",
+    "WorkspacePlacement",
     "WorkspaceRequest",
     "is_node_state",
     "preflight_query",
@@ -301,6 +302,10 @@ class WorkspaceRequest:
     vpc_id: str = ""
     dns_zone_id: str = ""
     dns_zone_name: str = ""
+    subnet_id: str = ""
+    availability_zone: str = ""
+    launcher_service_id: str = ""
+    detailed_diagnostics: bool = False
 
     @classmethod
     def from_dict(cls, data: Any) -> WorkspaceRequest:
@@ -320,6 +325,10 @@ class WorkspaceRequest:
             bootstrap_token=_stripped(d.get("bootstrap_token")),
             region=_stripped(d.get("region")),
             vpc_id=_stripped(d.get("vpc_id")),
+            subnet_id=_stripped(d.get("subnet_id")),
+            availability_zone=_stripped(d.get("availability_zone")),
+            launcher_service_id=_stripped(d.get("launcher_service_id")),
+            detailed_diagnostics=_bool(d.get("detailed_diagnostics")),
             dns_zone_id=_stripped(d.get("dns_zone_id")),
             dns_zone_name=_stripped(d.get("dns_zone_name")),
         )
@@ -340,6 +349,10 @@ class WorkspaceRequest:
             "bootstrap_token": self.bootstrap_token,
             "region": self.region,
             "vpc_id": self.vpc_id,
+            "subnet_id": self.subnet_id,
+            "availability_zone": self.availability_zone,
+            "launcher_service_id": self.launcher_service_id,
+            "detailed_diagnostics": self.detailed_diagnostics,
             "dns_zone_id": self.dns_zone_id,
             "dns_zone_name": self.dns_zone_name,
         }
@@ -465,6 +478,8 @@ class CreateNodeResponse:
     #: a site. The host saves it on the node record and in its history, and the Hub shows it beside
     #: the node's type; ``""`` shows nothing.
     location: str = ""
+    placement: dict[str, str] = field(default_factory=dict)
+    ingress: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CreateNodeResponse:
@@ -479,6 +494,8 @@ class CreateNodeResponse:
             services={k: v for k, v in _mapping(data.get("services")).items() if isinstance(v, str)},
             managed_by=_str(data.get("managed_by")),
             location=_str(data.get("location")),
+            placement=_str_dict(data.get("placement")),
+            ingress=_any_dict(data.get("ingress")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -498,6 +515,10 @@ class CreateNodeResponse:
             d["services"] = dict(self.services)
         if self.managed_by:
             d["managed_by"] = self.managed_by
+        if self.placement:
+            d["placement"] = dict(self.placement)
+        if self.ingress:
+            d["ingress"] = dict(self.ingress)
         if self.location:
             d["location"] = self.location
         return d
@@ -539,6 +560,8 @@ class NodeStateResponse:
     bootstrap_history: list[str] = field(default_factory=list)
     bootstrap_detail: str = ""
     bootstrap_failed: bool | None = None
+    bootstrap_stage: str = ""
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> NodeStateResponse:
@@ -549,6 +572,8 @@ class NodeStateResponse:
             bootstrap_history=_str_list(data.get("bootstrap_history")),
             bootstrap_detail=_str(data.get("bootstrap_detail")),
             bootstrap_failed=_opt_bool(data.get("bootstrap_failed")),
+            bootstrap_stage=_str(data.get("bootstrap_stage")),
+            diagnostics=_dict_list(data.get("diagnostics")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -560,6 +585,10 @@ class NodeStateResponse:
             d["bootstrap_history"] = list(self.bootstrap_history)
         if self.bootstrap_detail:
             d["bootstrap_detail"] = self.bootstrap_detail
+        if self.bootstrap_stage:
+            d["bootstrap_stage"] = self.bootstrap_stage
+        if self.diagnostics:
+            d["diagnostics"] = [dict(item) for item in self.diagnostics]
         if self.bootstrap_failed is not None:
             d["bootstrap_failed"] = self.bootstrap_failed
         return d
@@ -1519,3 +1548,50 @@ class OwnerCredentialsDescriptor:
 def is_node_state(value: Any) -> bool:
     """Whether ``value`` is one of :data:`NodeProviderState` (for tests and the conformance kit)."""
     return isinstance(value, str) and value in _NODE_STATES
+
+
+@dataclass
+class WorkspacePlacement:
+    """Provider-neutral placement choices under the current Connection.
+
+    Choice rows contain ``id`` and ``name``; subnets additionally identify ``zone_id`` and
+    ``network_id``. Defaults use WorkspaceRequest keys. Cost rows under ``shared`` and
+    ``deployment`` contain label, hourly, currency, description and reused when known.
+    An empty answer means no selectable placement, never permission to use another account.
+    """
+
+    regions: list[dict[str, Any]] = field(default_factory=list)
+    networks: list[dict[str, Any]] = field(default_factory=list)
+    zones: list[dict[str, Any]] = field(default_factory=list)
+    subnets: list[dict[str, Any]] = field(default_factory=list)
+    defaults: dict[str, str] = field(default_factory=dict)
+    costs: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> WorkspacePlacement:
+        """Read discovery without retaining unknown fields."""
+        return cls(
+            regions=_dict_list(data.get("regions")),
+            networks=_dict_list(data.get("networks")),
+            zones=_dict_list(data.get("zones")),
+            subnets=_dict_list(data.get("subnets")),
+            defaults=_str_dict(data.get("defaults")),
+            costs=_any_dict(data.get("costs")),
+            warnings=_str_list(data.get("warnings")),
+            blockers=_str_list(data.get("blockers")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize discovery, including empty lists and absent quotes."""
+        return {
+            "regions": [dict(row) for row in self.regions],
+            "networks": [dict(row) for row in self.networks],
+            "zones": [dict(row) for row in self.zones],
+            "subnets": [dict(row) for row in self.subnets],
+            "defaults": dict(self.defaults),
+            "costs": dict(self.costs),
+            "warnings": list(self.warnings),
+            "blockers": list(self.blockers),
+        }

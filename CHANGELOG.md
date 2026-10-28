@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Deployment placement discovery, actual placement and ingress metadata, launcher identity,
+  optional detailed diagnostics, and structured bootstrap stages in the infrastructure contract.
+
 - `tlc_plugin_sdk.shared.preset_ui`: the preset bar, `_tlcPluginPresets()`, one line at the top of a
   plugin's form. A select lists Default settings and the saved presets, each with a hint and its age;
   Save as… opens a prefilled name field in the bar (Enter saves, a taken name asks before replacing);

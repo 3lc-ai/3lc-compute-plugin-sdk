@@ -37,6 +37,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     StorageItem,
     StorageListing,
     WorkspaceListing,
+    WorkspacePlacement,
 )
 
 if TYPE_CHECKING:
@@ -235,6 +236,10 @@ class WorkspaceFacet(ABC):
     ``"workspace"`` in ``capabilities().flavors`` — the host gates on ``flavors``; the
     conformance kit asserts the two agree.
     """
+
+    def workspace_placement(self, *, region: str = "", vpc_id: str = "") -> WorkspacePlacement:
+        """Discover placement and shared costs in the current Connection (unsupported by default)."""
+        raise NotSupported(_unsupported("deployment placement discovery"))
 
     @abstractmethod
     def list_workspaces(self, *, owner: str = "") -> WorkspaceListing:
