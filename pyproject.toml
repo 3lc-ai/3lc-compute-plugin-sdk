@@ -11,7 +11,7 @@ version = "0.6.0"
 description = "Public Python SDK for building 3LC compute-service plugins."
 # The ceiling matches the host's: the core publishes no wheels for Python 3.15 yet, and uv 0.13 refuses to
 # lock a Python range it cannot resolve. Raise it when 3lc ships 3.15 wheels.
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.11,<3.15"
 readme = "README.md"
 authors = [{ name = "3LC", email = "support@3lc.ai" }]
 # Apache-2.0: the SDK is the public plugin contract, intended to go open-source. `{ text }`
@@ -25,7 +25,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Typing :: Typed",
@@ -107,7 +106,7 @@ explicit = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 exclude = [".git", ".mypy_cache", ".ruff_cache", ".venv", "build", "dist"]
 
 [tool.ruff.lint]
@@ -133,7 +132,7 @@ preview = true
 docstring-code-format = true
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
