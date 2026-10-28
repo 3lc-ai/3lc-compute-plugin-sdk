@@ -1497,6 +1497,7 @@ starts a job and tracks it over the generic channel:
 
 ```javascript
 // The host registers the namespace automatically as "/<plugin-id>".
+var jobId = null, cancelPressed = false;
 PluginJobs.run('my-plugin', { table_url: url }, {
   onUpdate: function (job) {
     // generic schema: job.status, job.progress.percent/label, job.metrics[]
@@ -1504,7 +1505,17 @@ PluginJobs.run('my-plugin', { table_url: url }, {
   },
   onDone: function (job) { showResult(job.run_url); },
   onError: function (job) { showError(job.error); },  // failure message on job.error
+}).then(function (resp) {
+  // The start answer carries the job's id: keep it from here for Cancel.
+  if (!resp || !resp.job_id) { return; }   // refused: onError has already said why
+  jobId = resp.job_id;
+  if (cancelPressed) { PluginJobs.cancel(jobId); }
 });
+
+cancelButton.onclick = function () {
+  cancelPressed = true;
+  if (jobId) { PluginJobs.cancel(jobId); }   // else when the start answer brings the id
+};
 ```
 
 `run()` pre-subscribes and buffers, so a job that finishes between the `/run` response and
@@ -1512,11 +1523,21 @@ the client subscribing still delivers its terminal event. (`PluginJobs.start/tra
 are the lower-level pieces.) The separate frontend's generic panel polls the same schema
 independently.
 
+**Keep the job's id from the start answer.** `run()` resolves with the `/run` answer,
+`{job_id, status, namespace}`, and `resp.job_id` is the handle `PluginJobs.cancel()` takes. A
+refused start resolves with `{error}` and also reaches `onError`; `run()` never rejects. Do not
+learn the id from the first `onUpdate` instead: the `queued` update is emitted when the job is
+submitted, often before the page's socket has connected, and is never replayed. The first
+update a page then sees is the worker's first progress, after a queue slot and the worker's
+start, which can be minutes; a Cancel pressed before it would have nothing to cancel. A Cancel
+pressed before the answer itself arrives is remembered and sent when it does, as above.
+
 One timing rule to know: `track()` and `on()` open the namespace socket **lazily**, on first
 use, and SocketIO does not replay server→client events to a client that was not yet
-connected. `run()` connects before it posts, so the common path is safe — but a fragment that
-listens for custom events from the first second, or re-attaches to a job it did not start
-(seed-on-mount), should warm the socket on mount: `PluginJobs.connect('/my-plugin')`.
+connected. `run()` opens the socket before it posts but does not wait for it to connect, so a
+job's first updates can be missed. A fragment that shows a job's `queued` state, listens for
+custom events from the first second, or re-attaches to a job it did not start (seed-on-mount)
+should warm the socket on mount: `PluginJobs.connect('/my-plugin')`.
 
 **Custom events** — `ctx.emit(name, payload)` is reserved for telemetry the generic schema
 **can't** express (e.g. a training plugin's per-epoch loss curve). The host relays it

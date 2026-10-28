@@ -620,6 +620,11 @@ export interface PluginJobsApi {
    * delivers a terminal callback. Defaults `params.project_name` from
    * `PLUGIN_API.context.projectName`. `onDone` fires on completed/cancelled,
    * `onError` on failed. Most-used member.
+   *
+   * Resolves with the `/run` answer and never rejects: a refused start resolves with
+   * `{error}` and calls `onError`. Keep the answer's `job_id` for `cancel()`. It is known
+   * long before a page's first `job_update`, whose `queued` may be lost while the socket
+   * connects, so a Cancel that waits for an update can have nothing to cancel.
    */
   run(pluginId: string, params?: object, handlers?: PluginJobHandlers): Promise<PluginRunResponse>;
 
@@ -646,7 +651,10 @@ export interface PluginJobsApi {
    */
   connect(namespace: string): boolean;
 
-  /** `POST {compute}/api/plugins/jobs/{jobId}/cancel` with body '{}'. */
+  /**
+   * `POST {compute}/api/plugins/jobs/{jobId}/cancel` with body '{}'. `jobId` is the
+   * `job_id` of `run()`'s or `start()`'s answer.
+   */
   cancel(jobId: string): Promise<{ cancelled?: boolean }>;
 
   /**
