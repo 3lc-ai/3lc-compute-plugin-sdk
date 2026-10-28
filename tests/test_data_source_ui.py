@@ -82,6 +82,12 @@ _LOCAL_BROWSE_OUT = {
         {"name": "report.csv", "type": "file", "size": 10},
     ],
 }
+_LOCAL_BROWSE_DATA = {
+    "path": "/Users/me/data",
+    "root": "/",
+    "parent": "/Users/me",
+    "entries": [{"name": "x.yaml", "type": "file", "size": 1}],
+}
 _NO_BUCKETS: dict[str, Any] = {"/api/infra/storage": {"storage": [], "providers": []}}
 
 
@@ -115,6 +121,9 @@ def _run(tmp_path: Path, body: str, *, routes: dict[str, Any] | None = None, tar
         + "window.PLUGIN_API = api;\n"
         + "['f', 'f-ds-browse-btn', 'f-ds-panel', 'f-ds-upload-btn', 'f-ds-upload-zone', 'f-ds-reach',"
         + " 'f-ds-file-input', 'f-ds-upload-info'].forEach(addEl);\n"
+        # The field sits in its wrapper, which is what the outside-click check measures a click against.
+        + "var wrapper = new FakeEl('wrapper'); wrapper.setAttribute('class', 'tlc-ds-wrapper');"
+        + " _els['f'].parentNode = wrapper; _els['f-ds-panel'].parentNode = wrapper;\n"
         + "function retarget(t) { window.TARGET = t; api.listeners.forEach(function (fn) { fn(); }); }\n"
         + "function els() { return { panel: _els['f-ds-panel'].innerHTML, reach: _els['f-ds-reach'].textContent,"
         + " reachShown: _els['f-ds-reach'].style.display !== 'none', upload: _els['f-ds-upload-btn'].style.display,"
@@ -215,7 +224,9 @@ def test_a_node_target_browses_the_node_disk_through_the_host(tmp_path: Path) ->
     panel = out["panel"]
     assert "godfire (node)" in panel and "This computer" not in panel
     # Several places: the switcher is the path bar's first crumb, with the node's place selected.
-    assert '<select data-ds-loc title="Browse in"><option value="0" selected>godfire (node)</option>' in panel
+    assert '<div class="tlc-ds-place"><label>Browse in</label><select class="form-select" data-ds-loc>' in panel
+    assert '<option value="0" selected>godfire (node)</option>' in panel
+    assert '<span data-ds-nav="/home/g">g</span>' in panel  # the path starts from the place's root
     assert 'class="ds-up" title="Up" disabled>' in panel  # at the node's root, nothing is above
     assert "S3 · proj (project root) — readable from godfire" in panel
     assert "S3 · locked — godfire cannot read this" in panel
@@ -388,9 +399,10 @@ def test_a_file_picker_picks_a_file_on_a_click_and_opens_a_folder_on_one(tmp_pat
     )
     listed, picked, opened, dir_hl, file_hl, by_key = out
     panel = listed["panel"]
-    # One path bar: the place first (plain text, there being one place), the path below it, the way up.
-    assert '<span data-ds-nav="/">This computer</span>' in panel
-    assert '<span data-ds-nav="/Users">Users</span>' in panel
+    # The place line names the one place; the path bar runs from its root ('/' here) to the folder shown.
+    assert '<div class="tlc-ds-place"><label>Browse in</label><span class="ds-place-one">This computer</span>' in panel
+    assert '<span data-ds-nav="/">/</span><span class="sep">/</span><span data-ds-nav="/Users">Users</span>' in panel
+    assert '<span class="sep">/</span><span data-ds-nav="/Users/me">me</span>' in panel
     assert 'class="ds-up" title="Up" data-ds-nav="/Users">' in panel
     assert "Location" not in panel and ">..<" not in panel
     # Rows, and a footer with the filter, Cancel and the one action, disabled until a file is highlighted.
@@ -533,6 +545,46 @@ def test_an_output_folder_picker_names_a_new_folder_or_adds_to_one(tmp_path: Pat
     assert 'data-ds-primary disabled title="Not writable' in locked["panel"]
     assert refused["open"] and refused["value"] == "/Users/me/data"
     assert here["value"] == "/Users/me" and not here["open"]  # an empty box: the folder shown
+
+
+@needs_node
+def test_a_click_in_the_hubs_dropdown_list_does_not_close_the_panel(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "_els['f-ds-browse-btn'].click(); await tick();\n"
+        # The Hub's picker shows a select's options in a div.tlc-picker on the body: outside the field, yet ours.
+        "var inList = new Event('click');"
+        " inList.target = rowWith({'class': 'tlc-picker-row'}, rowWith({'class': 'tlc-picker'}));\n"
+        "document.dispatchEvent(inList); var afterList = els();\n"
+        # A pick removes that list before the click reaches the document: a detached target is not outside.
+        "var gone = new Event('click'); gone.target = rowWith({}); gone.target.isConnected = false;\n"
+        "document.dispatchEvent(gone); var afterGone = els();\n"
+        "var outside = new Event('click'); outside.target = rowWith({});\n"
+        "document.dispatchEvent(outside); var afterOutside = els();\n"
+        "return [afterList, afterGone, afterOutside];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    after_list, after_gone, after_outside = out
+    assert after_list["open"] and after_gone["open"] and not after_outside["open"]
+
+
+@needs_node
+def test_the_panel_reopens_where_the_browsing_was(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '0'})); await tick();\n"
+        "clickOn(rowWith({'data-ds-cancel': ''})); var closed = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var again = els();\n"
+        "return [closed, again];",
+        # The first matching route wins: the folder's own listing before the general one.
+        routes={**_NO_BUCKETS, "/browse?path=%2FUsers%2Fme%2Fdata": _LOCAL_BROWSE_DATA, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    closed, again = out
+    assert not closed["open"]
+    assert again["open"] and "/browse?path=%2FUsers%2Fme%2Fdata" in again["fetched"][-1]
+    assert '<span data-ds-nav="/Users/me/data">data</span>' in again["panel"] and "x.yaml" in again["panel"]
 
 
 @needs_node

@@ -44,16 +44,26 @@ FakeEl.prototype.dispatchEvent = function (ev) {
 FakeEl.prototype.click = function () { this.dispatchEvent(new Event('click')); };
 FakeEl.prototype.querySelector = function () { return null; };
 FakeEl.prototype.querySelectorAll = function () { return []; };
-// `closest` understands attribute selectors (`[data-x]`, comma-separated) on elements built by hand with
-// setAttribute and chained through `parentNode`; HTML in innerHTML is still never parsed.
+// `closest` understands attribute selectors (`[data-x]`) and class selectors (`.x`, against a `class`
+// attribute), comma-separated, on elements built by hand with setAttribute and chained through `parentNode`;
+// HTML in innerHTML is still never parsed. `contains` walks the same chain.
 FakeEl.prototype.closest = function (sel) {
-  var attrs = String(sel).split(',').map(function (s) { return s.trim().replace(/^\[|\]$/g, ''); });
+  var parts = String(sel).split(',').map(function (s) { return s.trim(); });
   for (var el = this; el; el = el.parentNode || null) {
-    for (var i = 0; i < attrs.length; i++) if (el._attrs && attrs[i] in el._attrs) return el;
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      var attrs = el._attrs || {};
+      if (p.charAt(0) === '.') {
+        if ((' ' + (attrs['class'] || '') + ' ').indexOf(' ' + p.slice(1) + ' ') !== -1) return el;
+      } else if (p.replace(/^\[|\]$/g, '') in attrs) return el;
+    }
   }
   return null;
 };
-FakeEl.prototype.contains = function () { return true; };
+FakeEl.prototype.contains = function (el) {
+  for (var e = el; e; e = e.parentNode || null) if (e === this) return true;
+  return false;
+};
 FakeEl.prototype.appendChild = function (el) { this.options.push(el); return el; };
 FakeEl.prototype.setAttribute = function (k, v) { this._attrs[k] = String(v); };
 FakeEl.prototype.getAttribute = function (k) { return k in this._attrs ? this._attrs[k] : null; };
@@ -65,12 +75,15 @@ Event.prototype.preventDefault = function () {};
 
 var _els = {};
 function addEl(id) { _els[id] = new FakeEl(id); return _els[id]; }
+// The document takes listeners, so a test can send it a click (an "outside" one) with document.dispatchEvent.
+var _docListeners = {};
 var document = {
   head: { appendChild: function () {} },
   body: new FakeEl('body'),
   getElementById: function (id) { return _els[id] || null; },
   createElement: function () { return new FakeEl(''); },
-  addEventListener: function () {},
+  addEventListener: function (type, fn) { (_docListeners[type] = _docListeners[type] || []).push(fn); },
+  dispatchEvent: function (ev) { (_docListeners[ev.type] || []).forEach(function (fn) { fn(ev); }); return true; },
 };
 var window = { localStorage: { getItem: function () { return null; }, setItem: function () {} } };
 
