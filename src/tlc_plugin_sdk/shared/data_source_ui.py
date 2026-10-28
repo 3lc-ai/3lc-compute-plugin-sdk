@@ -94,22 +94,23 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "(function(){\n"
     "var st=document.createElement('style');st.textContent=\n"
     "'.tlc-ds-wrapper{position:relative}'"
+    # The panel is a column: the head, the rows, the footer. Only the rows scroll, so the head and the footer keep
+    # their width whether or not the rows need a scrollbar.
     "+'.tlc-ds-browse-panel{position:absolute;left:0;right:0;z-index:100;'"
     "+' border:1px solid var(--border);border-radius:6px;'"
-    "+' margin-top:4px;max-height:320px;overflow-y:auto;background:var(--bg-card);'"
-    "+' font-size:12px;display:none;'"
+    "+' margin-top:4px;max-height:min(420px,70vh);overflow:hidden;background:var(--bg-card);'"
+    "+' font-size:12px;display:none;flex-direction:column;'"
     "+' box-shadow:0 4px 16px rgba(0,0,0,.12)}'"
-    "+'.tlc-ds-browse-panel.open{display:block}'"
+    "+'.tlc-ds-browse-panel.open{display:flex}'"
+    "+'.tlc-ds-list{flex:1 1 auto;min-height:0;overflow-y:auto}'"
     # While the next listing loads, the rows it will replace fade; the fade starts late enough that a quick
     # listing (a local folder) never shows it.
     "+'.tlc-ds-browse-panel.tlc-ds-loading{cursor:progress}'"
     "+'.tlc-ds-browse-panel.tlc-ds-loading .tlc-ds-list{opacity:.45;pointer-events:none;'"
     "+' transition:opacity .2s ease .15s}'"
-    # The head (the place line and the path bar) and the footer stay in view while the rows between them scroll,
-    # so they are opaque: the card colour under the tint (the tint alone let the rows show through).
-    "+'.tlc-ds-head{position:sticky;top:0;z-index:1;border-bottom:1px solid var(--border);'"
-    "+' background-color:var(--bg-card);'"
-    "+' background-image:linear-gradient(var(--bg-secondary,rgba(0,0,0,.02)),var(--bg-secondary,rgba(0,0,0,.02)))}'"
+    # The head: the place line and the path bar.
+    "+'.tlc-ds-head{flex-shrink:0;border-bottom:1px solid var(--border);'"
+    "+' background:var(--bg-secondary,rgba(0,0,0,.02))}'"
     # Which place to browse (a machine's folder, a bucket), on a line of its own and looking like the Hub's other
     # dropdowns; only when there is a choice.
     "+'.tlc-ds-place{display:flex;align-items:center;gap:8px;padding:8px 10px 0;font-size:11px}'"
@@ -137,8 +138,7 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "+' box-shadow:inset 3px 0 0 var(--accent)}'"
     "+'.tlc-ds-browse-panel:focus{outline:none}'"
     "+'.tlc-ds-footer{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--border);'"
-    "+' position:sticky;bottom:0;z-index:1;background-color:var(--bg-card);'"
-    "+' background-image:linear-gradient(var(--bg-secondary,rgba(0,0,0,.02)),var(--bg-secondary,rgba(0,0,0,.02)))}'"
+    "+' flex-shrink:0;background:var(--bg-secondary,rgba(0,0,0,.02))}'"
     "+'.tlc-ds-footer .ds-name-label{color:var(--text-muted);white-space:nowrap;font-size:11px}'"
     "+'.tlc-ds-footer input[data-ds-name]{flex:0 1 280px;min-width:120px;font-size:12px;padding:3px 6px}'"
     "+'.tlc-ds-footer .ds-note{flex:1;min-width:0;font-size:11px;color:var(--text-muted);overflow:hidden;'"
