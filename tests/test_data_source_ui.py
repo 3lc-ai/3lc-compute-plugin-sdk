@@ -366,7 +366,7 @@ def test_dir_mode_is_a_folder_picker(tmp_path: Path) -> None:
 
 
 @needs_node
-def test_a_file_picker_highlights_on_a_click_and_picks_on_select_or_a_double_click(tmp_path: Path) -> None:
+def test_a_file_picker_picks_a_file_on_a_click_and_opens_a_folder_on_one(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {accept: '*.yaml'});\n"
@@ -376,16 +376,17 @@ def test_a_file_picker_highlights_on_a_click_and_picks_on_select_or_a_double_cli
         "var listed = els();\n"
         # The click lands on the name inside a.yaml's row, as a real one does.
         "var ev = clickOn(rowWith({}, rowWith({'data-ds-row': '2'})));\n"
-        "var highlighted = els(); highlighted.stopped = ev.stopped;\n"
-        "clickOn(primary()); var picked = els(); picked.fired = fired.slice();\n"
-        # Reopened: a highlighted folder's button opens it; a double-click on the file picks it at once.
-        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '0'})); var dir = els();\n"
-        "clickOn(primary()); await tick(); var opened = els();\n"
-        "dblOn(rowWith({'data-ds-row': '2'})); var dbl = els();\n"
-        "return [listed, highlighted, picked, dir, opened, dbl];",
+        "var picked = els(); picked.fired = fired.slice(); picked.stopped = ev.stopped;\n"
+        # Reopened: a click on a folder opens it; the arrow keys highlight, and Enter picks a highlighted file.
+        "_els['f-ds-browse-btn'].click(); await tick();\n"
+        "clickOn(rowWith({'data-ds-row': '0'})); var during = els().panel; await tick();\n"
+        "var opened = els(); opened.during = during;\n"
+        "keyOn('ArrowDown'); var dirHl = els(); keyOn('ArrowDown'); keyOn('ArrowDown'); var fileHl = els();\n"
+        "keyOn('Enter'); var byKey = els();\n"
+        "return [listed, picked, opened, dirHl, fileHl, byKey];",
         routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
     )
-    listed, highlighted, picked, dir_, opened, dbl = out
+    listed, picked, opened, dir_hl, file_hl, by_key = out
     panel = listed["panel"]
     # One path bar: the place first (plain text, there being one place), the path below it, the way up.
     assert '<span data-ds-nav="/">This computer</span>' in panel
@@ -397,31 +398,37 @@ def test_a_file_picker_highlights_on_a_click_and_picks_on_select_or_a_double_cli
     assert '<span class="ds-note">Showing *.yaml</span>' in panel
     assert "data-ds-cancel>Cancel</button>" in panel
     assert 'data-ds-primary disabled title="Choose a file to enable Select.">Select</button>' in panel
-    assert '<div class="tlc-ds-entry is-selected" data-ds-row="2">' in highlighted["panel"]
-    assert "data-ds-primary>Select</button>" in highlighted["panel"] and highlighted["open"] and highlighted["stopped"]
-    assert picked["value"] == "/Users/me/a.yaml" and not picked["open"] and picked["fired"] == ["input", "change"]
-    assert "data-ds-primary>Open</button>" in dir_["panel"]
+    assert picked["value"] == "/Users/me/a.yaml" and not picked["open"] and picked["stopped"]
+    assert picked["fired"] == ["input", "change"]
+    # The rows stay while the folder's listing loads: no flash through "Loading…" on a quick listing.
+    assert 'data-ds-row="0"' in opened["during"] and "Loading" not in opened["during"]
     assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
-    assert dbl["value"] == "/Users/me/a.yaml" and not dbl["open"]
+    assert '<div class="tlc-ds-entry is-selected" data-ds-row="0">' in dir_hl["panel"]
+    assert "data-ds-primary>Open</button>" in dir_hl["panel"]
+    assert '<div class="tlc-ds-entry is-selected" data-ds-row="2">' in file_hl["panel"]
+    assert "data-ds-primary>Select</button>" in file_hl["panel"]
+    assert by_key["value"] == "/Users/me/a.yaml" and not by_key["open"]
 
 
 @needs_node
-def test_a_folder_picker_selects_the_folder_shown_or_the_highlighted_one(tmp_path: Path) -> None:
+def test_a_folder_picker_opens_a_folder_on_a_click_and_selects_the_one_shown(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder'});\n"
         "_els['f-ds-browse-btn'].click(); await tick(); var listed = els();\n"
         "clickOn(primary()); var here = els();\n"
         "_els['f-ds-browse-btn'].click(); await tick();\n"
-        "clickOn(rowWith({'data-ds-row': '0'})); var hl = els(); clickOn(primary()); var sub = els();\n"
-        "_els['f-ds-browse-btn'].click(); await tick();\n"
-        "var navEv = dblOn(rowWith({'data-ds-row': '0'})); var during = els().panel; await tick();\n"
+        "var navEv = clickOn(rowWith({'data-ds-row': '0'})); var during = els().panel; await tick();\n"
         "var opened = els(); opened.during = during; opened.stopped = navEv.stopped;\n"
         "opened.idle = clickOn(rowWith({})).stopped;\n"
-        "return [listed, here, hl, sub, opened];",
+        # The second click of a double-click does nothing more.
+        "var second = new Event('click'); second.target = rowWith({'data-ds-row': '1'}); second.detail = 2;\n"
+        "_els['f-ds-panel'].dispatchEvent(second); await tick(); var twice = els();\n"
+        "keyOn('ArrowDown'); var hl = els(); keyOn('Enter'); await tick(); var byKey = els();\n"
+        "return [listed, here, opened, twice, hl, byKey];",
         routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
     )
-    listed, here, hl, sub, opened = out
+    listed, here, opened, twice, hl, by_key = out
     panel = listed["panel"]
     assert "data-ds-primary>Select this folder</button>" in panel
     assert '<div class="tlc-ds-entry" data-ds-row="0">' in panel  # data/
@@ -429,15 +436,16 @@ def test_a_folder_picker_selects_the_folder_shown_or_the_highlighted_one(tmp_pat
     assert '<div class="tlc-ds-entry tlc-ds-entry-disabled" title="Choose a folder">' in panel
     assert 'data-ds-row="2"' not in panel
     assert here["value"] == "/Users/me" and not here["open"]
-    assert '<div class="tlc-ds-entry is-selected" data-ds-row="0">' in hl["panel"]
-    assert "data-ds-primary>Select</button>" in hl["panel"]
-    assert sub["value"] == "/Users/me/data" and not sub["open"]
-    # A double-click opens the folder. The rows stay while its listing loads: no flash through "Loading…"; and
+    # A click opens the folder. The rows stay while its listing loads: no flash through "Loading…"; and
     # opening replaces the panel's contents, so the click ends in the panel, or the document's outside-click
     # check would take the detached target for outside and close the panel.
     assert 'data-ds-row="0"' in opened["during"] and "Loading" not in opened["during"]
     assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
     assert opened["stopped"] and opened["idle"] is False
+    assert not any("%2Flocked" in url for url in twice["fetched"])
+    assert '<div class="tlc-ds-entry is-selected" data-ds-row="0">' in hl["panel"]
+    assert "data-ds-primary>Select this folder</button>" in hl["panel"]  # the highlight is for Enter
+    assert by_key["open"] and len([u for u in by_key["fetched"] if "%2Fme%2Fdata" in u]) == 2
 
 
 @needs_node
@@ -495,19 +503,24 @@ def test_an_output_file_picker_saves_under_a_name(tmp_path: Path) -> None:
 def test_an_output_folder_picker_names_a_new_folder_or_adds_to_one(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
+        "window.SUG = 'TestCoco-yolo';\n"
         "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder', purpose: 'output',"
-        " suggestedName: 'TestCoco-yolo'});\n"
+        " suggestedName: function () { return window.SUG; }});\n"
         "_els['f-ds-browse-btn'].click(); await tick(); var listed = els();\n"
         "clickOn(primary()); var fresh = els();\n"
-        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '0'})); var into = els();\n"
+        # A suggestion that names a folder already there: the pick adds to it.
+        "window.SUG = 'data'; _els['f-ds-browse-btn'].click(); await tick(); var into = els();\n"
         "clickOn(primary()); var added = els();\n"
-        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '1'})); var locked = els();\n"
+        # A click on a folder opens it; the arrow keys highlight one, which names it in the box.
+        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '0'})); await tick();\n"
+        "var opened = els();\n"
+        "keyOn('ArrowDown'); keyOn('ArrowDown'); var locked = els();\n"
         "clickOn(primary()); var refused = els();\n"
         "typeName(''); clickOn(primary()); var here = els();\n"
-        "return [listed, fresh, into, added, locked, refused, here];",
+        "return [listed, fresh, into, added, opened, locked, refused, here];",
         routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_OUT},
     )
-    listed, fresh, into, added, locked, refused, here = out
+    listed, fresh, into, added, opened, locked, refused, here = out
     panel = listed["panel"]
     assert '<label class="ds-name-label">New folder</label>' in panel and 'value="TestCoco-yolo"' in panel
     assert "data-ds-note>A new folder in me</span>" in panel and "data-ds-primary>Select</button>" in panel
@@ -515,7 +528,8 @@ def test_an_output_folder_picker_names_a_new_folder_or_adds_to_one(tmp_path: Pat
     assert fresh["value"] == "/Users/me/TestCoco-yolo" and not fresh["open"]
     assert 'value="data"' in into["panel"] and "data-ds-note>Adds to data</span>" in into["panel"]
     assert added["value"] == "/Users/me/data"
-    assert 'is-selected" data-ds-row="1"' in locked["panel"]
+    assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
+    assert 'is-selected" data-ds-row="1"' in locked["panel"] and 'value="locked"' in locked["panel"]
     assert 'data-ds-primary disabled title="Not writable' in locked["panel"]
     assert refused["open"] and refused["value"] == "/Users/me/data"
     assert here["value"] == "/Users/me" and not here["open"]  # an empty box: the folder shown

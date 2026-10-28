@@ -40,16 +40,17 @@ Then in the plugin's ``ui.html`` JavaScript:
 
 The panel is a file chooser. Its path bar: the place being browsed (a machine's folder, a
 bucket) is the first crumb and switches places when there are several, the path below it
-follows the browsing, and an arrow at its end goes up. Its rows: a click highlights, a
-double-click opens a folder or picks a file; arrows, Enter, Backspace (up) and Escape work. Its
-footer: Cancel and the one action, Select (a folder picker's reads "Select this folder" when
-nothing is highlighted; a file picker's reads Open for a highlighted folder). In a folder picker
-files are listed dimmed and cannot be picked. A double-click in the empty field opens the panel,
-as Browse… does (the Hub's ``<tlc-table-field>`` does the same for a table URL).
+follows the browsing, and an arrow at its end goes up. Its rows: a click opens a folder, or
+picks a file (an output picker puts the file's name in its box instead); the arrow keys
+highlight a row, Enter opens a highlighted folder or does the footer's action, Backspace goes
+up, Escape closes. Its footer: Cancel and the one action: a file picker's Select (Open for a
+highlighted folder), a folder picker's "Select this folder". In a folder picker files are listed
+dimmed and cannot be picked. A double-click in the empty field opens the panel, as Browse… does
+(the Hub's ``<tlc-table-field>`` does the same for a table URL).
 
 An output picker (``purpose: 'output'``) saves: its footer has a name box, prefilled from
 ``suggestedName``, and Save (``mode: 'file'``) picks ``<folder shown>/<name>``, adding the first
-extension ``accept`` names when the name has none; a highlighted file puts its name in the box
+extension ``accept`` names when the name has none; a click on a file puts its name in the box
 and the note says "Replaces <name>". A folder output's box names a new folder under the one
 shown (empty: the folder shown itself); an existing name reads "Adds to <name>". ``mode``,
 ``accept`` and ``suggestedName`` may each be a function, read every time the panel opens.
@@ -100,10 +101,12 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "+' box-shadow:0 4px 16px rgba(0,0,0,.12)}'"
     "+'.tlc-ds-browse-panel.open{display:block}'"
     "+'.tlc-ds-browse-panel.tlc-ds-loading{cursor:progress}'"
-    # The path bar and the footer stay in view while the rows between them scroll.
+    # The path bar and the footer stay in view while the rows between them scroll, so they are opaque: the
+    # card colour under the tint (the tint alone let the rows show through).
     "+'.tlc-ds-breadcrumb{display:flex;align-items:center;gap:2px;padding:8px 10px;'"
-    "+' border-bottom:1px solid var(--border);font-size:11px;flex-wrap:wrap;'"
-    "+' background:var(--bg-secondary,rgba(0,0,0,.02));position:sticky;top:0;z-index:1}'"
+    "+' border-bottom:1px solid var(--border);font-size:11px;flex-wrap:wrap;position:sticky;top:0;z-index:1;'"
+    "+' background-color:var(--bg-card);'"
+    "+' background-image:linear-gradient(var(--bg-secondary,rgba(0,0,0,.02)),var(--bg-secondary,rgba(0,0,0,.02)))}'"
     "+'.tlc-ds-breadcrumb span{cursor:pointer;color:var(--accent);font-weight:500}'"
     "+'.tlc-ds-breadcrumb span:hover{text-decoration:underline}'"
     "+'.tlc-ds-breadcrumb .sep{color:var(--text-muted);cursor:default;margin:0 1px}'"
@@ -125,7 +128,8 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "+' box-shadow:inset 3px 0 0 var(--accent)}'"
     "+'.tlc-ds-browse-panel:focus{outline:none}'"
     "+'.tlc-ds-footer{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--border);'"
-    "+' background:var(--bg-secondary,rgba(0,0,0,.02));position:sticky;bottom:0;z-index:1}'"
+    "+' position:sticky;bottom:0;z-index:1;background-color:var(--bg-card);'"
+    "+' background-image:linear-gradient(var(--bg-secondary,rgba(0,0,0,.02)),var(--bg-secondary,rgba(0,0,0,.02)))}'"
     "+'.tlc-ds-footer .ds-name-label{color:var(--text-muted);white-space:nowrap;font-size:11px}'"
     "+'.tlc-ds-footer input[data-ds-name]{flex:0 1 280px;min-width:120px;font-size:12px;padding:3px 6px}'"
     "+'.tlc-ds-footer .ds-note{flex:1;min-width:0;font-size:11px;color:var(--text-muted);overflow:hidden;'"
@@ -573,20 +577,15 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    var nav = t.closest('[data-ds-nav]');\n"
     "    var row = _rowOf(t);\n"
     "    if (nav) { ev.stopPropagation(); _browseTo(nav.getAttribute('data-ds-nav')); }\n"
-    "    else if (row >= 0) { ev.stopPropagation(); _select(row); }\n"
+    "    else if (row >= 0) {\n"
+    "      ev.stopPropagation();\n"
+    "      // The second click of a double-click: the first already did this, and the listing it opened is\n"
+    "      // under the pointer now, so acting again would dive a level further.\n"
+    "      if (ev.detail > 1) return;\n"
+    "      _activate(row);\n"
+    "    }\n"
     "    else if (t.closest('[data-ds-primary]')) { ev.stopPropagation(); _act(); }\n"
     "    else if (t.closest('[data-ds-cancel]')) { ev.stopPropagation(); _close(); }\n"
-    "  });\n"
-    "  // A double-click opens a folder, and picks a file (in an output picker: under that file's name).\n"
-    "  panel.addEventListener('dblclick', function(ev) {\n"
-    "    var i = _rowOf(ev.target);\n"
-    "    var row = _rows[i];\n"
-    "    if (!row || !_selectable(row)) return;\n"
-    "    ev.stopPropagation();\n"
-    "    if (row.type === 'dir') { _browseTo(row.url); return; }\n"
-    "    _sel = i;\n"
-    "    if (output) _name = _nameAuto = row.name;\n"
-    "    _act();\n"
     "  });\n"
     "  panel.addEventListener('input', function(ev) {\n"
     "    if (!_inNameBox(ev.target)) return;\n"
@@ -595,7 +594,12 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "  });\n"
     "  panel.addEventListener('keydown', function(ev) {\n"
     "    if (ev.key === 'Escape') { ev.preventDefault(); _close(); return; }\n"
-    "    if (ev.key === 'Enter') { ev.preventDefault(); _act(); return; }\n"
+    "    if (ev.key === 'Enter') {\n"
+    "      ev.preventDefault();\n"
+    "      var hl = _sel >= 0 ? _rows[_sel] : null;\n"
+    "      if (hl && hl.type === 'dir' && !_inNameBox(ev.target)) _browseTo(hl.url); else _act();\n"
+    "      return;\n"
+    "    }\n"
     "    if (_inNameBox(ev.target)) return;  // typing a name: the arrows and Backspace are the box's own\n"
     "    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {\n"
     "      ev.preventDefault();\n"
@@ -715,6 +719,14 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    if (output && (row.type === 'dir') === (mode === 'folder')) _name = _nameAuto = row.name;\n"
     "    _paint();\n"
     "  }\n"
+    "  // A click on a row: a folder opens; a file is picked, or, in an output picker, named in the box.\n"
+    "  function _activate(i) {\n"
+    "    var row = _rows[i];\n"
+    "    if (!row || !_selectable(row)) return;\n"
+    "    if (row.type === 'dir') { _browseTo(row.url); return; }\n"
+    "    if (!output) { _pick(row.url, _loc); return; }\n"
+    "    _select(i);\n"
+    "  }\n"
     "  // The first extension `accept` names ('*.csv' -> '.csv'), for a typed name without one; '' when none.\n"
     "  function _acceptExt() {\n"
     "    var m = /\\*(\\.[A-Za-z0-9]+)/.exec(glob || '');\n"
@@ -740,10 +752,7 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "      return { label: 'Open', run: function() { _browseTo(row.url); } };\n"
     "    }\n"
     "    if (!output) {\n"
-    "      if (mode === 'folder') {\n"
-    "        var dir = row ? row.url : here;\n"
-    "        return { label: row ? 'Select' : 'Select this folder', run: function() { _pick(dir, _loc); } };\n"
-    "      }\n"
+    "      if (mode === 'folder') return { label: 'Select this folder', run: function() { _pick(here, _loc); } };\n"
     "      if (!row) return { label: 'Select', disabled: true, title: 'Choose a file to enable Select.' };\n"
     "      return { label: 'Select', run: function() { _pick(row.url, _loc); } };\n"
     "    }\n"
@@ -831,9 +840,9 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "      h += '<div class=\"tlc-ds-loc-note\">'\n"
     "        + _esc(_loc.note + (_loc.reach_detail ? ': ' + _loc.reach_detail : '')) + '</div>';\n"
     "    }\n"
-    "    // The rows: a click highlights, a double-click opens or picks. A folder an output cannot write to is\n"
-    "    // shown flagged (the person can still open it to find a writable one inside); undefined => writable (an\n"
-    "    // older host), so only an explicit false flags it.\n"
+    "    // The rows: a click opens a folder or picks a file (an output picker names it in the box); the arrow\n"
+    "    // keys highlight. A folder an output cannot write to is shown flagged (the person can still open it to\n"
+    "    // find a writable one inside); undefined => writable (an older host), so only an explicit false flags it.\n"
     "    h += '<div class=\"tlc-ds-list\">';\n"
     "    if (!_rows.length) h += '<div class=\"tlc-ds-empty\">Empty folder</div>';\n"
     "    _rows.forEach(function(row, i) {\n"
