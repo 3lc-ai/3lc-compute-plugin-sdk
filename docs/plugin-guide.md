@@ -1623,7 +1623,18 @@ Wrap each field in `.form-group`; label it with `.form-label`; use `.form-contro
 
 **Dropdowns.** On a Hub 1.2 or later, a `<select>` opens the Hub's own list, in the theme's colours, instead of the operating system's menu. There is nothing to do for it: the `<select>` stays the control your code reads and sets, and a pick fires `input` and `change` as before. So don't build a dropdown of your own just to pick a value. Multi-select lists, `size > 1` and touch devices keep the native control. To keep the system menu for one select, put `data-native-select` on it or on an element around it.
 
-For a menu that is not a plain select, such as rows with a hint or rows that can be removed, show the same list with `TlcPicker.open(anchor, {items, value, onPick})`. A Hub before 1.2 has no `TlcPicker`, so feature-detect it and fall back to a `<select>`:
+In the list, the ✓ marks the selected row on the left. A select's options can show a muted hint at the row's end with `data-hint`, and be removable with `data-removable` once you say how to remove one:
+
+```js
+select.innerHTML = '<option value="p1" data-hint="2 days ago" data-removable>Small objects 1280</option>';
+if (typeof TlcPicker !== 'undefined' && TlcPicker.onRemove) {
+  TlcPicker.onRemove(select, option => deletePreset(option.value));   // returns a promise
+}
+```
+
+The trash sits in a column under the chevron and removes the row at once, with no question. The list stays open, so several can go in a row. Your function deletes the thing and rebuilds the options; the list follows them. A rejected promise shows its message in the row. On a Hub without `onRemove`, `data-hint` and `data-removable` are ignored, so keep another way to delete.
+
+For a menu that is not a plain select, show the same list with `TlcPicker.open(anchor, {items, value, onPick})`. A Hub before 1.2 has no `TlcPicker`, so feature-detect it and fall back to a `<select>`:
 
 ```js
 if (typeof TlcPicker !== 'undefined') {
@@ -1633,14 +1644,14 @@ if (typeof TlcPicker !== 'undefined') {
       { value: 'defaults', label: 'Defaults' },
       { separator: true },
       { value: 'p1', label: 'Small objects 1280', hint: '2 days ago',
-        remove: { confirm: 'Delete this preset?', run: item => deletePreset(item.value) } },
+        remove: { run: item => deletePreset(item.value) } },
     ],
     onPick: item => applyPreset(item.value),
   });
 }
 ```
 
-Items can also be `{group: 'Saved'}` headers. `remove.run` returns a promise: the row goes when it resolves, and shows the error when it rejects. See `TlcPickerApi` in `plugin-api.d.ts` for the rest.
+Items can also be `{group: 'Saved'}` headers. `remove.run` returns a promise: the row dims while it runs, goes when it resolves, and shows the error when it rejects. Give `remove.confirm` a question to ask in the row first. See `TlcPickerApi` in `plugin-api.d.ts` for the rest.
 
 **Table fields.** For a field that holds a table URL, write the Hub's `<tlc-table-field>` instead of your own `<input>` and Browse button:
 
@@ -1656,6 +1667,48 @@ It is a text field with a Browse… button. Browse…, or a double-click in the 
 For a list of tables, put one field below the list to add to it: take its value on `change`, add it to the list, and empty the field. Set the field's `tagged` to the list's tables (`field.tagged = urls.map(url => ({url, label: 'Added'}))`) and Browse Tables marks them as this field's selection, so it shows what is already in the list.
 
 A Hub before 1.2 doesn't define the element, so a plugin that uses it sets `min_frontend_version = "1.2.0"` in `plugin.toml`. The bare `openTablePicker(inputId)` still works for a field you build yourself, without the double-click or the tags. See `TlcTableFieldElement` in `plugin-api.d.ts`.
+
+### Presets
+
+A plugin whose form is worth keeping (a training setup, a metric selection) gets the Hub's preset bar from the SDK rather than a bar of its own. It is one line at the top of the form:
+
+```
+Preset  [ Small objects 1280 — yolo11n · detect · modified   ⌄ ]  Save as…
+```
+
+A preset is a named template of the whole form, inputs included. Picking one copies its values into the form; only Save writes a preset, and a run never does. The select lists Default settings and then the saved presets, each with your summary and, as a muted hint, when it was last used for a run ("used 2 days ago"), else when it was saved. The selected entry gains "· modified" once the form differs from it, and picking it again reverts the form. Save as… turns the bar into a name field in the select's place, prefilled with a free name and selected: Enter saves, Escape cancels, and a taken name asks "Replace …?" first. Each saved preset has a trash button in the list, which deletes it at once and keeps the list open. On a Hub without `TlcPicker.onRemove` the trash sits beside the select instead and deletes the selected preset. The page opens as it was last left in this browser, else on Default settings.
+
+Inject `preset_ui_script()` from `tlc_plugin_sdk.shared.preset_ui` with `inject_scripts()`, put an empty `<div id="my-presets"></div>` where the bar goes, and wire it:
+
+```js
+var presets = _tlcPluginPresets({
+  pluginId: 'my-plugin',
+  apiPath: '/api/plugins/my-plugin/configs',   // the config CRUD routes, see below
+  mount: 'my-presets',
+  formRoot: 'my-form',                          // input/change events under it mark the form as changed
+  collect: function () { return { table_url: field('table').value, epochs: +field('epochs').value }; },
+  apply: function (v) { field('table').value = v.table_url || ''; field('epochs').value = v.epochs; },
+  defaults: function () { return { table_url: '', epochs: 10 }; },
+  inputs: ['table_url'],
+  contextInputs: function () {
+    var urls = PLUGIN_API.context.resourceUrls || [];
+    return urls.length ? { table_url: urls[0] } : null;   // null when opened bare
+  },
+  autoName: function (v) { return 'resnet50 · ' + new Date().toISOString().slice(0, 10); },
+  summary: function (v) { return [v.model, v.epochs && v.epochs + ' epochs']; },   // empty parts are left out
+  legacyKey: 'my_selected_config',              // the old config bar's key, honoured once
+});
+presets.init();
+```
+
+- **Routes.** The config CRUD a `PluginConfigStore` plugin already serves: `GET /configs`, `POST /configs` (an empty `id` creates, an `id` replaces), `GET /configs/{id}`, `POST /configs/{id}/delete`. Saved configs appear as presets as they are.
+- **`collect` and `apply`** move the whole form, without `id` and `name`. Return a promise from `apply` when filling the form takes a round trip (a model's parameters fetched after the model is set): the bar compares the form only once it resolves.
+- **Inputs.** `inputs` names the keys that are inputs (tables, folders). When the plugin is opened from a table, `contextInputs()` returns them: they replace the whole input set, inputs it does not name are cleared, and they stay while the page is open, also when a preset is picked. They never count as a modification.
+- **JS state.** Call `presets.changed()` after a change no DOM event reports, such as a card toggled in a JS object.
+- **The run body.** Send `project_config: Object.assign(collect(), { id: presets.presetId(), name: presets.presetName() })`. Both are set while the form is unchanged from a preset, so the job card can name it, and empty otherwise. A run never saves a preset.
+- **Last use.** When a run sent with a preset's id finishes, stamp it: `config_store().update_last_run(config_id)`, best-effort, as the list shows it. A worker on another machine has its own store, so a run there leaves no stamp.
+
+`_tlcPluginConfig` (`shared.config_ui`), the earlier config bar whose Train saved into the selected config, is superseded by this; it stays for the plugins still on it. See `TlcPresetOptions` and `TlcPresetControl` in `plugin-api.d.ts`.
 
 ### Buttons
 
@@ -2025,7 +2078,7 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 - [ ] If creating tables from images: registers URL aliases via `tlc_plugin_sdk/shared/aliases.py` + `tlc_plugin_sdk/shared/alias_ui.py` (inject with `inject_scripts()`). The alias is not optional — the shared widget no longer offers to turn it off (a table written without one is full of absolute paths that resolve on one machine only); the token and folder stay editable in the alias card, and data inside the project is aliased relative to the table so the token survives a move. Register the alias before writing rows, from the durable folder (`alias_folder`), not a declared input the host may rewrite for the run (see [Data inputs and run targets](#data-inputs-and-run-targets))
 - [ ] UI follows the page structure and card conventions from "Styling & UI Conventions" above
 - [ ] Hero section with icon, title, description, and 3 feature badges
-- [ ] Config bar if plugin has saved configurations
+- [ ] Preset bar (`preset_ui_script()`, guide → Presets) if the plugin has saved setups
 - [ ] Dark mode works correctly (no hardcoded colors)
 
 ---

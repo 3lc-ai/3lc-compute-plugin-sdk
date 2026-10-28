@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared config bar UI for plugins — JS module injected into plugin fragments.
 
+Superseded by ``preset_ui.py`` (the preset bar, ``_tlcPluginPresets``), which does not save on
+Train. Kept for the plugins still on it; new plugins use the preset bar.
+
 Follows the same injection pattern as ``alias_ui.py``.  Plugins call
 ``config_ui_script()`` to get the JS string, then inject it with
 ``inject_scripts(raw, config_ui_script())`` (see ``ui_inject.py``).
