@@ -149,3 +149,10 @@ records shared ingress identity and provider recovery metadata; it must contain 
 bounded entries with `source`, `status`, and `detail`, including unavailable sources. Providers
 must redact secrets before returning diagnostics. A host can preserve these observations
 before cleanup; requesting detailed diagnostics never grants permission to run arbitrary commands.
+
+`WorkspaceFacet.workspace_retain_failed(provider_id)` backs the host-only
+`POST /infra/workspace-retain/{provider_id}` operation. Providers remove public service routing
+while preserving the machine and shared infrastructure; the host must authorize this separately
+and enforce its persisted expiry. Unsupported providers return 501 and the host cleans up rather
+than retaining an exposed failure. Detailed collection uses the separate host-only
+`GET /infra/workspace-diagnostics/{provider_id}` hook under a diagnostics grant.

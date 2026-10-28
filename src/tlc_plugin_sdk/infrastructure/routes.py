@@ -575,7 +575,11 @@ def workspace_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     def _workspace_diagnostics(provider_id: str) -> dict[str, Any]:
         return answer(plugin, lambda: facet.workspace_diagnostics(provider_id).to_dict())
 
-    return [_list_workspaces, _workspace_placement, _workspace_diagnostics]
+    @http_post("/infra/workspace-retain/{provider_id:str}", sync_to_thread=True, status_code=200)
+    def _workspace_retain(provider_id: str) -> dict[str, Any]:
+        return answer(plugin, lambda: facet.workspace_retain_failed(provider_id).to_dict())
+
+    return [_list_workspaces, _workspace_placement, _workspace_diagnostics, _workspace_retain]
 
 
 # ── Legacy owner-credentials facet ─────────────────────────────────────────────
