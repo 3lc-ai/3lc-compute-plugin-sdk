@@ -61,7 +61,7 @@ _IMAGE_COLUMN_CANDIDATES = ("image", "image_path", "file_name", "filename")
 _IMAGE_FILE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 
 
-@moved_to_3lc("use tlc.helpers.ImageHelper.find_image_column (3lc 3.5) instead")
+@moved_to_3lc("use tlc.helpers.ImageHelper.find_image_column(table, column=override) (3lc 3.5) instead")
 def get_image_column(table: Any, override: str | None = None) -> str:
     """Discover the name of the image column in a table.
 
@@ -152,7 +152,7 @@ def resolve_image_url(img_path: str, table_url: Any = None) -> tlc.Url:
     return tlc.Url(img_path).expand_aliases(allow_unexpanded=False).to_absolute(owner)
 
 
-@moved_to_3lc("use tlc.helpers.ImageHelper.open (3lc 3.5) instead")
+@moved_to_3lc('use tlc.helpers.ImageHelper.open(url, mode="RGB") (3lc 3.5) instead')
 def load_image(img_path: str, table_url: Any = None) -> Image:
     """Load an image from a stored path as an RGB PIL image.
 
@@ -183,7 +183,8 @@ def load_image(img_path: str, table_url: Any = None) -> Image:
 
 
 @moved_to_3lc(
-    "use tlc.helpers.ImageHelper.get_exif_image_dimensions instead, which returns (height, width), EXIF-rotated"
+    "use tlc.helpers.ImageHelper.open(url).size (3lc 3.5) instead, the same (width, height), unrotated; "
+    "tlc.helpers.ImageHelper.get_exif_image_dimensions returns (height, width), EXIF-rotated"
 )
 def read_image_size(img_path: str, table_url: Any = None) -> tuple[int, int]:
     """Return a stored image's ``(width, height)`` without decoding its pixels.
@@ -216,7 +217,9 @@ def read_image_size(img_path: str, table_url: Any = None) -> tuple[int, int]:
         return image.width, image.height
 
 
-@moved_to_3lc("use tlc.helpers.ImageHelper.open with tlc.helpers.ImageHelper.get_image_url (3lc 3.5) instead")
+@moved_to_3lc(
+    'use tlc.helpers.ImageHelper.open(tlc.helpers.ImageHelper.get_image_url(table, idx), mode="RGB") (3lc 3.5) instead'
+)
 def read_image_from_table(table: Any, idx: int, image_column: str | None = None) -> Image:
     """Read a single image from a table row as an RGB PIL image.
 

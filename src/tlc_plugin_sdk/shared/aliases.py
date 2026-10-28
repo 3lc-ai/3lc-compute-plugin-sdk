@@ -403,7 +403,10 @@ def register_source_alias(
     )
 
 
-@moved_to_3lc("use tlc.integration.compute.register_run_alias (3lc 3.5) instead")
+@moved_to_3lc(
+    "use tlc.integration.compute.register_alias_from_card(ctx, read_folder, project_name=...) (3lc 3.5) instead, "
+    "which takes the JobContext in place of its params"
+)
 def register_run_alias(
     params: dict[str, Any],
     read_folder: str,

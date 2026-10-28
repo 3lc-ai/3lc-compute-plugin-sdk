@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`shared.alias_ui.parse_alias_card(params)`**: what the shared alias card put in a run body, as an
   `AliasCard(enabled, token, alias_folder, source_folder)` (trimmed; blank is `None`; `enabled` by the
   card's rule, on when absent). Pure, and next to the card's JS, so the SDK keeps the knowledge of what
-  its own card sends; 3lc 3.5's `register_run_alias` reads the card through it.
+  its own card sends; 3lc 3.5's `tlc.integration.compute.register_alias_from_card` reads the card through it.
   `shared.aliases.register_run_alias` uses it too, with no change in behaviour.
 - The plugin guide's **"Using 3LC data"** says how a plugin moves to 3lc's own API before SDK 0.6:
   declare `3lc`, set `applies_alias_overrides = True` and run the job inside
@@ -67,18 +67,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `url_utils.is_folder`, `is_file`, `list_folder`, `iter_files` | `tlc.Url.is_dir`, `is_file`, `list_dir`, `iter_files` |
   | `url_utils.read_bytes`, `read_text` | `tlc.Url.read_bytes`, `read_text` |
   | `url_utils.get_url_column_names` | `tlc.helpers.SchemaHelper.nested_url_columns(table.rows_schema)` |
-  | `url_utils.normalize_url` | none yet |
-  | `images.get_image_column` | `tlc.helpers.ImageHelper.find_image_column` |
+  | `url_utils.normalize_url` | none: pass the value on as is; `os.path.expanduser(value)` for a folder or file the person picked; `str(tlc.Url(value))` where a canonical form is needed, such as a cache key |
+  | `images.get_image_column` | `tlc.helpers.ImageHelper.find_image_column(table, column=override)` |
   | `images.resolve_image_url` | `tlc.Url(path).to_absolute(table_url, allow_unexpanded=False)` |
-  | `images.load_image`, `read_image_from_table` | `tlc.helpers.ImageHelper.open` (with `ImageHelper.get_image_url`) |
-  | `images.read_image_size` | `tlc.helpers.ImageHelper.get_exif_image_dimensions`, which returns `(height, width)` |
+  | `images.load_image`, `read_image_from_table` | `tlc.helpers.ImageHelper.open(url, mode="RGB")` (with `ImageHelper.get_image_url(table, idx)`) |
+  | `images.read_image_size` | `tlc.helpers.ImageHelper.open(url).size`, the same `(width, height)`, unrotated (`ImageHelper.get_exif_image_dimensions` returns `(height, width)`, EXIF-rotated) |
   | `images.get_image_paths` | `tlc.helpers.ImageHelper.get_image_urls` |
   | `images.list_image_urls` | `tlc.Url.iter_files(extensions=tlc.constants.IMAGE_FILE_EXTENSIONS)` |
-  | `labels.*` | `tlc.Table.get_simple_value_map` with `tlc.helpers.AnnotationHelper` |
+  | `labels.get_label_map`, `get_label_names`, `get_class_name_lookup` | `tlc.Table.get_simple_value_map` with the `label_path` of `tlc.helpers.AnnotationHelper.get` |
+  | `labels.get_display_value_map` | `tlc.Table.get_simple_value_map(path, use_display_names=True)` |
+  | `labels.find_label_column` | `tlc.helpers.AnnotationHelper.find_all(table, type=tlc.helpers.AnnotationType.CATEGORICAL_LABEL)` |
   | `modality.detect_modality_from_table`, `ModalityInfo` | `tlc.helpers.AnnotationHelper.detect_task` |
   | `model_storage.save_model_to_run`, `store_model_info_in_run` | `tlc.helpers.ModelHelper.save_to_run`, `set_run_model_info` |
   | `aliases.register_alias`, `validate_alias_location`, `relative_alias_value` | `tlc.helpers.ProjectHelper.register_data_alias` |
-  | `aliases.register_source_alias`, `register_run_alias` | `tlc.integration.compute.register_source_alias`, `register_run_alias` |
+  | `aliases.register_source_alias`, `register_run_alias` | `tlc.integration.compute.register_source_alias`, `register_alias_from_card` (both take the `JobContext`) |
   | `aliases.get_table_aliases` | `tlc.url.get_table_url_aliases` |
   | `aliases.apply_alias_overrides`, `restore_aliases` | `tlc.url.override_url_aliases`; in a job, `tlc.integration.compute.job_scope` |
   | `aliases.copy_folder_to_url`, `CopyProgress` | none |

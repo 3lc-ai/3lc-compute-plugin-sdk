@@ -26,7 +26,10 @@ from tlc_plugin_sdk.shared._deprecation import moved_to_3lc
 logger = logging.getLogger(__name__)
 
 
-@moved_to_3lc("it reads 3LC's configuration, which the SDK no longer does, and 3lc has no replacement for it yet")
+@moved_to_3lc(
+    "3lc has no replacement: pass the value on as is, with os.path.expanduser(value) for a folder or file the "
+    "person picked, and str(tlc.Url(value)) where a canonical form is needed, such as a cache key"
+)
 def normalize_url(url: str) -> str:
     """Normalize a 3LC URL for use with the tlc SDK.
 

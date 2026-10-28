@@ -218,7 +218,8 @@ def get_display_value_map(table: Any, path: str) -> dict[float, str] | None:
 
 
 @moved_to_3lc(
-    "use tlc.helpers.AnnotationHelper.find_all with type=tlc.helpers.AnnotationType.CATEGORICAL_LABEL (3lc 3.5) instead"
+    "use tlc.helpers.AnnotationHelper.find_all(table, type=tlc.helpers.AnnotationType.CATEGORICAL_LABEL) (3lc 3.5) "
+    "instead"
 )
 def find_label_column(table: Any) -> str | None:
     """Find a top-level categorical label column in a table, if any.

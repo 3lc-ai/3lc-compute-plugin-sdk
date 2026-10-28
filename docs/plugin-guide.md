@@ -1442,7 +1442,7 @@ class MyTrainer(ComputePlugin):
 ```
 
 `job_scope(ctx)` reads `ctx.alias_overrides`, points the aliases at the staged copy for the length of
-the block and puts them back afterwards; it is also where `tlc.integration.compute.register_run_alias`
+the block and puts them back afterwards; it is also where `tlc.integration.compute.register_alias_from_card`
 registers the alias of a table the job writes. Both parts are needed:
 
 - `applies_alias_overrides = True` tells the worker (and, on `/health`, the host) that the plugin
@@ -1511,7 +1511,7 @@ data *for this run*, not where it lives:
 - **Register the alias before writing rows.** For a table written from a folder the person
   picked, call `register_run_alias(ctx.params, <the folder you read>, project_name=…,
   root_url=ctx.project_root_url)` (deprecated: from 3lc 3.5,
-  `tlc.integration.compute.register_run_alias(ctx, <the folder you read>, project_name=…)` inside
+  `tlc.integration.compute.register_alias_from_card(ctx, <the folder you read>, project_name=…)` inside
   `job_scope`, see [Using 3LC data](#using-3lc-data)) before the table writer runs: rows written first keep absolute
   paths, and an absolute path from a node is useless everywhere else. It reads the alias card's
   values (including `alias_source_folder`, the folder as picked, which the host never rewrites)

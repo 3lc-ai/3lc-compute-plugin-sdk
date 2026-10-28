@@ -372,7 +372,7 @@ class AliasCard:
     """What the alias card asked for, as the run body carries it to the job.
 
     Read with :func:`parse_alias_card`. Registering the alias is 3LC's part (with 3lc 3.5,
-    ``tlc.integration.compute.register_run_alias``, which reads the card through this).
+    ``tlc.integration.compute.register_alias_from_card``, which reads the card through this).
 
     Attributes:
         enabled: Whether the person wants the alias. The card sends it on; a body without the key

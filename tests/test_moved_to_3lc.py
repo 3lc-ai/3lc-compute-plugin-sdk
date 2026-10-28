@@ -28,7 +28,10 @@ from tlc_plugin_sdk.shared.storage_transfer import TransferRegistry
 # Every name SDK 0.6 removes, with the replacement its warning must name (api-spec section 10,
 # decisions 2026-10-28).
 MOVED: dict[str, str] = {
-    "url_utils.normalize_url": "3lc has no replacement for it yet",
+    "url_utils.normalize_url": (
+        "3lc has no replacement: pass the value on as is, with os.path.expanduser(value) for a folder or file the "
+        "person picked, and str(tlc.Url(value)) where a canonical form is needed, such as a cache key"
+    ),
     "url_utils.get_url_column_names": "tlc.helpers.SchemaHelper.nested_url_columns(table.rows_schema)",
     "url_utils.is_folder": "tlc.Url.is_dir",
     "url_utils.is_file": "tlc.Url.is_file",
@@ -36,11 +39,16 @@ MOVED: dict[str, str] = {
     "url_utils.read_text": "tlc.Url.read_text",
     "url_utils.list_folder": "tlc.Url.list_dir",
     "url_utils.iter_files": "tlc.Url.iter_files",
-    "images.get_image_column": "tlc.helpers.ImageHelper.find_image_column",
+    "images.get_image_column": "tlc.helpers.ImageHelper.find_image_column(table, column=override)",
     "images.resolve_image_url": "tlc.Url(img_path).to_absolute(table_url, allow_unexpanded=False)",
-    "images.load_image": "tlc.helpers.ImageHelper.open",
-    "images.read_image_size": "tlc.helpers.ImageHelper.get_exif_image_dimensions",
-    "images.read_image_from_table": "tlc.helpers.ImageHelper.open with tlc.helpers.ImageHelper.get_image_url",
+    "images.load_image": 'tlc.helpers.ImageHelper.open(url, mode="RGB")',
+    "images.read_image_size": (
+        "tlc.helpers.ImageHelper.open(url).size (3lc 3.5) instead, the same (width, height), unrotated; "
+        "tlc.helpers.ImageHelper.get_exif_image_dimensions returns (height, width), EXIF-rotated"
+    ),
+    "images.read_image_from_table": (
+        'tlc.helpers.ImageHelper.open(tlc.helpers.ImageHelper.get_image_url(table, idx), mode="RGB")'
+    ),
     "images.get_image_paths": "tlc.helpers.ImageHelper.get_image_urls",
     "images.list_image_urls": "tlc.Url.iter_files with extensions=tlc.constants.IMAGE_FILE_EXTENSIONS",
     "labels.get_label_map": "tlc.Table.get_simple_value_map with the label_path of tlc.helpers.AnnotationHelper.get",
@@ -48,7 +56,7 @@ MOVED: dict[str, str] = {
     "labels.get_class_name_lookup": "tlc.Table.get_simple_value_map",
     "labels.get_display_value_map": "tlc.Table.get_simple_value_map with use_display_names=True",
     "labels.find_label_column": (
-        "tlc.helpers.AnnotationHelper.find_all with type=tlc.helpers.AnnotationType.CATEGORICAL_LABEL"
+        "tlc.helpers.AnnotationHelper.find_all(table, type=tlc.helpers.AnnotationType.CATEGORICAL_LABEL)"
     ),
     "modality.detect_modality_from_table": "tlc.helpers.AnnotationHelper.detect_task",
     "model_storage.save_model_to_run": "tlc.helpers.ModelHelper.save_to_run",
@@ -58,7 +66,9 @@ MOVED: dict[str, str] = {
     "aliases.validate_alias_location": "tlc.helpers.ProjectHelper.register_data_alias",
     "aliases.register_alias": "tlc.helpers.ProjectHelper.register_data_alias",
     "aliases.register_source_alias": "tlc.integration.compute.register_source_alias",
-    "aliases.register_run_alias": "tlc.integration.compute.register_run_alias",
+    "aliases.register_run_alias": (
+        "tlc.integration.compute.register_alias_from_card(ctx, read_folder, project_name=...)"
+    ),
     "aliases.get_table_aliases": "tlc.url.get_table_url_aliases",
     "aliases.apply_alias_overrides": "tlc.url.override_url_aliases",
     "aliases.restore_aliases": "tlc.url.override_url_aliases",
