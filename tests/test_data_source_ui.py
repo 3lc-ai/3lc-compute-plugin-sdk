@@ -193,6 +193,9 @@ def test_a_node_target_browses_the_node_disk_through_the_host(tmp_path: Path) ->
     assert not any("/browse?" in url for url in out["fetched"])  # the controller's disk is not the node's
     panel = out["panel"]
     assert "godfire (node)" in panel and "This computer" not in panel
+    # Several places: the switcher is the path bar's first crumb, with the node's place selected.
+    assert '<select data-ds-loc title="Browse in"><option value="0" selected>godfire (node)</option>' in panel
+    assert 'class="ds-up" title="Up" disabled>' in panel  # at the node's root, nothing is above
     assert "S3 · proj (project root) — readable from godfire" in panel
     assert "S3 · locked — godfire cannot read this" in panel
     assert 'data-ds-select="/home/g/a.yaml"' in panel and 'data-ds-nav="/home/g/data"' in panel
@@ -356,6 +359,11 @@ def test_a_click_anywhere_on_a_file_row_picks_it(tmp_path: Path) -> None:
         routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
     )
     listed, picked = out
+    # One path bar: the place first (plain text, there being one place), the path below it, the way up.
+    assert '<span data-ds-nav="/">This computer</span>' in listed["panel"]
+    assert '<span data-ds-nav="/Users">Users</span>' in listed["panel"]
+    assert 'class="ds-up" title="Up" data-ds-nav="/Users">' in listed["panel"]
+    assert "Location" not in listed["panel"] and ">..<" not in listed["panel"]
     assert '<div class="tlc-ds-entry" data-ds-select="/Users/me/a.yaml">' in listed["panel"]
     assert 'class="ds-select-btn">Select</button>' in listed["panel"]  # the cue stays, with no target of its own
     assert listed["open"] and picked["value"] == "/Users/me/a.yaml" and not picked["open"]
