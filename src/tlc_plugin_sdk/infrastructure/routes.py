@@ -571,7 +571,11 @@ def workspace_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     def _workspace_placement(region: str = "", vpc_id: str = "") -> dict[str, Any]:
         return answer(plugin, lambda: facet.workspace_placement(region=region, vpc_id=vpc_id).to_dict())
 
-    return [_list_workspaces, _workspace_placement]
+    @http_get("/infra/workspace-diagnostics/{provider_id:str}", sync_to_thread=True)
+    def _workspace_diagnostics(provider_id: str) -> dict[str, Any]:
+        return answer(plugin, lambda: facet.workspace_diagnostics(provider_id).to_dict())
+
+    return [_list_workspaces, _workspace_placement, _workspace_diagnostics]
 
 
 # ── Legacy owner-credentials facet ─────────────────────────────────────────────

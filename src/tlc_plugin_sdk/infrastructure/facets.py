@@ -237,6 +237,10 @@ class WorkspaceFacet(ABC):
     conformance kit asserts the two agree.
     """
 
+    def workspace_diagnostics(self, provider_id: str) -> NodeStateResponse:
+        """Collect optional detailed evidence under an explicit diagnostics grant, never a describe grant."""
+        raise NotSupported(_unsupported("detailed deployment diagnostics"))
+
     def workspace_placement(self, *, region: str = "", vpc_id: str = "") -> WorkspacePlacement:
         """Discover placement and shared costs in the current Connection (unsupported by default)."""
         raise NotSupported(_unsupported("deployment placement discovery"))

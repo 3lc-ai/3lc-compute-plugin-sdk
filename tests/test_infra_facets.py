@@ -61,7 +61,7 @@ def fake(tmp_path: Path) -> Any:
 
 def test_every_facet_mounts_its_routes_and_settings_mounts_two() -> None:
     paths = _paths(FakeProvider())
-    assert len(paths) == 8 + 12 + 3 + 2 + 2
+    assert len(paths) == 8 + 12 + 3 + 3 + 2
     assert ("GET", "/infra/connection/check") in paths
     assert ("GET", "/infra/storage/list") in paths
     assert ("DELETE", "/infra/storage/bundle/{bundle_id:str}") in paths
@@ -784,3 +784,18 @@ def test_login_and_role_routes_pass_the_owner_through() -> None:
             "owner": "me",
         }
         assert h.get("/infra/role-setup?owner=me").json() == {"external_id": "me"}
+
+
+def test_detailed_workspace_diagnostics_are_separate_and_opt_in(tmp_path: Path) -> None:
+    class Detailed(FakeProvider):
+        def workspace_diagnostics(self, provider_id: str) -> NodeStateResponse:
+            return NodeStateResponse(
+                state="running", diagnostics=[{"source": "collector", "status": "ok", "detail": provider_id}]
+            )
+
+    with PluginHarness(Detailed(), plugin_id="fake", config_root=tmp_path) as h:
+        response = h.get("/infra/workspace-diagnostics/vm-1")
+        assert response.status_code == 200
+        assert response.json()["diagnostics"][0]["detail"] == "vm-1"
+    with PluginHarness(FakeProvider(), plugin_id="fake", config_root=tmp_path) as h:
+        assert h.get("/infra/workspace-diagnostics/vm-1").status_code == 501
