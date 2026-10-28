@@ -37,6 +37,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     StorageItem,
     StorageListing,
     WorkspaceListing,
+    WorkspacePlacement,
 )
 
 if TYPE_CHECKING:
@@ -235,6 +236,18 @@ class WorkspaceFacet(ABC):
     ``"workspace"`` in ``capabilities().flavors`` — the host gates on ``flavors``; the
     conformance kit asserts the two agree.
     """
+
+    def workspace_retain_failed(self, provider_id: str) -> NodeStateResponse:
+        """Remove public routing from a failed deployment while preserving its machine for bounded retention."""
+        raise NotSupported(_unsupported("isolating retained failed deployments"))
+
+    def workspace_diagnostics(self, provider_id: str) -> NodeStateResponse:
+        """Collect optional detailed evidence under an explicit diagnostics grant, never a describe grant."""
+        raise NotSupported(_unsupported("detailed deployment diagnostics"))
+
+    def workspace_placement(self, *, region: str = "", vpc_id: str = "") -> WorkspacePlacement:
+        """Discover placement and shared costs in the current Connection (unsupported by default)."""
+        raise NotSupported(_unsupported("deployment placement discovery"))
 
     @abstractmethod
     def list_workspaces(self, *, owner: str = "") -> WorkspaceListing:

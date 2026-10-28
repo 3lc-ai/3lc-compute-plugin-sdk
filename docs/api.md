@@ -128,3 +128,31 @@ the service.
 .. automodule:: tlc_plugin_sdk.shared.url_utils
    :members:
 ```
+
+
+### Deployment placement and diagnostics
+
+`WorkspaceFacet.workspace_placement(region="", vpc_id="")` backs
+`GET /infra/workspace-placement`. It executes under the request Connection and returns
+`WorkspacePlacement`: region, network, zone and subnet choices; defaults; shared and deployment
+cost estimates; warnings; and blocking preflight findings. Choices use `id` and `name`, with
+subnets referring to `network_id` and `zone_id`. Unsupported providers return 501.
+
+`WorkspaceRequest` adds `subnet_id`, `availability_zone`, `launcher_service_id` and
+`detailed_diagnostics`. The host supplies the authenticated launcher identity; providers must
+not treat a user-supplied identity as authorization. Explicit placement must be validated and
+never silently replaced by another location. `CreateNodeResponse.placement` records actual
+`account_id`, `region`, `vpc_id`, `subnet_id`, and `availability_zone`. Its `ingress` object
+records shared ingress identity and provider recovery metadata; it must contain no credentials.
+
+`NodeStateResponse.bootstrap_stage` names the current startup stage. `diagnostics` contains
+bounded entries with `source`, `status`, and `detail`, including unavailable sources. Providers
+must redact secrets before returning diagnostics. A host can preserve these observations
+before cleanup; requesting detailed diagnostics never grants permission to run arbitrary commands.
+
+`WorkspaceFacet.workspace_retain_failed(provider_id)` backs the host-only
+`POST /infra/workspace-retain/{provider_id}` operation. Providers remove public service routing
+while preserving the machine and shared infrastructure; the host must authorize this separately
+and enforce its persisted expiry. Unsupported providers return 501 and the host cleans up rather
+than retaining an exposed failure. Detailed collection uses the separate host-only
+`GET /infra/workspace-diagnostics/{provider_id}` hook under a diagnostics grant.
