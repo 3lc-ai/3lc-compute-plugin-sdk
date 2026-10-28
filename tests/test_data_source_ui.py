@@ -70,6 +70,19 @@ _LOCAL_BROWSE_MIXED = {
         {"name": "a.yaml", "type": "file", "size": 10},
     ],
 }
+# What /browse?purpose=output answers: the folder's own writability and each folder's.
+_LOCAL_BROWSE_OUT = {
+    "path": "/Users/me",
+    "root": "/",
+    "parent": "/Users",
+    "writable": True,
+    "entries": [
+        {"name": "data", "type": "dir", "writable": True},
+        {"name": "locked", "type": "dir", "writable": False},
+        {"name": "report.csv", "type": "file", "size": 10},
+    ],
+}
+_NO_BUCKETS: dict[str, Any] = {"/api/infra/storage": {"storage": [], "providers": []}}
 
 
 def _run(tmp_path: Path, body: str, *, routes: dict[str, Any] | None = None, target: Any = "absent") -> Any:
@@ -114,6 +127,14 @@ def _run(tmp_path: Path, body: str, *, routes: dict[str, Any] | None = None, tar
         + " el.setAttribute(k, attrs[k]); }); el.parentNode = parent || null; return el; }\n"
         + "function clickOn(el) { var ev = new Event('click'); ev.target = el;"
         + " _els['f-ds-panel'].dispatchEvent(ev); return ev; }\n"
+        + "function dblOn(el) { var ev = new Event('dblclick'); ev.target = el;"
+        + " _els['f-ds-panel'].dispatchEvent(ev); return ev; }\n"
+        + "function keyOn(key) { var ev = new Event('keydown'); ev.key = key; ev.target = _els['f-ds-panel'];"
+        + " _els['f-ds-panel'].dispatchEvent(ev); return ev; }\n"
+        # Typing in the footer's name box: an input event whose target is the box.
+        + "function typeName(v) { var ev = new Event('input'); ev.target = rowWith({'data-ds-name': ''});"
+        + " ev.target.value = v; _els['f-ds-panel'].dispatchEvent(ev); return ev; }\n"
+        + "var primary = function () { return rowWith({'data-ds-primary': ''}); };\n"
         + "(async function () {\n"
         + body
         + "\n})().then(function (out) { process.stdout.write(JSON.stringify(out)); });\n"
@@ -198,7 +219,7 @@ def test_a_node_target_browses_the_node_disk_through_the_host(tmp_path: Path) ->
     assert 'class="ds-up" title="Up" disabled>' in panel  # at the node's root, nothing is above
     assert "S3 · proj (project root) — readable from godfire" in panel
     assert "S3 · locked — godfire cannot read this" in panel
-    assert 'data-ds-select="/home/g/a.yaml"' in panel and 'data-ds-nav="/home/g/data"' in panel
+    assert 'data-ds-row="0"' in panel and "data/" in panel and 'data-ds-row="1"' in panel and "a.yaml" in panel
     assert out["upload"] == "none"  # an upload lands on the compute host, which the node cannot read
 
 
@@ -341,81 +362,181 @@ def test_dir_mode_is_a_folder_picker(tmp_path: Path) -> None:
             "_els['f-ds-browse-btn'].click(); await tick(); return els();",
             routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE},
         )
-        assert "Select This Folder" in out["panel"], mode
+        assert "Select this folder" in out["panel"], mode
 
 
 @needs_node
-def test_a_click_anywhere_on_a_file_row_picks_it(tmp_path: Path) -> None:
+def test_a_file_picker_highlights_on_a_click_and_picks_on_select_or_a_double_click(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
-        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {accept: '*.yaml'});\n"
         "var fired = []; ['input', 'change'].forEach(function (t) {"
         " _els['f'].addEventListener(t, function () { fired.push(t); }); });\n"
         "_els['f-ds-browse-btn'].click(); await tick();\n"
         "var listed = els();\n"
-        # The click lands on the name inside the row, as a real one does.
-        "var ev = clickOn(rowWith({}, rowWith({'data-ds-select': '/Users/me/a.yaml'})));\n"
-        "var picked = els(); picked.fired = fired; picked.stopped = ev.stopped; return [listed, picked];",
-        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+        # The click lands on the name inside a.yaml's row, as a real one does.
+        "var ev = clickOn(rowWith({}, rowWith({'data-ds-row': '2'})));\n"
+        "var highlighted = els(); highlighted.stopped = ev.stopped;\n"
+        "clickOn(primary()); var picked = els(); picked.fired = fired.slice();\n"
+        # Reopened: a highlighted folder's button opens it; a double-click on the file picks it at once.
+        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '0'})); var dir = els();\n"
+        "clickOn(primary()); await tick(); var opened = els();\n"
+        "dblOn(rowWith({'data-ds-row': '2'})); var dbl = els();\n"
+        "return [listed, highlighted, picked, dir, opened, dbl];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
     )
-    listed, picked = out
+    listed, highlighted, picked, dir_, opened, dbl = out
+    panel = listed["panel"]
     # One path bar: the place first (plain text, there being one place), the path below it, the way up.
-    assert '<span data-ds-nav="/">This computer</span>' in listed["panel"]
-    assert '<span data-ds-nav="/Users">Users</span>' in listed["panel"]
-    assert 'class="ds-up" title="Up" data-ds-nav="/Users">' in listed["panel"]
-    assert "Location" not in listed["panel"] and ">..<" not in listed["panel"]
-    assert '<div class="tlc-ds-entry" data-ds-select="/Users/me/a.yaml">' in listed["panel"]
-    assert 'class="ds-select-btn">Select</button>' in listed["panel"]  # the cue stays, with no target of its own
-    assert listed["open"] and picked["value"] == "/Users/me/a.yaml" and not picked["open"]
-    assert picked["fired"] == ["input", "change"] and picked["stopped"]
+    assert '<span data-ds-nav="/">This computer</span>' in panel
+    assert '<span data-ds-nav="/Users">Users</span>' in panel
+    assert 'class="ds-up" title="Up" data-ds-nav="/Users">' in panel
+    assert "Location" not in panel and ">..<" not in panel
+    # Rows, and a footer with the filter, Cancel and the one action, disabled until a file is highlighted.
+    assert '<div class="tlc-ds-entry" data-ds-row="2">' in panel and "a.yaml" in panel
+    assert '<span class="ds-note">Showing *.yaml</span>' in panel
+    assert "data-ds-cancel>Cancel</button>" in panel
+    assert 'data-ds-primary disabled title="Choose a file to enable Select.">Select</button>' in panel
+    assert '<div class="tlc-ds-entry is-selected" data-ds-row="2">' in highlighted["panel"]
+    assert "data-ds-primary>Select</button>" in highlighted["panel"] and highlighted["open"] and highlighted["stopped"]
+    assert picked["value"] == "/Users/me/a.yaml" and not picked["open"] and picked["fired"] == ["input", "change"]
+    assert "data-ds-primary>Open</button>" in dir_["panel"]
+    assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
+    assert dbl["value"] == "/Users/me/a.yaml" and not dbl["open"]
 
 
 @needs_node
-def test_a_folder_picker_picks_a_folder_from_its_select_and_opens_it_from_the_rest_of_the_row(tmp_path: Path) -> None:
+def test_a_folder_picker_selects_the_folder_shown_or_the_highlighted_one(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder'});\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var listed = els();\n"
+        "clickOn(primary()); var here = els();\n"
         "_els['f-ds-browse-btn'].click(); await tick();\n"
-        "var listed = els();\n"
-        "var navEv = clickOn(rowWith({'data-ds-nav': '/Users/me/data'}));\n"
-        "var during = els().panel; await tick();\n"
-        "var opened = els(); opened.stopped = navEv.stopped; opened.during = during;\n"
-        "var pickEv = clickOn(rowWith({'data-ds-select-folder': '/Users/me/data'},"
-        " rowWith({'data-ds-nav': '/Users/me/data'})));\n"
-        "var picked = els(); picked.stopped = pickEv.stopped; picked.idle = clickOn(rowWith({})).stopped;\n"
-        "return [listed, opened, picked];",
-        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+        "clickOn(rowWith({'data-ds-row': '0'})); var hl = els(); clickOn(primary()); var sub = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick();\n"
+        "var navEv = dblOn(rowWith({'data-ds-row': '0'})); var during = els().panel; await tick();\n"
+        "var opened = els(); opened.during = during; opened.stopped = navEv.stopped;\n"
+        "opened.idle = clickOn(rowWith({})).stopped;\n"
+        "return [listed, here, hl, sub, opened];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
     )
-    listed, opened, picked = out
+    listed, here, hl, sub, opened = out
     panel = listed["panel"]
-    assert '<div class="tlc-ds-entry" data-ds-nav="/Users/me/data">' in panel
-    assert 'data-ds-select-folder="/Users/me/data">Select</button>' in panel
-    assert "Select This Folder" in panel  # the breadcrumb's, for the folder you are in
-    # A file is no choice here: dimmed, with neither a target nor a button.
+    assert "data-ds-primary>Select this folder</button>" in panel
+    assert '<div class="tlc-ds-entry" data-ds-row="0">' in panel  # data/
+    # A file is no choice here: dimmed, and not a row one can highlight.
     assert '<div class="tlc-ds-entry tlc-ds-entry-disabled" title="Choose a folder">' in panel
-    assert "data-ds-select=" not in panel
+    assert 'data-ds-row="2"' not in panel
+    assert here["value"] == "/Users/me" and not here["open"]
+    assert '<div class="tlc-ds-entry is-selected" data-ds-row="0">' in hl["panel"]
+    assert "data-ds-primary>Select</button>" in hl["panel"]
+    assert sub["value"] == "/Users/me/data" and not sub["open"]
+    # A double-click opens the folder. The rows stay while its listing loads: no flash through "Loading…"; and
+    # opening replaces the panel's contents, so the click ends in the panel, or the document's outside-click
+    # check would take the detached target for outside and close the panel.
+    assert 'data-ds-row="0"' in opened["during"] and "Loading" not in opened["during"]
     assert opened["open"] and any("/browse?path=%2FUsers%2Fme%2Fdata" in url for url in opened["fetched"])
-    # The rows stay while the folder's listing loads: no flash through "Loading…" on a quick listing.
-    assert 'data-ds-nav="/Users/me/data"' in opened["during"] and "Loading" not in opened["during"]
-    # Opening replaces the listing, so the clicked row is gone by the time the click would reach the document's
-    # outside-click check: the panel ends the click itself, or that check closes it on every folder click.
-    assert opened["stopped"]
-    assert picked["value"] == "/Users/me/data" and not picked["open"] and picked["stopped"]
-    assert picked["idle"] is False  # a click on nothing in particular goes on to the page
+    assert opened["stopped"] and opened["idle"] is False
 
 
 @needs_node
-def test_an_output_folder_picker_disables_select_on_a_folder_it_cannot_write(tmp_path: Path) -> None:
+def test_the_keyboard_moves_the_highlight_picks_goes_up_and_closes(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
-        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder', purpose: 'output'});\n"
-        "_els['f-ds-browse-btn'].click(); await tick(); return els();",
-        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p');\n"
+        "_els['f-ds-browse-btn'].click(); await tick();\n"
+        "keyOn('ArrowDown'); var first = els();\n"
+        "keyOn('ArrowDown'); keyOn('ArrowDown'); keyOn('ArrowDown'); var last = els();\n"
+        "keyOn('Enter'); var picked = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); keyOn('Backspace'); await tick(); var up = els();\n"
+        "keyOn('Escape'); var closed = els();\n"
+        "return [first, last, picked, up, closed];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
     )
-    panel = out["panel"]
-    assert 'data-ds-select-folder="/Users/me/data">Select</button>' in panel
-    assert 'data-ds-select-folder="/Users/me/locked" disabled title="Not writable' in panel
-    assert 'data-ds-nav="/Users/me/locked"' in panel  # still opens, to find a writable folder inside
+    first, last, picked, up, closed = out
+    assert 'is-selected" data-ds-row="0">' in first["panel"]
+    assert 'is-selected" data-ds-row="2">' in last["panel"]  # stops at the last row
+    assert picked["value"] == "/Users/me/a.yaml" and not picked["open"]
+    assert up["open"] and any("/browse?path=%2FUsers&" in url for url in up["fetched"])
+    assert not closed["open"]
+
+
+@needs_node
+def test_an_output_file_picker_saves_under_a_name(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "window.SUG = 'TestCoco-train.csv';\n"
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'file', purpose: 'output', accept: '*.csv',"
+        " suggestedName: function () { return window.SUG; }});\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var listed = els();\n"
+        "clickOn(primary()); var saved = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); typeName('summary'); clickOn(primary()); var typed = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var kept = els();\n"
+        "clickOn(rowWith({'data-ds-row': '2'})); var replacing = els();\n"
+        "typeName(''); clickOn(primary()); var still = els();\n"
+        "return [listed, saved, typed, kept, replacing, still];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_OUT},
+    )
+    listed, saved, typed, kept, replacing, still = out
+    assert any("purpose=output" in url for url in listed["fetched"])
+    assert '<label class="ds-name-label">File name</label>' in listed["panel"]
+    assert 'data-ds-name autocomplete="off" spellcheck="false" value="TestCoco-train.csv">' in listed["panel"]
+    assert "data-ds-primary>Save</button>" in listed["panel"]
+    assert saved["value"] == "/Users/me/TestCoco-train.csv" and not saved["open"]
+    assert typed["value"] == "/Users/me/summary.csv"  # the extension accept names, when the name has none
+    assert 'value="summary"' in kept["panel"]  # a typed name survives a reopen; a suggested one would follow it
+    assert 'value="report.csv"' in replacing["panel"]
+    assert "data-ds-note>Replaces report.csv</span>" in replacing["panel"]
+    assert still["open"] and still["value"] == "/Users/me/summary.csv"  # an empty name saves nothing
+
+
+@needs_node
+def test_an_output_folder_picker_names_a_new_folder_or_adds_to_one(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'folder', purpose: 'output',"
+        " suggestedName: 'TestCoco-yolo'});\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var listed = els();\n"
+        "clickOn(primary()); var fresh = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '0'})); var into = els();\n"
+        "clickOn(primary()); var added = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(rowWith({'data-ds-row': '1'})); var locked = els();\n"
+        "clickOn(primary()); var refused = els();\n"
+        "typeName(''); clickOn(primary()); var here = els();\n"
+        "return [listed, fresh, into, added, locked, refused, here];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_OUT},
+    )
+    listed, fresh, into, added, locked, refused, here = out
+    panel = listed["panel"]
+    assert '<label class="ds-name-label">New folder</label>' in panel and 'value="TestCoco-yolo"' in panel
+    assert "data-ds-note>A new folder in me</span>" in panel and "data-ds-primary>Select</button>" in panel
+    assert 'data-ds-row="2"' not in panel  # report.csv is no choice in a folder picker
+    assert fresh["value"] == "/Users/me/TestCoco-yolo" and not fresh["open"]
+    assert 'value="data"' in into["panel"] and "data-ds-note>Adds to data</span>" in into["panel"]
+    assert added["value"] == "/Users/me/data"
+    assert 'is-selected" data-ds-row="1"' in locked["panel"]
+    assert 'data-ds-primary disabled title="Not writable' in locked["panel"]
+    assert refused["open"] and refused["value"] == "/Users/me/data"
+    assert here["value"] == "/Users/me" and not here["open"]  # an empty box: the folder shown
+
+
+@needs_node
+def test_mode_and_accept_are_read_on_every_open(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "window.ACCEPT = '*.csv'; window.MODE = 'file';\n"
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: function () { return window.MODE; },"
+        " accept: function () { return window.ACCEPT; }});\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var csv = els();\n"
+        "_els['f-ds-browse-btn'].click(); window.ACCEPT = '*.xlsx'; window.MODE = 'folder';\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var xlsx = els();\n"
+        "return [csv, xlsx];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    csv, xlsx = out
+    assert any("glob=*.csv" in url for url in csv["fetched"]) and "Select this folder" not in csv["panel"]
+    assert any("glob=*.xlsx" in url for url in xlsx["fetched"]) and "Select this folder" in xlsx["panel"]
 
 
 @needs_node
@@ -430,7 +551,7 @@ def test_a_double_click_in_the_empty_field_opens_the_panel(tmp_path: Path) -> No
         "f.value = '/Users/me/a.yaml'; f.dispatchEvent(new Event('dblclick')); await tick(); var filled = els();\n"
         "f.value = ''; f.disabled = true; f.dispatchEvent(new Event('dblclick')); await tick();\n"
         "return [opened, again, closed, filled, els()];",
-        routes={"/api/infra/storage": {"storage": [], "providers": []}, "/browse": _LOCAL_BROWSE_MIXED},
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
     )
     opened, again, closed, filled, disabled = out
     assert opened["open"] and len(opened["fetched"]) == 2  # the storage list, then the folder

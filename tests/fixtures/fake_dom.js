@@ -57,9 +57,11 @@ FakeEl.prototype.contains = function () { return true; };
 FakeEl.prototype.appendChild = function (el) { this.options.push(el); return el; };
 FakeEl.prototype.setAttribute = function (k, v) { this._attrs[k] = String(v); };
 FakeEl.prototype.getAttribute = function (k) { return k in this._attrs ? this._attrs[k] : null; };
+FakeEl.prototype.removeAttribute = function (k) { delete this._attrs[k]; };
 
 function Event(type) { this.type = type; this.stopped = false; }
 Event.prototype.stopPropagation = function () { this.stopped = true; };
+Event.prototype.preventDefault = function () {};
 
 var _els = {};
 function addEl(id) { _els[id] = new FakeEl(id); return _els[id]; }
