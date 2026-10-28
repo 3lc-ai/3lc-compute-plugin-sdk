@@ -1670,15 +1670,16 @@ A Hub before 1.2 doesn't define the element, so a plugin that uses it sets `min_
 
 **Path fields.** For a file or folder on the machine the run reads from, or in a bucket, render the SDK's data-source field: `_tlcDataSourceHtml(id, {placeholder, accept})` for the markup and `_tlcBindDataSource(id, computeUrl, pluginId, {mode, purpose, accept, suggestedName})` once it is in the DOM (`shared.data_source_ui`; its docstring has the full usage). Browse…, or a double-click in the empty field, opens a file chooser under the field: a Location line naming the place being browsed (a folder of the run target's machine, or a bucket; a dropdown when there are several), a path bar that follows the browsing, and the rows. A click opens a folder or picks a file (an output picker puts the file's name in its box instead); the arrow keys highlight a row, Enter opens a highlighted folder or picks a highlighted file, Backspace goes up and Escape closes. A file picker has no buttons: the click is the pick. A folder picker (`mode: 'folder'`) dims files and has a footer with Cancel and "Select this folder", which picks the folder shown. The picked path lands in the field and fires `input` and `change`.
 
-For a field that names where a job will *write*, pass `purpose: 'output'`: the footer gains a name box, prefilled from `suggestedName`, and the pick is `<folder shown>/<name>`. A file output's Save adds the first extension in `accept` when the name has none, and a click on a file puts its name in the box ("Replaces <name>"). A folder output's box names a new folder under the one shown, or an existing one ("Adds to <name>"); empty, it picks the folder shown. The job creates the folder. `mode`, `accept` and `suggestedName` may be functions, read every time the chooser opens, for a form whose choice changes them, such as an export format:
+For a field that names where a job will *write*, pass `purpose: 'output'`: the footer gains a name box, prefilled from `suggestedName`, and the pick is `<folder shown>/<name>`. A file output's Save adds the first extension in `accept` when the name has none, and a click on a file puts its name in the box ("Replaces <name>"). A folder output's box names a new folder under the one shown, or an existing one ("Adds to <name>"); empty, it picks the folder shown. The job creates the folder. `mode`, `accept` and `suggestedName` may be functions, read every time the chooser opens, for a form whose choice changes them, such as an export format; when that choice changes while the chooser may be open, call `refresh()` on the handle the bind returns:
 
 ```js
-_tlcBindDataSource('export-output', computeUrl, 'exporter', {
+const chooser = _tlcBindDataSource('export-output', computeUrl, 'exporter', {
   purpose: 'output',
   mode: () => format() === 'yolo' ? 'folder' : 'file',
   accept: () => '*' + extensionOf(format()),
   suggestedName: () => suggestedNameFor(table(), format()),
 });
+onFormatChange(() => chooser.refresh());
 ```
 
 ### Presets

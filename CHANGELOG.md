@@ -73,7 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension `accept` names when the name has none, and a click on a file puts its name in the box
   ("Replaces <name>"); a folder output's box names a new folder under the one shown, or an existing one
   ("Adds to <name>"), and empty picks the folder shown. `mode`, `accept` and `suggestedName` may be
-  functions, read on every open. Declared in the contract; guide → Forms → "Path fields".
+  functions, read on every open, and `_tlcBindDataSource` returns a handle whose `refresh()` reads them
+  again while the chooser is open. Declared in the contract; guide → Forms → "Path fields".
 - The contract documents that `PLUGIN_API.planRun` always resolves to a plan on a Hub 1.2 host and
   rejects when the run cannot be planned; the browser never sends `_alias_overrides`.
 - The supported Python range is `>=3.10,<3.15`, matching the host: the core has no Python 3.15 wheels yet,

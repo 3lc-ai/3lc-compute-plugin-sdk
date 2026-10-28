@@ -928,7 +928,8 @@ declare global {
    * with `config.suggestedName` and whose pick is `<folder shown>/<name>` (a file output adds the
    * first extension `accept` names when the name has none; a folder output with an empty box picks
    * the folder shown). `mode`, `accept` and `suggestedName` may be functions, read on every open,
-   * for a form whose choice changes them. The places follow `PLUGIN_API.getRunTarget()`.
+   * for a form whose choice changes them; call `refresh()` on the returned handle when that choice
+   * changes while the chooser may be open. The places follow `PLUGIN_API.getRunTarget()`.
    */
   function _tlcBindDataSource(
     idPrefix: string,
@@ -940,7 +941,7 @@ declare global {
       purpose?: 'input' | 'output';
       suggestedName?: string | (() => string);
     },
-  ): void;
+  ): { refresh(): void };
   /** True when the compute URL is a loopback address: the compute host is this browser's machine. */
   function _tlcComputeIsHere(computeUrl: string): boolean;
   /** The field's markup: the text input (id `idPrefix`), Browse…, and the panel. Bind it once it is in the DOM. */

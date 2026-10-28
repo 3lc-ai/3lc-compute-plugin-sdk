@@ -589,17 +589,22 @@ def test_mode_and_accept_are_read_on_every_open(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         "window.ACCEPT = '*.csv'; window.MODE = 'file';\n"
-        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: function () { return window.MODE; },"
-        " accept: function () { return window.ACCEPT; }});\n"
+        "var chooser = _tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p',"
+        " {mode: function () { return window.MODE; }, accept: function () { return window.ACCEPT; }});\n"
         "_els['f-ds-browse-btn'].click(); await tick(); var csv = els();\n"
         "_els['f-ds-browse-btn'].click(); window.ACCEPT = '*.xlsx'; window.MODE = 'folder';\n"
         "_els['f-ds-browse-btn'].click(); await tick(); var xlsx = els();\n"
-        "return [csv, xlsx];",
+        # The choice changes while the chooser is open: refresh() lists again under the new rules, rows kept.
+        "window.ACCEPT = '*.json'; window.MODE = 'file'; chooser.refresh(); var during = els().panel; await tick();\n"
+        "var json = els(); json.during = during;\n"
+        "return [csv, xlsx, json];",
         routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
     )
-    csv, xlsx = out
+    csv, xlsx, json_ = out
     assert any("glob=*.csv" in url for url in csv["fetched"]) and "Select this folder" not in csv["panel"]
     assert any("glob=*.xlsx" in url for url in xlsx["fetched"]) and "Select this folder" in xlsx["panel"]
+    assert "glob=*.json" in json_["fetched"][-1] and "Select this folder" not in json_["panel"]
+    assert 'data-ds-row="0"' in json_["during"] and "Loading" not in json_["during"]
 
 
 @needs_node
