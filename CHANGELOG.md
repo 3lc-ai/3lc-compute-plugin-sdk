@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The author guide's `PluginJobs` example keeps the job's id from `run()`'s start answer and cancels
+  with it, and says why: the first `job_update` a page sees can come minutes after the start, because
+  `queued` is lost while the socket connects. A Cancel that waited for an update had nothing to cancel
+  (Bug 19085, in the Hugging Face and Example plugins). `run()` and `cancel()` say the same in the
+  contract.
 - The data-source picker (`shared.data_source_ui`) is a file chooser. A Location line names the place
   being browsed (a machine's folder, a bucket), as the Hub's dropdown when there are several; under it a
   path bar follows the browsing, from the place's root, with an arrow at its end that goes up (the `..`
