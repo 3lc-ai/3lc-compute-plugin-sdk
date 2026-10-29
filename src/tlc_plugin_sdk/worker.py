@@ -141,6 +141,7 @@ class _Worker:
         self.plugin_id = plugin_id
         self.state_root = state_root
         self._jobs: dict[str, _Job] = {}
+        self._completed: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
     def start_job(self, job_id: str, params: dict[str, Any]) -> _Job:
@@ -185,6 +186,9 @@ class _Worker:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None and not job.is_alive():
+                self._completed[job_id] = job.snapshot()
+                while len(self._completed) > 64:
+                    self._completed.pop(next(iter(self._completed)))
                 self._jobs.pop(job_id, None)
 
     def cancel_job(self, job_id: str) -> bool:
@@ -196,8 +200,39 @@ class _Worker:
         _escalate_cancel(job, self)
         return True
 
+    def job_status(self, job_id: str) -> dict[str, Any] | None:
+        """Read a live job or its saved outcome without starting or cancelling work."""
+        if not _JOB_ID_RE.fullmatch(job_id):
+            return None
+        with self._lock:
+            job = self._jobs.get(job_id)
+            completed = self._completed.get(job_id)
+        if job is not None:
+            return job.snapshot()
+        if completed is not None:
+            return completed
+        path = self.state_root / job_id / "worker-status.json"
+        try:
+            saved: dict[str, Any] = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(saved, dict) or saved.get("job_id") != job_id:
+            return None
+        if saved.get("state") == "running":
+            # A different worker process cannot resume a training thread. In particular,
+            # an OOM must never turn into a permanently running record after respawn.
+            saved["state"] = "failed"
+            saved["events"] = [
+                {
+                    "event": "error",
+                    "job_id": job_id,
+                    "message": "The worker exited before saving this job's outcome (possible crash or out of memory).",
+                }
+            ]
+        return saved
+
     def cancel_all(self) -> list[str]:
-        """Cancel every job still running here (the host asks after a restart it cannot re-attach to)."""
+        """Cancel every job still running here (for an explicit stop or node teardown)."""
         jobs = self.live_jobs()
         for job in jobs:
             job.ctx.request_cancel()
@@ -276,6 +311,10 @@ class _Job:
         self._escalate_lock = threading.Lock()
         self._escalated = False
         self._abandoned = threading.Event()
+        self._snapshot_lock = threading.Lock()
+        self._latest: dict[str, dict[str, Any]] = {}
+        self._revision = 0
+        self._status_path = state_dir / "worker-status.json"
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self._cancel = threading.Event()
         # Host-owned keys: popped here so a plugin's ``ctx.params`` never carries them (a plugin
@@ -315,7 +354,48 @@ class _Job:
         self._thread = threading.Thread(target=self._run, name=f"job-{job_id}", daemon=True)
 
     def start(self) -> None:
+        try:
+            self._save_snapshot()
+        except OSError:
+            # Without the running marker only crash detection after a restart is lost; the job must still run.
+            logger.exception("Could not save the initial status of job %s", self.job_id)
         self._thread.start()
+
+    def snapshot(self) -> dict[str, Any]:
+        """Bounded current progress and final outcome; never includes input credentials."""
+        with self._snapshot_lock:
+            events = list(self._latest.values())
+            terminal = next((e for e in events if e.get("event") in _TERMINAL), None)
+            state = (
+                "running"
+                if terminal is None
+                else ("failed" if terminal["event"] == "error" else terminal.get("status", "completed"))
+            )
+            snapshot = {"job_id": self.job_id, "state": state, "revision": self._revision, "events": events}
+        # Mask before serializing so quoted/backslash-containing secrets are covered too.
+        tokens = list(self.ctx.credentials.values())
+        if not tokens and self.ctx.credential is not None:
+            tokens.append(self.ctx.credential)
+        secrets = sorted((token.secret for token in tokens if token.secret), key=len, reverse=True)
+
+        def mask(value: Any) -> Any:
+            if isinstance(value, str):
+                for secret in secrets:
+                    value = value.replace(secret, "***")
+            elif isinstance(value, dict):
+                return {mask(k): mask(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [mask(v) for v in value]
+            return value
+
+        return cast("dict[str, Any]", mask(snapshot))
+
+    def _save_snapshot(self) -> None:
+        payload = json.dumps(self.snapshot())
+        temporary = self._status_path.with_suffix(".tmp")
+        temporary.write_text(payload)
+        temporary.chmod(0o600)
+        temporary.replace(self._status_path)
 
     def is_alive(self) -> bool:
         # An Event rather than Thread.is_alive(): the registry callback runs on the job's own
@@ -349,6 +429,22 @@ class _Job:
             pass
 
     def _put_event(self, event: dict[str, Any]) -> None:
+        kind = event.get("event")
+        if kind in {"progress", "log", "metric", "result", "done", "error"}:
+            key = str(kind) + (":" + str(event.get("label", "")) if kind == "metric" else "")
+            with self._snapshot_lock:
+                # Keep the last value of each metric, not an unbounded stream of batches.
+                if kind != "metric" or key in self._latest or len(self._latest) < 250:
+                    self._latest.pop(key, None)
+                    self._latest[key] = dict(event)
+                self._revision += 1
+            if kind in _TERMINAL:
+                try:
+                    self._save_snapshot()
+                except (OSError, ValueError, TypeError):
+                    # A full disk must not hide the terminal event or leave /busy stuck.
+                    # The worker also retains a bounded set of completed snapshots in memory.
+                    logger.exception("Could not save the outcome of job %s", self.job_id)
         if self._abandoned.is_set():
             return
         self.events.put(event)
@@ -473,6 +569,13 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
 
         return Stream(stream(), media_type="application/x-ndjson")
 
+    @get("/jobs/{job_id:str}/status", sync_to_thread=True)
+    def job_status(job_id: str) -> dict[str, Any]:
+        status = worker.job_status(job_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail="This worker has no record of that job.")
+        return status
+
     @post("/jobs/{job_id:str}/cancel")
     async def cancel_job(job_id: str) -> Response[dict[str, Any]]:
         ok = worker.cancel_job(job_id)
@@ -498,7 +601,7 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         released = await anyio.to_thread.run_sync(release_gpu_memory)
         return Response(content={"released": released, "plugin_id": worker.plugin_id}, status_code=200)
 
-    return [run_job, cancel_job, cancel_all, busy, reclaim]
+    return [run_job, job_status, cancel_job, cancel_all, busy, reclaim]
 
 
 def _initialise_runtime(plugin: object, plugin_id: str) -> None:
