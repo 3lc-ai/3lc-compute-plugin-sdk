@@ -156,3 +156,20 @@ while preserving the machine and shared infrastructure; the host must authorize 
 and enforce its persisted expiry. Unsupported providers return 501 and the host cleans up rather
 than retaining an exposed failure. Detailed collection uses the separate host-only
 `GET /infra/workspace-diagnostics/{provider_id}` hook under a diagnostics grant.
+
+## Recovering a worker job after disconnect
+
+SDK 0.6.1+ workers advertise `job_status_recovery` in `/health.capabilities`. The authenticated,
+reserved `GET /jobs/{job_id}/status` route returns `{job_id, state, revision, events}`. `events`
+contains current generic progress, latest metrics, result and terminal `done` or `error`.
+It is a bounded snapshot, not an event history: custom events and intermediate logs are not replayed.
+A controller may poll this route after losing the run stream, using the original job ID. It must
+not POST the job again to reconnect. Unknown IDs return 404; normal worker-token guards apply.
+
+The worker persists an initial running marker and a terminal snapshot under the job's state
+folder (`worker-status.json`). If a new worker process finds a running marker without the live
+job, it reports that the worker exited before saving the outcome (for example, a crash or OOM).
+Granted token values are masked in status responses and saved snapshots. Recent completions
+are also retained in memory so a disk-write error does not hide a terminal event. Removing the
+job's state folder removes its saved outcome; these small records follow the state folder's
+retention. Recoverability therefore lasts only while the worker's state storage is retained.

@@ -56,7 +56,7 @@ def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
             "ok": True,
             "plugin": getattr(plugin, "id", "?"),
             "sdk_version": SDK_CONTRACT_VERSION,
-            "capabilities": ["job_credentials_by_service"],
+            "capabilities": ["job_credentials_by_service", "job_status_recovery"],
         }
 
     # def + sync_to_thread: get_ui_fragment()/compute() are synchronous and may do

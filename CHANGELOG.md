@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Worker `job_status_recovery` capability and authenticated `GET /jobs/{id}/status` for
+  recovering generic progress and outcomes after a controller disconnect. A finished outcome
+  is saved without granted credentials; a worker restarted mid-job reports interruption rather
+  than claiming the job is still running. Disconnecting the event stream does not cancel work.
+
 - Deployment placement discovery, actual placement and ingress metadata, launcher identity,
   optional detailed diagnostics, and structured bootstrap stages in the infrastructure contract.
 
