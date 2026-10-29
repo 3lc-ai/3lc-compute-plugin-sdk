@@ -127,3 +127,22 @@ def test_full_disk_does_not_hide_completion_or_keep_worker_busy(tmp_path: Path, 
     assert worker.active_jobs() == 0
     status = worker.job_status("full-disk")
     assert status is not None and status["state"] == "completed"
+
+
+def test_unwritable_state_folder_does_not_stop_the_job_from_starting(tmp_path: Path, monkeypatch: Any) -> None:
+    plugin = Training()
+    worker = _Worker(plugin, "train", tmp_path)
+
+    def fail_save(self: Any) -> None:
+        msg = "read-only file system"
+        raise OSError(msg)
+
+    monkeypatch.setattr("tlc_plugin_sdk.worker._Job._save_snapshot", fail_save)
+    job = worker.start_job("readonly", {})
+    try:
+        assert plugin.started.wait(2)
+    finally:
+        plugin.finish.set()
+    assert job.wait(3)
+    status = worker.job_status("readonly")
+    assert status is not None and status["state"] == "completed"

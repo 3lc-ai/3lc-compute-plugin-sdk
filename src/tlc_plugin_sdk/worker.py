@@ -354,7 +354,11 @@ class _Job:
         self._thread = threading.Thread(target=self._run, name=f"job-{job_id}", daemon=True)
 
     def start(self) -> None:
-        self._save_snapshot()
+        try:
+            self._save_snapshot()
+        except OSError:
+            # Without the running marker only crash detection after a restart is lost; the job must still run.
+            logger.exception("Could not save the initial status of job %s", self.job_id)
         self._thread.start()
 
     def snapshot(self) -> dict[str, Any]:
