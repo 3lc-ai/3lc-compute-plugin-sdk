@@ -24,5 +24,7 @@ pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
 :caption: Contents
 
 plugin-guide
+browser-runtime
+agent-guide
 api
 ```

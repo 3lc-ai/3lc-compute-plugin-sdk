@@ -72,6 +72,7 @@ JOB_TRACKER_JS = r"""
   }
 
   function cancel(jobId){
+    if (API.jobs && API.jobs.cancel) { return API.jobs.cancel(jobId); }
     return API.authFetch(_computeUrl() + '/api/plugins/jobs/' + jobId + '/cancel', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
     }).then(function(r){ return r.json(); });

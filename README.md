@@ -101,3 +101,8 @@ override in a development checkout does not provide that SDK to users installing
 
 Public releases still use a `vX.Y.Z` tag whose version matches `pyproject.toml`. Snapshots
 are never published to PyPI.
+
+## Isolated browser runtime
+
+For SDK 0.6.2 framed hosts, follow the [browser runtime guide](docs/browser-runtime.md) and [agent instructions](docs/agent-guide.md).
+The framed runtime supersedes legacy inline/global browser examples in this document.

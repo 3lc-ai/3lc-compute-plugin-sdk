@@ -189,3 +189,8 @@ section is the condensed working order.
 - For `run_job(ctx)`, drive it with a fake `JobContext` (a recording sink + a
   `threading.Event` for cancel) and assert the emitted `progress`/`metric`/`result`
   events — no GPU or queue needed.
+
+## Isolated browser runtime
+
+For SDK 0.6.2 framed hosts, follow the [browser runtime guide](docs/browser-runtime.md) and [agent instructions](docs/agent-guide.md).
+The framed runtime supersedes legacy inline/global browser examples in this document.

@@ -362,6 +362,30 @@ export interface PluginResultOptions {
  * for nothing else. Many plugins alias it: `var API = window.PLUGIN_API`.
  */
 export interface PluginApi {
+  /** Frame protocol (independent of SDK package version). Available in framed hosts. */
+  protocol?: number;
+  frameVersion?: string;
+  has?(capability: string): boolean;
+  lifecycle: { onDispose(callback: () => void): () => void };
+  compute: { request(url: string, options?: PluginFetchOptions): Promise<Response> };
+  jobs: Omit<PluginJobsApi, "cancel"> & { cancel(jobId: string): Promise<unknown> };
+  pickers: { table(): Promise<string | null> };
+  credentials: { choose(service: string): Promise<string | null>; remembered(service: string): string | null };
+  nodes: {
+    create(providerId: string, request?: Record<string, unknown>): Promise<object | false>;
+    mount(element: HTMLElement, options?: { openNodes?: boolean; openHistory?: boolean }): { refresh(): void; destroy(): void };
+  };
+  run: { plan(body: Record<string, unknown>): Promise<PluginRunPlan>; checkTable(url: string): Promise<{ ok: boolean; notes: string[] }> };
+  nav: {
+    go(path: string): Promise<unknown>;
+    open(url: string): Promise<unknown>;
+    onChange(callback: (state: unknown) => void): () => void;
+    state?(state: { search?: string; hash?: string }, options?: { push?: boolean }): Promise<unknown>;
+  };
+  format: { date(value: string | number, mode?: string): string };
+  ui: { toast(message: string, kind?: string): void };
+  identity?: { name(): Promise<string> };
+
   /** Launch context (resource type/urls + project). */
   context: PluginContext;
 
@@ -462,10 +486,10 @@ export interface PluginApi {
   dashboardUrl(params: { table?: string; project?: string; run?: string }): string;
 
   /**
-   * Authenticated `fetch`. Injects `Authorization` (from `TlcAuth`) and a default
+   * Host-mediated `fetch`; credentials stay in the Hub. Adds a default
    * `Accept: application/json`; sets `Content-Type: application/json` when the body
-   * is a string. Aborts after `options.timeout` ms (default 10000) unless the
-   * caller supplies a `signal`. Rejects non-ok responses with the parsed
+   * is a string. Aborts after `options.timeout` ms (default 10000) and supports
+   * caller abort through `signal`. Rejects non-ok responses with the parsed
    * detail/message. The most-used bridge member.
    */
   authFetch(url: string, options?: PluginFetchOptions): Promise<Response>;
@@ -494,7 +518,7 @@ export interface PluginApi {
    * changes — re-validate any selected data via `checkDataForRunTarget`.
    * Listeners are cleared when the fragment unmounts.
    */
-  onRunTargetChange?(callback: () => void): void;
+  onRunTargetChange?(callback: () => void): () => void;
 
   /**
    * Selection-time data verdict for the current run target: can this table work
@@ -527,12 +551,6 @@ export interface PluginApi {
    * browser never sends `_alias_overrides`. Absent on older frontends.
    */
   planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;
-
-  /** Reference to `TlcApi.computeService` (currently only `getHealth()`). */
-  compute: TlcComputeService;
-
-  /** Reference to `TlcApi.objectService`. Plugins usually reach data via `authFetch`. */
-  objects: TlcObjectService;
 
   /** Reference to the global `TlcData` helper (`null` if `TlcData` is undefined at mount). */
   data: TlcData | null;
