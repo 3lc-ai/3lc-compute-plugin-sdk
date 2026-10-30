@@ -5,6 +5,15 @@ All notable changes to `3lc-compute-plugin-sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - Unreleased
+
+- Package the canonical isolated browser runtime and Python asset loader with typed
+  namespaced helpers, automatic job tracking and local lifecycle cleanup.
+- Forward request aborts, dispose sockets/listeners/observers without cancelling jobs,
+  and route legacy job cancellation through host confirmation in framed pages.
+- Document frame ownership, capabilities, errors, long-session recovery, migration,
+  release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.
+
 ## [Unreleased]
 
 ### Added
