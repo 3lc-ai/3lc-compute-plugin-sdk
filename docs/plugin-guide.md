@@ -54,7 +54,7 @@ is no `get_active_jobs()` / `cancel_job()` on the contract — see
 1. Frontend calls `GET /api/plugins/` → gets manifests for all plugins
 2. Sidebar and action buttons are rendered from manifests (no hardcoded plugin knowledge)
 3. When user opens a plugin, frontend calls `GET /api/plugins/{id}/ui` → gets HTML fragment
-4. Fragment is injected into the page with a `PLUGIN_API` bridge object
+4. The SDK runtime mounts the fragment in a separate Compute-origin frame with a `PLUGIN_API` bridge object
 5. Plugin JS uses `PLUGIN_API` to access auth, API clients, Chart.js, SocketIO, etc.
 
 ---
@@ -341,8 +341,8 @@ startup.
 >
 > That file declares the browser-side contract — versioned by the single
 > `SDK_CONTRACT_VERSION` (see "Version & Compatibility" below). The 3LC Hub frontend
-> **implements** `PLUGIN_API` when it mounts a fragment; `window.PluginJobs` **ships from this
-> package** (auto-injected by the host, layered on top of the bridge, not part of it).
+> **authorizes** bridge calls; this SDK **implements** the frame runtime and installs
+> `PLUGIN_API.jobs` before fragment scripts run. `window.PluginJobs` is a compatibility alias.
 
 ### How a fragment reaches the browser
 
@@ -354,9 +354,9 @@ The mount lifecycle:
 Browser (3LC Hub frontend, vanilla JS)              Compute service (:5020)
   │  user opens /plugin/{id}  (Flask route → plugin_host.html)
   ├─ TlcPlugins.mountPlugin(id, el, ctx) ───────▶  GET /api/plugins/{id}/ui  → HTML fragment
-  │     1. innerHTML = fragment
-  │     2. window.PLUGIN_API = {…}   (the bridge, built in mountPlugin)
-  │     3. re-exec the fragment's <script> tags
+  │     1. Open a sandboxed frame on the Compute origin
+  │     2. Transfer a private MessagePort and initialization data
+  │     3. SDK installs PLUGIN_API and evaluates fragment scripts inside the frame
   │
   │  fragment JS now runs, talking back through PLUGIN_API:
   ├─ PLUGIN_API.authFetch(.../compute?…) ───────▶  GET  /api/plugins/{id}/compute   → compute()
@@ -425,124 +425,31 @@ The optional `experience` selects a host-owned explanation, such as `revisions`,
 not inject animation code through this API. This feature does not require a higher compute
 service version; the optional member itself is the capability check.
 
-This API is not a security sandbox: existing plugin fragments are trusted scripts running
-in the Hub origin. Untrusted extensions require separate-origin isolation. Cross-origin
-iframe guide integration is not supported by this hook.
+The optional guide hook is unavailable in the isolated frame runtime. Feature-detect it; do not access the Hub DOM as a fallback.
 
 ### The bridge object
 
-When a plugin UI fragment is mounted, the frontend creates a global `PLUGIN_API` object:
+The SDK installs `window.PLUGIN_API` before running the fragment's scripts.
+The complete namespaced surface, examples, errors, capabilities, cleanup and
+migration instructions are in [Plugin browser runtime](browser-runtime.md).
+The shipped `contract/plugin-api.d.ts` provides the exact signatures.
 
-```javascript
-PLUGIN_API = {
-  context: {
-    resourceType: "run" | "table" | null,  // What resource type was passed
-    resourceUrls: ["url1", "url2", ...],   // Resource URLs from query params
-    projectName: "MyProject",              // Current project (from query or localStorage)
-  },
+Prefer `API.compute.request`, `API.jobs`, `API.pickers`, `API.credentials`,
+`API.nodes`, `API.run`, `API.nav`, `API.ui` and `API.lifecycle`.
+`getConfig`, `getRunTarget`, `onRunTargetChange`, `dashboardUrl`, `data`, `libs`,
+`getIcon`, `container` and `showResult` remain available. Feature-detect optional
+members and libraries. `guide` and `location` are unavailable in the frame.
 
-  // Config values
-  getConfig: function(key) { ... },
-  // Keys: "dashboard_url", "compute_service_url", "object_service_url", "deployment_name"
-
-  // API clients (authenticated)
-  compute: TlcApi.computeService,     // Compute service methods
-  objects: TlcApi.objectService,      // Object service methods
-  authFetch: TlcApi.authFetch,        // fetch() with auth headers
-  data: TlcData,                      // Cached data (projects, tables, runs)
-  location: TlcLocation,              // Location renderers (chips/labels for project roots) — SDK 0.2+
-
-  computeFetch: TlcApi.computeFetch,  // authFetch joined to the compute-service base URL
-
-  // Where runs go (optional; feature-detect each)
-  getRunTarget: function() { ... },   // {target: 'local'|'node', node_id?, ready, label?, files_root?}
-  onRunTargetChange: function(cb) { },// cb() whenever the "Run on:" choice or its readiness changes
-  checkDataForRunTarget: function(tableUrl) { ... },  // Promise<{ok, notes}>
-  planRun: function(body) { ... },    // Promise<plan>: the host's data plan for a run body
-
-  // Vendor libraries (each null if the host didn't load it). Stability tiers (frozen):
-  libs: {
-    io: io,                           // Socket.IO client — STABLE (the job channel rides it)
-    Chart: Chart,                     // Chart.js          — best-effort (may change w/o bump)
-    html2canvas: html2canvas,         // Screenshot export — best-effort
-    PptxGenJS: PptxGenJS,             // PowerPoint export — best-effort
-    cytoscape: cytoscape,             // Graph viz         — best-effort
-  },
-
-  // Utilities
-  container: HTMLElement,             // The DOM element the plugin is mounted in
-  navigate: function(path) { ... },   // Navigate to a route
-  showToast: function(msg, type) { }, // Show a toast notification
-  showResult: function(el, result, opts) { ... }, // Draw a run's result box, with a close button (optional)
-  getIcon: function(id) { ... },      // Get SVG icon for this plugin (or another by ID)
-}
-```
-
-**Notes on the bridge surface** (full signatures in `plugin-api.d.ts`):
-
-- **`getConfig(key)`** recognizes exactly four keys — `compute_service_url`, `dashboard_url`,
-  `object_service_url`, `deployment_name`. Any other key returns `''`. `compute_service_url` is the
-  GPU/CPU-routed service for *this* plugin.
-- **`getRunTarget()`** (optional) is the Hub's "Run on:" choice: `target` is `'local'` (the compute
-  host's own workers) or `'node'` (with its `node_id`); `ready` is false while a node's worker is
-  being prepared; `label` is the Hub's name for the target (the node's label, or its name for the
-  compute host). `files_root` is the node's stage/write folder; optional `browse_roots` lists the
-  folders offered by either target. An explicit empty list means buckets only; absent metadata
-  means an older host. Pair it with
-  **`onRunTargetChange(callback)`**, which fires on every change (listeners are cleared when the
-  fragment unmounts). The shared data-source picker and alias card already follow both; see
-  [Data inputs and run targets](#data-inputs-and-run-targets).
-- **`planRun(body)`** (optional) returns the host's data plan for a run body against the current
-  target — which data the run reads and writes, where each piece is, and what the run would need
-  answered — without side effects. The Hub runs the same plan before every run and asks the person
-  itself, so a fragment needs it only for a preview.
-- **`authFetch(url, opts)`** is the most-used member: it waits for auth to resolve, injects the
-  `Authorization` header and a JSON `Accept`, and aborts after `opts.timeout` ms (default 10000,
-  a custom non-standard option deleted before the real `fetch`) unless you pass your own `signal`.
-  It rejects non-ok responses with the parsed error detail.
-- **`libs` stability tiers (frozen contract):** `io` (socket.io) is **stable** — the job-tracker
-  channel rides it and it is the only `libs` member a plugin may depend on. `Chart`, `cytoscape`,
-  `html2canvas`, `PptxGenJS` are **best-effort** — exposed for convenience but may be swapped or
-  removed without a contract bump; a plugin that needs one should be prepared to vendor its own.
-- **`compute` / `objects` / `data` / `computeFetch` / `navigate` / `getIcon` / `container`** are
-  part of the declared surface but rarely used directly by `ui.html` (plugins reach data through
-  `authFetch`); they are documented in the `.d.ts` for completeness.
-- **`createNode(providerId, request?, onNote?)`** (optional) is the host's node-create flow for an
-  infrastructure plugin page's own "Spin up" button: missing settings, preflight, the Connection
-  chooser, the create and its error dialog. Pass the page's create fields in `request`; the host
-  owns `plugin_id` and `connection_id`. It resolves the node, or `false` when cancelled or refused.
-  Feature-detect it and fall back to `POST /api/infra/nodes` on hosts that predate it; that direct
-  post carries no Connection, so a host that requires one refuses it.
-- **`mountNodes(element, options?)`** (optional) draws the host's node list for an infrastructure
-  plugin page. It shows this compute's nodes of your provider with state, cost, startup history,
-  auto-off, rename and Terminate, and below them the provider's History ledger. It is the same
-  component the Hub's Deployments page shows, so a provider page lists its nodes without a renderer
-  of its own. It refreshes itself while visible and stops when the element leaves the page; call
-  the returned `refresh()` after your own Spin up. Feature-detect it, and point to Deployments on
-  hosts that predate it.
-- **`showResult(target, result, options?)`** (optional) draws the Hub's result box into `target`,
-  replacing its content: the success or error style, `result.message` in bold, `options.extra`
-  (HTML for "View in Project" links or follow-up buttons — escape what you interpolate), the
-  `result.details` as `key: value` pairs, and a close button (✕) that removes the box. It takes
-  the `{success, message, details}` dict your run already returns, so pass it straight through,
-  and returns the box. Feature-detect it; on older frontends draw the message yourself:
-
-  ```javascript
-  if (API.showResult) API.showResult(el, data, { extra: viewInProjectHtml });
-  else el.innerHTML = '<div class="alert alert-' + (data.success ? 'success' : 'error') + '">' +
-    _esc(data.message) + '</div>';
-  ```
-- **`location`** (SDK 0.2+) exposes the host's shared location renderers (`TlcLocationApi`):
-  chips and labels for the project roots / scan URLs that tables, runs, and projects from
-  `PLUGIN_API.data` resolve to (their `location` / `locations` fields, also 0.2). Every renderer
-  returns `''` on single-root installs, so output can be concatenated unconditionally. Feature-detect
-  (`PLUGIN_API.location && ...`) — hosts predating 0.2 set neither the member nor the data fields.
+`compute.request` forwards allowed requests to the Hub; it never exposes credentials.
+Requests reject on refusal, timeout or transport failure. Handle errors in the UI.
+Long work uses the job API, not a long HTTP request. Unmounting the page must never
+cancel a job. Local listeners and widgets belong in `lifecycle.onDispose` cleanup.
 
 ### Common patterns
 
 ```javascript
 // Authenticated fetch to your custom endpoint
-PLUGIN_API.authFetch(COMPUTE_URL + '/api/my-plugin/analyze', {
+PLUGIN_API.authFetch(COMPUTE_URL + '/api/plugins/my-plugin/analyze', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ url: tableUrl }),
@@ -1600,12 +1507,12 @@ A plugin's `ui.html` gets the host's entire design system for free — and the h
 
 ### Why the shared classes are available (no import, no build step)
 
-The frontend mounts a plugin by injecting its fragment straight into the host page — `containerEl.innerHTML = fragment` (see [How a fragment reaches the browser](#how-a-fragment-reaches-the-browser)). There is **no iframe and no shadow DOM**, so the fragment lands inside the host document and inherits its two stylesheets:
+The SDK runtime mounts the fragment in the plugin frame. The fragment runs in a separate Compute-origin frame, which loads these two host stylesheets:
 
 - `main.css` — the base design system (forms, buttons, cards, spinners, theme tokens)
 - `plugin-common.css` — the plugin page scaffolding (hero, workflow, metric cards, viewer)
 
-Write `class="btn btn-primary"` or `class="form-control"` and you get the fully themed, dark-mode-correct component with zero CSS of your own. The flip side: your fragment shares the global namespace. Prefix any bespoke class with your plugin id (`.myplugin-…`) and never restyle a shared class globally — you'd repaint every other plugin.
+Write `class="btn btn-primary"` or `class="form-control"` and you get the fully themed, dark-mode-correct component with zero CSS of your own. The flip side: your fragment shares its frame with its own widgets. Prefix any bespoke class with your plugin id (`.myplugin-…`) and never restyle a shared class globally — you would repaint other widgets in your page.
 
 > **Only `main.css` and `plugin-common.css` are inherited.** Styles defined inside a host *template* — for example the `.pbadge` badges in `settings/plugins.html` — live in that page's own `<style>` block and are **not** available to a mounted fragment. Don't reach for them.
 
@@ -2206,3 +2113,8 @@ the launch body into the Config `workspace.create` grant. Null/omitted selects o
 services. The selected team's membership is checked by Config. Connection ownership does not
 choose deployment binding. Personal service binding requires the separate deployment-record
 contract and is not represented as a team id or a one-person organization.
+
+## Isolated browser runtime
+
+For SDK 0.6.2 framed hosts, follow the [browser runtime guide](browser-runtime.md) and [agent instructions](agent-guide.md).
+The framed runtime supersedes legacy inline/global browser examples in this document.

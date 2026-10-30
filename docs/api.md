@@ -173,3 +173,13 @@ Granted token values are masked in status responses and saved snapshots. Recent 
 are also retained in memory so a disk-write error does not hide a terminal event. Removing the
 job's state folder removes its saved outcome; these small records follow the state folder's
 retention. Recoverability therefore lasts only while the worker's state storage is retained.
+
+## Frame runtime asset
+
+```{eval-rst}
+.. automodule:: tlc_plugin_sdk.shared.frame_runtime
+   :members:
+```
+
+The host serves this assembled asset; plugins never bundle their own copy.
+See [browser runtime](browser-runtime.md) for protocol and release requirements.
