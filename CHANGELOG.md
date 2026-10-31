@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The author guide, README and agent guide describe the 1.2 line: the template and example repos,
+  `min_service_version` as the service implementing the pinned SDK line, catalogs as configuration
+  (`compute-service.plugins.catalog-urls` / `TLC_COMPUTE_PLUGIN_CATALOG_URLS`) with the `latest` tag,
+  the `auth_exempt_paths` form, an empty feature-floor table, the current plugin roster, `PluginJobs`
+  in place of raw sockets, and a "Testing a plugin" section on the harness, `JobContext` and the lint.
 - The author guide's `PluginJobs` example keeps the job's id from `run()`'s start answer and cancels
   with it, and says why: the first `job_update` a page sees can come minutes after the start, because
   `queued` is lost while the socket connects. A Cancel that waited for an update had nothing to cancel

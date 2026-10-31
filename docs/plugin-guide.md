@@ -49,6 +49,18 @@ listing, progress fan-out, and cancellation are generic and host-provided. There
 is no `get_active_jobs()` / `cancel_job()` on the contract — see
 [Long-Running Jobs](#long-running-jobs-run_jobctx).
 
+`ComputePlugin` is one of three bases in `tlc_plugin_sdk`: `HubPlugin` (the fragment,
+optional `compute`, routes, shutdown) for a plugin that never runs a job, `ComputePlugin
+(HubPlugin)` for one that does, and `InfrastructurePlugin(HubPlugin)` for a provider that
+creates nodes ([Infrastructure plugins](#infrastructure-plugins)).
+
+Two repos go with this guide: the
+[**plugin template**](https://github.com/3lc-ai/3lc-compute-plugin-template) is the smallest
+viable plugin as a GitHub template repository (with a `/create-plugin` skill for coding
+agents), and the [**example plugin**](https://github.com/3lc-ai/3lc-compute-plugin-example),
+Mission Control, is a runnable tour of every surface below with an annotated manifest and a
+test suite. Both are on the 0.6 line, the contract the Hub and Compute Service 1.2 implement.
+
 **Flow:**
 
 1. Frontend calls `GET /api/plugins/` → gets manifests for all plugins
@@ -104,7 +116,8 @@ id = "my-plugin"                    # URL-safe slug
 name = "My Plugin"                  # Display name
 description = "Analyzes table data quality."
 version = "1.0.0"
-min_service_version = "0.1.0"       # Minimum compute service version required
+min_service_version = "1.2.0"       # Minimum compute service version: the one implementing the SDK line you pin (0.6 → 1.2)
+# min_frontend_version = "1.2.0"    # Minimum Hub version, only when ui.html needs a Hub 1.2 feature (<tlc-table-field>, TlcPicker, showResult)
 icon = "🔍"                         # Fallback emoji
 # 16x16 SVG, inline in the manifest:
 icon_svg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5"/><path d="M12 12l3 3"/></svg>'
@@ -122,10 +135,11 @@ quick_action = false                # Show in dashboard quick actions?
 # group_icon_svg = '<svg ...><rect x="2" y="2" width="12" height="12" rx="2"/></svg>'
 
 [runtime]
-isolation = "venv"                  # "venv" is the only value (and the default when absent)
 entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
 provision_extra = "my-plugin"       # your plugin's dependency group: host runs `uv sync --extra <this>`
+# remote_capable = true             # a run may target a remote node the Hub manages although requires_gpu is false
+# isolation = "venv"                # the one runtime there is; older manifests still say it, nothing reads it
 # Custom routes that must run where the model lives when a host with remote-node support
 # runs this plugin on a remote worker (inference, model warm-up/status). Path prefixes
 # relative to your route root. Everything NOT listed stays with the controller's worker —
@@ -152,11 +166,14 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   plugin** provisions nodes instead of computing: it subclasses `InfrastructurePlugin`
   (`tlc_plugin_sdk.infrastructure`) and answers the typed provider contract — see
   [Infrastructure plugins](#infrastructure-plugins). At most one infrastructure plugin is active
-  on a host at a time.
-- `[runtime]`: `auth_exempt_paths` (relative subpaths served without auth, scoped to the
-  plugin's own subtree), `training` (marks a training plugin), `python` / `venv_python`
-  (pin the interpreter the plugin's venv is built with), `remote_capable` (a run may target a
-  remote node even though `requires_gpu` is false).
+  on a host at a time. Also `repository_url` (shown on the plugins page) and
+  `max_service_version` / `min_frontend_version` ([Version & Compatibility](#version--compatibility)).
+- `[runtime]`: `auth_exempt_paths` (routes served without the auth middleware, for an asset an
+  `<img>` fetches: **full paths under the plugin's own prefix**, `/api/plugins/<id>/…`, each
+  naming a subpath — `"/api/plugins/example/patch.png"`; anything else is refused and listed on
+  the plugin card as `auth_exempt_rejected`), `training` (marks a training plugin), `python` /
+  `venv_python` (pin the interpreter the plugin's venv is built with), `remote_capable` (a run
+  may target a remote node even though `requires_gpu` is false).
 - `[ui]`: `min_input_count` (minimum selected resources an `action` plugin needs — defaults to
   `len(input_types)`; set `0` explicitly to require none), `action_param_names` (query params
   passed through from the action launch), `quick_action_label` / `quick_action_description`
@@ -243,28 +260,27 @@ class MyPlugin(ComputePlugin):
 
 The UI fragment is a self-contained `<style>` + `<div>` + `<script>` block. It has access to:
 
-- `PLUGIN_API` — bridge object with context, API clients, and libraries
-- `COMPUTE_URL` — shorthand for the compute service base URL
-- All CSS variables from `main.css` and `plugin-common.css`
-- Vendor libraries: Chart.js, html2canvas, PptxGenJS, Socket.IO, Cytoscape
+- `PLUGIN_API` — the bridge object with context, API clients, and libraries (the samples
+  below alias `PLUGIN_API.getConfig('compute_service_url')` as `COMPUTE_URL`)
+- `PluginJobs` — the job-channel client, added to every fragment by the worker
+- All CSS variables and classes from `main.css` and `plugin-common.css` (see
+  [Styling & UI Conventions](#styling--ui-conventions); `python -m tlc_plugin_sdk.lint src/`
+  checks a fragment against them)
+- Vendor libraries through `PLUGIN_API.libs`; only `io` (Socket.IO) is stable
 
 ```html
 <style>
-.my-plugin-result {
-  padding: 16px; font-size: 12px; color: var(--text);
-}
-.my-plugin-result .count {
-  font-size: 24px; font-weight: 700; color: var(--accent);
-}
+.my-plugin-result { padding: 16px; font-size: 12px; color: var(--text); }
+.my-plugin-result .count { font-size: 24px; font-weight: 700; color: var(--accent); }
+.my-plugin-note { color: var(--text-muted); }
+.my-plugin-error { color: var(--error); }
 </style>
 
-<div class="plugin-page">
+<div class="plugin-page my-plugin">
   <div class="card">
-    <div style="padding:16px">
-      <div style="font-size:14px;font-weight:600;margin-bottom:8px">My Plugin</div>
-      <div id="my-plugin-body">
-        <span class="spinner"></span> Analyzing...
-      </div>
+    <div class="card-header"><span class="card-title">My Plugin</span></div>
+    <div class="card-body" id="my-plugin-body">
+      <span class="spinner"></span> Analyzing...
     </div>
   </div>
 </div>
@@ -279,7 +295,7 @@ The UI fragment is a self-contained `<style>` + `<div>` + `<script>` block. It h
   var body = document.getElementById('my-plugin-body');
 
   if (resourceUrls.length === 0) {
-    body.innerHTML = '<div style="color:var(--text-muted)">No table selected.</div>';
+    body.innerHTML = '<div class="my-plugin-note">No table selected.</div>';
     return;
   }
 
@@ -291,7 +307,7 @@ The UI fragment is a self-contained `<style>` + `<div>` + `<script>` block. It h
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.error) {
-        body.innerHTML = '<div style="color:var(--error)">' + data.error + '</div>';
+        body.innerHTML = '<div class="my-plugin-error">' + data.error + '</div>';
         return;
       }
       body.innerHTML =
@@ -301,7 +317,7 @@ The UI fragment is a self-contained `<style>` + `<div>` + `<script>` block. It h
         '</div>';
     })
     .catch(function (err) {
-      body.innerHTML = '<div style="color:var(--error)">Failed: ' + err.message + '</div>';
+      body.innerHTML = '<div class="my-plugin-error">Failed: ' + err.message + '</div>';
     });
 
   // ── Option B: Use Chart.js (available via PLUGIN_API.libs) ─
@@ -542,23 +558,25 @@ PLUGIN_API = {
 
 ```javascript
 // Authenticated fetch to your custom endpoint
-PLUGIN_API.authFetch(COMPUTE_URL + '/api/my-plugin/analyze', {
+PLUGIN_API.authFetch(COMPUTE_URL + '/api/plugins/my-plugin/analyze', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ url: tableUrl }),
 }).then(function(r) { return r.json(); });
 
-// Create a Chart.js chart
+// Draw an outcome the Hub's way (Hub 1.2+; feature-detect)
+if (PLUGIN_API.showResult) PLUGIN_API.showResult(el, { success: true, message: 'Done', details: {...} });
+
+// Create a Chart.js chart (best-effort lib — be ready to vendor your own)
 var Chart = PLUGIN_API.libs.Chart;
 new Chart(document.getElementById('my-canvas'), {
   type: 'bar',
   data: { labels: [...], datasets: [...] },
 });
 
-// Connect to a SocketIO namespace
-var io = PLUGIN_API.libs.io;
-var socket = io(COMPUTE_URL + '/my-plugin');
-socket.on('progress', function(data) { ... });
+// Listen for a plugin-private ctx.emit event on the plugin's namespace
+PluginJobs.connect('/my-plugin');   // on mount, so nothing emitted early is missed
+var off = PluginJobs.on('/my-plugin', 'progress_detail', function (data) { ... });
 ```
 
 ---
@@ -597,7 +615,15 @@ These resolve at `GET /api/plugins/my-plugin/status` and `POST /api/plugins/my-p
 The plugin class's `get_route_handlers()` delegates to this module-level function (often a
 `routes.py`); a lazy import inside it avoids import cycles with the package `__init__`. See
 `tlc_plugin_image_metrics/routes.py` in the `3lc-compute-plugins` repo for the simplest
-real example.
+real example, and the example plugin's `routes.py` for one of every response shape: a JSON
+collection, a path parameter with a real 404, a binary PNG (auth-exempt for an `<img>`), a
+raw body, and the Hub's `{success, message, details}` result that `PLUGIN_API.showResult`
+draws.
+
+Test them without a compute service: `tlc_plugin_sdk.harness.PluginHarness.from_manifest(dir)`
+builds the same app the worker serves and calls it in-process (`h.get("/status")`,
+`h.post("/analyze", json_body={...})`), including `/compute` and `/ui` — see
+[Testing a plugin](#testing-a-plugin) and the example plugin's `tests/`.
 
 ---
 
@@ -777,8 +803,7 @@ A workspace request's `workspace` object is a `WorkspaceRequest`. Besides what t
   name, `deploy.example.com`). A provider that supports hostnames gives the workspace a stable
   address and public names `<deployment>.<zone>` under that zone, derived from `name`, and
   removes them when the workspace goes. Both empty (the default) leaves the provider's own
-  naming. The host sends a zone only to a plugin whose SDK is 0.5.3 or newer (see
-  [Version & Compatibility](#version--compatibility)).
+  naming. The fields exist from SDK 0.5.3 on; every host on the 0.6 line sends them.
 
 A workspace created the legacy way, with its owner's keys, carries none of these; the SDK strips
 that request's transient `credentials` and `provider_configs` (see the legacy facet below).
@@ -1204,7 +1229,6 @@ worker and only ever touches `ctx`.
 
 ```toml
 [runtime]
-isolation = "venv"
 entrypoint = "tlc_plugin_my_gpu_plugin:MyGpuPlugin"
 requires_gpu = true                 # → routed through the shared GPU queue (1 at a time)
 provision_extra = "my-gpu-plugin"   # venv deps installed via `uv sync --extra <this>`
@@ -1551,9 +1575,9 @@ ctx.emit("epoch_metrics", {"epoch": 3, "loss": 0.042, "map50": 0.85})
 ```
 
 ```javascript
-// frontend — listen for it on the same namespace via PluginJobs.track, or directly:
-var socket = PLUGIN_API.libs.io(COMPUTE_URL + '/my-plugin');
-socket.on('epoch_metrics', function (d) { lossChart.push(d.epoch, d.loss); });
+// frontend — listen for it on the same namespace through the PluginJobs client, subscribed
+// before run() so the first event is not missed; the returned function unsubscribes:
+var off = PluginJobs.on('/my-plugin', 'epoch_metrics', function (d) { lossChart.push(d.epoch, d.loss); });
 ```
 
 > Don't leak plugin internals into the generic surface. Training fields (`epoch`,
@@ -1898,19 +1922,30 @@ def test_the_ui_follows_the_hub_styling_conventions() -> None:
 
 ## Existing Plugins Reference
 
-| Plugin ID | display_mode | Section | GPU | Description |
+The plugins 3LC maintains, as of Hub 1.2. Read the one closest to what you are building.
+
+| Plugin ID | Kind | GPU | Repo | What it does |
 |---|---|---|---|---|
-| `importer` | sidebar | Data Ops | — | Import data (YOLO, COCO, Folder, CSV, Unlabeled) |
-| `exporter` | sidebar | Data Ops | — | Export tables to CSV, XLSX, YOLO, COCO |
-| `splitter` | sidebar | Data Ops | — | Split tables into train/val/test sets |
-| `merger` | sidebar | Data Ops | — | Merge 2 tables by column join |
-| `image-metrics` | sidebar | Data Ops | GPU | Image quality metrics (brightness, sharpness, noise, etc.) |
-| `yolo` | sidebar | AI Tools | GPU | Ultralytics YOLO training + metrics collection |
-| `sam3` | sidebar | AI Tools | GPU | Auto-labeling with SAM3/GroundingDINO |
-| `timm` | sidebar | AI Tools | GPU | Image classification with timm models |
-| `table-statistics` | hidden | Analysis | — | Per-column stats & image thumbnails (API-only) |
-| `run-insights` | action | Analysis | — | Run statistics, health scores, per-class metrics |
-| `table-insights` | action | Analysis | — | GT-only data quality analysis (bbox sizes, balance, etc.) |
+| `example` | compute | — | [3lc-compute-plugin-example](https://github.com/3lc-ai/3lc-compute-plugin-example) | Mission Control: a runnable tour of the whole contract, with tests |
+| `importer` | compute | — | [3lc-compute-plugins](https://github.com/3lc-ai/3lc-compute-plugins) | Import data (YOLO, COCO, folder, CSV, unlabeled); the data-source picker and alias card |
+| `exporter` | compute | — | 3lc-compute-plugins | Export tables to CSV, XLSX, YOLO, COCO; an output path field |
+| `splitter` | compute | — | 3lc-compute-plugins | Split tables into train/val/test sets |
+| `merger` | compute | — | 3lc-compute-plugins | Merge tables (an `action` on selected tables) |
+| `image-metrics` | compute | — | 3lc-compute-plugins | Image quality metric columns |
+| `table-statistics` | compute | — | 3lc-compute-plugins | Per-column stats and thumbnails, `hidden` (API-only, drawn inline by the Hub) |
+| `yolo` | compute | GPU | [3lc-compute-plugin-yolo](https://github.com/3lc-ai/3lc-compute-plugin-yolo) | Ultralytics YOLO fine-tuning with presets, metrics collection |
+| `sam3` | compute | GPU | [3lc-compute-plugin-sam3](https://github.com/3lc-ai/3lc-compute-plugin-sam3) | Auto-labeling with SAM3; `node_routes` for a preview on the node |
+| `timm` | compute | GPU | [3lc-compute-plugin-timm](https://github.com/3lc-ai/3lc-compute-plugin-timm) | Image classification fine-tuning with timm models |
+| `rf-detr` | compute | GPU | 3lc-compute-plugin-rf-detr (private) | RF-DETR detection fine-tuning |
+| `huggingface` | compute | — | 3lc-compute-plugin-huggingface (private) | Browse, preview and import Hugging Face datasets; share tables back; a SECRET token on routes and jobs |
+| `kaggle-exdark`, `kaggle-classification` | compute | GPU | [3lc-compute-plugin-kaggle](https://github.com/3lc-ai/3lc-compute-plugin-kaggle), [-kaggle-classification](https://github.com/3lc-ai/3lc-compute-plugin-kaggle-classification) | Competition starters, installed from GitHub through the catalog |
+| `run-insights`, `table-insights` | compute | — | 3lc-compute-plugin-insights (private) | Run and table analysis, as `action`s on selected runs and tables |
+| `jupyter` | compute | — | 3lc-compute-plugin-jupyter (private) | A notebook server beside the data |
+| `aws`, `azure`, `runpod`, `machines` | infrastructure | — | 3lc-compute-plugin-aws / -azure / -runpod / -machines (private) | Node providers: GPU nodes, workspaces, storage, through Connections |
+
+The open first-party plugins are all `remote_capable` and declare their `data_inputs` /
+`data_outputs`; none of them needs a GPU. The GPU trainers and the infrastructure providers
+each live in a repo of their own.
 
 ---
 
@@ -1928,6 +1963,9 @@ service restart, no rebuild:
 
 ```bash
 curl -X POST http://localhost:5020/api/admin/plugins/my-plugin/worker/stop
+# or everything under the folder at once (re-provisions when deps changed):
+curl -X POST http://localhost:5020/api/admin/plugins/dirs/reload \
+  -H 'Content-Type: application/json' -d '{"directory": "/path/to/repo/src"}'
 ```
 
 Or from the browser console:
@@ -1940,6 +1978,30 @@ For **dependency** changes (a new package, a version bump in your `pyproject.tom
 the venv instead — `POST /api/admin/plugins/my-plugin/reload` runs `uv sync --reinstall` in
 the background and retires the worker when the rebuilt venv swaps in. Running jobs in other
 plugins are unaffected either way.
+
+The folder Source serves one host's own workers. To try the plugin on a remote node, or on
+another deployment, publish it the way the people installing it will: a
+[catalog](#publishing-via-a-catalog) naming a git ref or an index release.
+
+## Testing a plugin
+
+Most of a plugin is testable with no compute service, no Hub and no browser. The template and
+the example plugin ship a `tests/` that does all three of these:
+
+- **Routes, `/compute` and `/ui`** through `tlc_plugin_sdk.harness.PluginHarness`: it builds the
+  same Litestar app the worker serves and calls it in-process, loaded from the manifest the way
+  a host would (`PluginHarness.from_manifest("src/tlc_plugin_my_plugin")`; `h.get(path,
+  params=…)`, `h.post(path, json_body=… | content=…, headers=…)`). The harness adds nothing to a
+  request: a token or a Connection a host would stamp, the test sends as a header.
+- **`run_job`** with a `JobContext` whose `sink` is a list and whose `cancel_event` is a
+  `threading.Event`: the recorded `progress` / `metric` / `log` / `result` / `custom` dicts are
+  exactly what the host streams, so a test can assert the generic panel's view, a `ctx.fail()`
+  (`pytest.raises(JobFailed)`) and a cancel that unwinds cleanly. No GPU, no queue.
+- **The fragment** with `tlc_plugin_sdk.lint.lint_plugin(dir)` — see [Check a fragment](#check-a-fragment).
+
+`uv sync --extra <your extra>` gives the venv the host would provision (plus pytest from the
+`dev` group), and `uv run pytest -q` runs it all; the template's CI does the same. Infrastructure
+plugins have a conformance kit on top ([Infrastructure plugins → Testing](#testing)).
 
 ---
 
@@ -1956,12 +2018,19 @@ There are **two independent** kinds of "version" in play. Keep them separate:
 
 | Constant | Covers | Value |
 |----------|--------|-------|
-| `SDK_CONTRACT_VERSION` | the whole contract — the Python surface (`HubPlugin` / `ComputePlugin` / `InfrastructurePlugin` / `JobContext` / `shared.*`) *and* the browser surface (`PLUGIN_API` / `PluginJobs` / `TlcData`, see `plugin-api.d.ts`); also the dependency *pin* (`3lc-compute-plugin-sdk>=X,<Y`) | = package version (e.g. `0.3.0`) |
+| `SDK_CONTRACT_VERSION` | the whole contract — the Python surface (`HubPlugin` / `ComputePlugin` / `InfrastructurePlugin` / `JobContext` / `shared.*`) *and* the browser surface (`PLUGIN_API` / `PluginJobs` / `TlcData`, see `plugin-api.d.ts`); also the dependency *pin* (`3lc-compute-plugin-sdk>=X,<Y`) | = package version (e.g. `0.6.1`) |
 
 It is this package's own version — one source of truth. A plugin that needs a newer capability
 raises its `3lc-compute-plugin-sdk` floor; the host and frontend implement a range and compare
 compatibility on `MAJOR.MINOR`. (Earlier 0.x lines split this into separate `PY_CONTRACT` /
 `JS_CONTRACT` markers; those were removed in 0.3 — there is one axis now.)
+
+Each Hub release implements one line: the Compute Service and the Hub **1.2** implement the
+**0.6** line, so a plugin pinning `>=0.6.1,<0.7.0` sets `min_service_version = "1.2.0"` — a
+1.1 service would refuse its worker on contract skew anyway, and the manifest floor turns that
+into a greyed-out card with a reason. The Hub reports the line it implements as
+`PLUGIN_API.contractVersion` (`"0.6"`), and a plugin's worker reports its SDK version on
+`/health`; the plugin card shows the skew when the two lines differ.
 
 **Per-feature SDK floors.** The typed request models drop keys they do not know, so a plugin
 whose SDK predates a field the host sends does not fail: it answers as if the field was never
@@ -1972,11 +2041,9 @@ worker is older, refuses the request with a sentence naming the plugin, its SDK 
 floor; the plugin card carries the same sentence. A pre-release of the floor counts as the floor,
 and an unknown version refuses nothing.
 
-| Feature | Fields | Needs SDK |
-|---------|--------|-----------|
-| Deployment DNS zone | `WorkspaceRequest.dns_zone_id`, `WorkspaceRequest.dns_zone_name` | 0.5.3 |
-
-A host without a deployment DNS zone sends no zone and has nothing to refuse.
+At Compute 1.2 that table is empty: every field the host sends exists on the whole 0.6 line,
+so a plugin on the line is never refused a feature. The mechanism stays for a later release
+that adds a field inside a line.
 
 **(b) SERVICE compatibility — what a plugin *runs against*.** Negotiated at *runtime*, not pinned.
 The compute-service and frontend version independently (separate repos); a plugin declares floors
@@ -2000,9 +2067,9 @@ All version fields live at the top level of the manifest (`plugin.toml`, or
 
 ```toml
 version = "1.0.0"               # Plugin's own version
-min_service_version = "0.1.0"   # Minimum compute service version required
+min_service_version = "1.2.0"   # Minimum compute service version: the one implementing your SDK line
 max_service_version = ""        # Maximum service version (empty = no upper bound)
-min_frontend_version = "0.1.0"  # Minimum frontend version for this plugin's UI
+min_frontend_version = ""       # Minimum Hub version for this plugin's UI (empty = none; "1.2.0" for <tlc-table-field>, TlcPicker, showResult)
 ```
 
 ### When to Bump Versions
@@ -2011,7 +2078,8 @@ min_frontend_version = "0.1.0"  # Minimum frontend version for this plugin's UI
 |--------|-------------|
 | Bug fix in plugin logic | Plugin `version` PATCH (1.0.0 → 1.0.1) |
 | New feature in plugin | Plugin `version` MINOR (1.0.0 → 1.1.0) |
-| Plugin uses new service API | Plugin `version` MINOR + bump `min_service_version` |
+| Plugin moves to a newer SDK line | Plugin `version` MINOR + the SDK pin + `min_service_version` |
+| Plugin UI uses a newer Hub feature | Plugin `version` MINOR + `min_frontend_version` |
 | Breaking change to plugin UI/API | Plugin `version` MAJOR (1.0.0 → 2.0.0) |
 
 ### Compatibility Behavior
@@ -2047,10 +2115,11 @@ anything:
 ```json
 {
   "schema_version": 1,
-  "generated_at": "2026-07-31T00:00:00Z",
+  "generated_at": "2026-10-31T00:00:00Z",
   "plugins": [
     {
       "id": "my-plugin",
+      "latest": "1.0.0",
       "versions": [
         {
           "version": "1.0.0",
@@ -2059,9 +2128,9 @@ anything:
             "id": "my-plugin",
             "name": "My Plugin",
             "version": "1.0.0",
-            "min_service_version": "0.1.0",
+            "min_service_version": "1.2.0",
             "ui": { "display_mode": "sidebar", "section": "Tools" },
-            "runtime": { "isolation": "venv", "entrypoint": "tlc_plugin_my_plugin:MyPlugin" }
+            "runtime": { "entrypoint": "tlc_plugin_my_plugin:MyPlugin", "provision_extra": "my-plugin" }
           }
         }
       ]
@@ -2069,6 +2138,11 @@ anything:
   ]
 }
 ```
+
+`latest` names the release a host offers. Without it the newest-sorting compatible version is
+offered, and only upward; with it a prerelease can be listed without being offered, and a
+release withdrawn by moving the tag back — hosts that follow their catalogs move with it. Keep
+every release you still want installable in `versions`.
 
 ### The `source` field
 
@@ -2080,29 +2154,43 @@ whether or not your plugin has a published wheel:
 | a plain git/GitHub repo, no published wheel (the common case for a one-off or a plugin you're sharing to test) | `"github:your-org/your-repo@v1.0.0"` or `"git+https://github.com/your-org/your-repo.git@v1.0.0"` |
 | published to a package index | `"my-plugin==1.0.0"` or `"my-dist[extra]==1.0.0"` |
 
-Most hosts default to a conservative install policy that only trusts sources a **catalog**
-names — a bare git URL typically needs an operator to explicitly loosen that policy first.
+A host's default install policy, `catalog-only`, installs nothing a **catalog** did not
+list — a bare git URL needs an operator to widen the policy first (`catalog+index`, `any`).
 Wrapping your repo in a catalog like the one above is the normal path for a git-hosted
-plugin, not a workaround.
+plugin, not a workaround: a catalog-listed source is trusted whatever its kind.
 
 ### Trying it out
 
-Host the JSON somewhere reachable — a raw GitHub file URL is the easiest — and point a
-tester's Hub at it: **Settings → Plugins → Catalogs → add URL**. Your plugin then shows up
-as an installable card; Install resolves whatever `source` you declared. (A local `file://`
-path works too for testing on your own machine; plaintext `http://` is only accepted for a
-loopback host.)
+Host the JSON somewhere reachable — a raw GitHub file URL is the easiest. Which catalogs a
+compute service reads is **configuration**, because a catalog decides what code gets
+installed: the person running the service names yours in the environment it starts with,
 
-If your entry doesn't show up after that, check that the tester's compute-service version
-(on `GET /health`) is recent enough to support catalogs.
+```bash
+TLC_COMPUTE_PLUGIN_CATALOG_URLS=https://raw.githubusercontent.com/your-org/your-repo/main/catalog.json
+```
+
+or as `compute-service.plugins.catalog-urls` in the service's configuration file — or, for a
+deployment, in a Config Service scope, so every host of an organisation reads it. A change
+applies at the host's next catalog read, with no restart. The Hub's Plugins page lists the
+catalogs in force under **Plugin sources**, and your plugin shows up as a card: **Add**
+registers it on the deployment without building anything, and the first visit (on the host
+or a node the person chose) materializes its venv from your `source`. (A local `file://` path
+works too for testing on your own machine; plaintext `http://` is only accepted for a loopback
+host.)
+
+If your card doesn't show up, check `GET /api/admin/plugins/catalogs` on the compute service:
+it lists each catalog it reads, the tier that contributed it and the error if it could not be
+fetched.
 
 ## Checklist
 
 - [ ] `plugin.toml` manifest present with all metadata (id, name, `[ui]`, `[runtime]`)
 - [ ] `runtime.entrypoint` points at the behavior class (`"pkg.module:ClassName"`)
-- [ ] Plugin class subclasses `ComputePlugin` — behavior-only, no metadata attrs, no `register()`
+- [ ] Plugin class subclasses `ComputePlugin` (or `HubPlugin`) — behavior-only, no metadata attrs, no `register()`
 - [ ] `version` set to meaningful SemVer (not just "1.0.0")
-- [ ] `min_service_version` set to the actual minimum service version needed
+- [ ] `min_service_version` set to the Compute Service that implements the SDK line you pin (`1.2.0` for the 0.6 line); `min_frontend_version` only when the UI needs a Hub 1.2 feature
+- [ ] `[runtime] data_inputs` / `data_outputs` name the run-body keys that carry data; `remote_capable` says whether a run may leave the host
+- [ ] Tests run the routes through `tlc_plugin_sdk.harness`, `run_job` through a recording `JobContext`, and the fragment through `tlc_plugin_sdk.lint`
 - [ ] `icon_svg` set to an inline 16x16 SVG literal in the manifest
 - [ ] `get_ui_fragment()` returns self-contained HTML+CSS+JS
 - [ ] UI uses `PLUGIN_API` bridge (never raw `fetch` without auth)
@@ -2122,7 +2210,10 @@ If your entry doesn't show up after that, check that the tester's compute-servic
 
 Agent-facing guidance for building a plugin end-to-end (reading order, step-by-step,
 code patterns, common mistakes, testing) lives in this repo's
-[`CLAUDE.md`](https://github.com/3lc-ai/3lc-compute-plugin-sdk/blob/main/CLAUDE.md).
+[`CLAUDE.md`](https://github.com/3lc-ai/3lc-compute-plugin-sdk/blob/main/CLAUDE.md). The
+[plugin template](https://github.com/3lc-ai/3lc-compute-plugin-template) ships a
+`/create-plugin` skill that turns a one-line description into a working plugin in a repo
+made from it, with a condensed copy of this contract beside it.
 
 ## Which 3LC project a job belongs to
 
