@@ -16,10 +16,11 @@ pip install 3lc-compute-plugin-sdk          # import name: tlc_plugin_sdk
 
 > **Distribution `3lc-compute-plugin-sdk` · import `tlc_plugin_sdk`.**
 
-**PyPI carries the 0.4 contract line.** The 0.5 line this README and the guide describe (the
-plugin hierarchy, infrastructure plugins, Connections) is published only to the 3LC staging
-index, so a plain `pip install` gets a 0.4 SDK without them; see
-[Snapshot builds](#snapshot-builds) for installing a 0.5 snapshot.
+**PyPI carries the 0.4 contract line until Hub 1.2 ships.** The 0.6 line this README and the
+guide describe (the plugin hierarchy, infrastructure plugins, Connections, the harness and the
+lint) is the contract the Hub and Compute Service 1.2 implement and is released to PyPI with
+them; until then it is published only to the 3LC staging index, so a plain `pip install` gets a
+0.4 SDK without it — see [Snapshot builds](#snapshot-builds) for installing a 0.6 snapshot.
 
 ## What it gives you
 
@@ -41,7 +42,17 @@ index, so a plain `pip install` gets a 0.4 SDK without them; see
   handlers + the generic reserved routes as an ASGI app, out-of-process in the plugin's
   own venv.
 - **`tlc_plugin_sdk.shared.*`** — batteries the heavy plugins share: URL-alias registration,
-  config storage/UI, the generic-job helpers, image/label/modality utilities, script injection.
+  config storage and the preset bar, the data-source picker, the generic-job helpers,
+  image/label/modality utilities, script injection.
+- **`tlc_plugin_sdk.harness`** — a plugin's routes, `/compute` and `/ui` called in-process,
+  without a compute service: the way a plugin's tests run.
+- **`tlc_plugin_sdk.lint`** — a UI fragment checked against the Hub's styling conventions
+  (`python -m tlc_plugin_sdk.lint src/`).
+
+Start from the [plugin template](https://github.com/3lc-ai/3lc-compute-plugin-template) (a
+GitHub template repository) and read the
+[example plugin](https://github.com/3lc-ai/3lc-compute-plugin-example), a runnable tour of
+the whole contract with tests.
 
 ## Quickstart
 
@@ -60,9 +71,8 @@ stance.
 whose SDK predates a field the host sends would answer as if it was never sent. The host
 therefore keeps a per-feature SDK floor, compares it against the SDK version the plugin's worker
 reports, and refuses a request that needs a newer SDK with a sentence naming the plugin, its SDK
-version and the floor (the plugin card shows the same sentence). The first floor is the
-deployment DNS zone on `WorkspaceRequest` (`dns_zone_id` / `dns_zone_name`), which needs SDK
-0.5.3 or newer.
+version and the floor (the plugin card shows the same sentence). At Compute 1.2 that table is empty — every
+field the host sends exists on the whole 0.6 line — so the mechanism waits for a later release.
 
 ## How it fits
 
@@ -75,7 +85,7 @@ runs in its own isolated environment.
 
 ## Status
 
-**0.5 is the current development contract line.** Within 0.x the contract still evolves — mostly additively,
+**0.6 is the current contract line — the one the Hub and Compute Service 1.2 implement.** Within 0.x the contract still evolves — mostly additively,
 but a coordinated breaking change may land on a MINOR bump while the fleet re-pins in lockstep (0.3
 did: `JobContext.result` took a positional `url`, and the `PY_CONTRACT`/`JS_CONTRACT` axes
 collapsed into `SDK_CONTRACT_VERSION`). Anything reshaping the core still waits for a major bump. In
@@ -89,8 +99,8 @@ download the wheel and source archive from the workflow artifacts. Select `publi
 them to the private staging index (CloudRepo `prereleases`). The `release` environment needs
 the `CLOUDREPO_USERNAME` / `CLOUDREPO_PASSWORD` secrets for publishing.
 
-Snapshots use `BASE.UTCSTAMP.RUN.ATTEMPT` versions, for example `0.5.0.20260916080000.42.1`.
-They satisfy ordinary `>=0.5.0,<0.6.0` requirements and sort after older timestamped snapshots.
+Snapshots use `BASE.UTCSTAMP.RUN.ATTEMPT` versions, for example `0.6.1.20261029125956.51.1`.
+They satisfy ordinary `>=0.6.1,<0.7.0` requirements and sort after older timestamped snapshots.
 The run and attempt distinguish concurrent builds and reruns.
 Consumers need authenticated access to that index; a public PyPI release is not required to
 test them. A consumer declares it as an explicit uv index named `staging`

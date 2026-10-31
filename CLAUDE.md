@@ -74,7 +74,11 @@ section is the condensed working order.
 ### Before you start
 
 1. Read the full plugin guide (`docs/plugin-guide.md`).
-2. Read an existing plugin closest to what you're building — the open first-party plugins live
+2. Start from the [plugin template](https://github.com/3lc-ai/3lc-compute-plugin-template)
+   (its `/create-plugin` skill does the renames and a first version) and read the
+   [example plugin](https://github.com/3lc-ai/3lc-compute-plugin-example): every surface,
+   an annotated manifest, and tests through the harness and the lint.
+3. Read an existing plugin closest to what you're building — the open first-party plugins live
    in [`3lc-compute-plugins`](https://github.com/3lc-ai/3lc-compute-plugins) under
    `src/tlc_plugin_<name>/`, and the GPU training/labeling plugins in their own repos
    (`3lc-compute-plugin-timm` / `-sam3` / `-yolo`):
@@ -82,14 +86,14 @@ section is the condensed working order.
    - **Config + GPU job + SocketIO**: sam3, yolo, or timm
    - **Inline data display (no standalone page)**: `tlc_plugin_table_statistics`
    - **Action on selected resources**: `tlc_plugin_merger`
-3. Read `src/tlc_plugin_sdk/contract.py` — `ComputePlugin` is an `abc.ABC` with one abstract
+4. Read `src/tlc_plugin_sdk/contract.py` — `ComputePlugin` is an `abc.ABC` with one abstract
    method (`get_ui_fragment()`) and an `id` attribute the host stamps from the manifest.
    `compute()` and the other hooks (`run_job`, `initialise_runtime`, `shutdown_runtime`,
    `get_route_handlers`) ship as defaults (`compute()` reports that the plugin doesn't
    implement it), so you override only what you need. There is
    no `register()` and **no** `get_active_jobs`/`cancel_job` — the host owns job listing and
    cancellation.
-4. Read `tlc_plugin_exporter`'s `plugin.toml` + `__init__.py` — the canonical manifest +
+5. Read `tlc_plugin_exporter`'s `plugin.toml` + `__init__.py` — the canonical manifest +
    subclass exemplar.
 
 ### Step-by-step
@@ -124,7 +128,9 @@ section is the condensed working order.
 - Implement `run_job(ctx)` — the host owns the queue, GPU/CPU slot, progress fan-out,
   listing, and cancellation.
 - Drive the generic Queue & Progress panel via `ctx.progress`/`ctx.metric`/`ctx.result`;
-  poll `ctx.cancelled` at checkpoints. The same `run_job` runs in `host` or `venv` mode.
+  poll `ctx.cancelled` at checkpoints; `ctx.fail("sentence")` for bad input. The same `run_job`
+  runs on the host's workers and on a remote node; a table or run it creates goes under
+  `ctx.project_root_url`.
 - Do **not** hand-roll a queue, job store, or job-schema translation — all host-provided.
 
 **Routes** (custom REST):
@@ -184,8 +190,11 @@ section is the condensed working order.
 
 ### Testing
 
-- Co-locate tests with the plugin (its own `tests/`).
-- Test both success and error paths for all endpoints.
-- For `run_job(ctx)`, drive it with a fake `JobContext` (a recording sink + a
+- Co-locate tests with the plugin (its own `tests/`); `uv sync --extra <extra>` then
+  `uv run pytest`.
+- Routes, `/compute` and `/ui` through `tlc_plugin_sdk.harness.PluginHarness.from_manifest(dir)`
+  — the worker's app called in-process, no compute service. Test both success and error paths.
+- For `run_job(ctx)`, drive it with a real `JobContext` (`sink=events.append`, a
   `threading.Event` for cancel) and assert the emitted `progress`/`metric`/`result`
   events — no GPU or queue needed.
+- The fragment through `tlc_plugin_sdk.lint.lint_plugin(dir)` — no findings.
