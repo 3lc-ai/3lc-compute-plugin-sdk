@@ -453,3 +453,31 @@ process.stdout.write(JSON.stringify({blocked,cloud,custom,reset,local:_tlcAliasL
     assert result["cloud"]["values"]["alias_token"] == "NEW_IMAGES"
     assert result["custom"] == "CUSTOM"
     assert result["reset"] == "NEXT"
+
+
+def test_alias_discovery_reads_all_stored_rows_without_resolving(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StoredTable:
+        input_url = ""
+        url = "s3://project/table"
+
+        def __init__(self) -> None:
+            self.table_rows = [{"image": "<FIRST>/a.jpg"}, {"image": "<SECOND>/b.jpg"}]
+
+        def __len__(self) -> int:
+            return len(self.table_rows)
+
+        def __getitem__(self, index: int) -> dict[str, str]:
+            message = "Resolved sample access loses alias tokens"
+            raise AssertionError(message)
+
+    fake = sys.modules["tlc"]
+    monkeypatch.setattr(fake, "Table", types.SimpleNamespace(from_url=lambda url: StoredTable()), raising=False)
+    monkeypatch.setattr(
+        fake.url, "get_registered_url_aliases", lambda: {"<FIRST>": "s3://a/images", "<SECOND>": "gs://b/images"}
+    )
+    monkeypatch.setattr("tlc_plugin_sdk.shared.url_utils.get_url_column_names", lambda table: ["image"])
+    result = aliases.get_table_aliases("s3://project/table")
+    assert [(item["token"], item["current_path"]) for item in result] == [
+        ("FIRST", "s3://a/images"),
+        ("SECOND", "gs://b/images"),
+    ]
