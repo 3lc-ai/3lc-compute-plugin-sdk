@@ -2207,6 +2207,9 @@ services. The selected team's membership is checked by Config. Connection owners
 choose deployment binding. Personal service binding requires the separate deployment-record
 contract and is not represented as a team id or a one-person organization.
 
+## Deployment scan locations
+
+Providers advertising `workspace_scan_urls: true` accept `WorkspaceRequest.project_scan_urls`, a list of additional locations to index for projects, tables and runs. These are distinct from storage permissions and the writable project root. Validate read access before provisioning and configure both deployment services through 3LC’s `scan-urls` setting (`TLC_SCAN_URLS` accepts a comma-separated list). Omit the environment override when no locations are selected so centrally configured scans remain effective. The host refuses explicit scan locations for older providers rather than silently dropping them.
 
 ### Table data that must be local
 

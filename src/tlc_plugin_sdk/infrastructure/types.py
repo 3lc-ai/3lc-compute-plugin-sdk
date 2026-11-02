@@ -306,6 +306,7 @@ class WorkspaceRequest:
     availability_zone: str = ""
     launcher_service_id: str = ""
     detailed_diagnostics: bool = False
+    project_scan_urls: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Any) -> WorkspaceRequest:
@@ -318,6 +319,7 @@ class WorkspaceRequest:
             name=_str(d.get("name")),
             bootstrap_plugins=_str_list(d.get("bootstrap_plugins")),
             data_buckets=_str_list(d.get("data_buckets")),
+            project_scan_urls=_str_list(d.get("project_scan_urls")),
             create_bucket=_bool(d.get("create_bucket")),
             seed_provider_configs=_bool(d.get("seed_provider_configs")),
             workspace_id=_stripped(d.get("workspace_id")),
@@ -342,6 +344,7 @@ class WorkspaceRequest:
             "name": self.name,
             "bootstrap_plugins": list(self.bootstrap_plugins),
             "data_buckets": list(self.data_buckets),
+            "project_scan_urls": list(self.project_scan_urls),
             "create_bucket": self.create_bucket,
             "seed_provider_configs": self.seed_provider_configs,
             "workspace_id": self.workspace_id,
