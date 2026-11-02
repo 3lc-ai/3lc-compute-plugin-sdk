@@ -2206,3 +2206,19 @@ the launch body into the Config `workspace.create` grant. Null/omitted selects o
 services. The selected team's membership is checked by Config. Connection ownership does not
 choose deployment binding. Personal service binding requires the separate deployment-record
 contract and is not represented as a team id or a one-person organization.
+
+
+### Table data that must be local
+
+A plugin whose image reader requires filesystem paths declares
+`requires_local_table_data = true` in `[runtime]`. This is independent of
+`requires_gpu`: it applies on the deployment host and on an added worker.
+Leave it unset for readers that support cloud URLs through `tlc`.
+
+The shared preflight shows a copy hint without moving data. Starting a run opens
+the data confirmation; only confirming starts preparation. The host offers copy
+or an existing local path, never streaming for such a plugin. The data-copy job
+runs ahead of the dependent run on the same execution queue. Its resolved alias
+overrides apply to that run only; the original table and project aliases remain
+unchanged. A failed or cancelled copy prevents execution of the dependent run.
+
