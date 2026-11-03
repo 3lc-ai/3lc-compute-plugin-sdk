@@ -13,8 +13,12 @@
   var PROTOCOL = 1;
   var FRAME_VERSION = '__SDK_FRAME_VERSION__';
   var CALL_TIMEOUT_MS = 30000;
-  var DEFAULT_CAPABILITIES = ['compute.request', 'jobs.cancel', 'ui.toast', 'pickers.table', 'credentials.choose',
-    'nodes.create', 'run.plan', 'run.checkTable', 'data.snapshot', 'nav.go', 'nav.open', 'sockets.ticket'];
+  // The calls every page may make, by their PLUGIN_API names (`has('http.request')`) and by the names
+  // they travel under ('compute.request').
+  var DEFAULT_CAPABILITIES = ['http.request', 'compute.request', 'jobs.cancel', 'jobs.confirmCancel', 'ui.toast',
+    'pickers.table', 'credentials.choose', 'storage.choose', 'nodes.create', 'run.plan', 'run.checkTable',
+    'data.snapshot', 'nav.go', 'nav.open', 'sockets.ticket'];
+  var TERMINAL = ['completed', 'failed', 'cancelled'];
 
   var hubOrigin = new URLSearchParams(location.search).get('hub') || '';
   var port = null;
@@ -356,7 +360,9 @@
           jobs = Array.isArray(jobs) ? jobs : ((jobs && jobs.jobs) || []);
           var seen = snapshotSeen || {};
           jobs.forEach(function (job) {
-            if (job && job.id && job.plugin_id === init.pluginId && !seen[job.id]) {
+            // Only jobs still under way: a finished one the page missed is in its list, and replaying it
+            // would make a page that counts or toasts updates react to an old job again.
+            if (job && job.id && job.plugin_id === init.pluginId && !seen[job.id] && TERMINAL.indexOf(job.status) < 0) {
               socket.onevent({ data: ['job_update', job] });
             }
           });
@@ -683,7 +689,26 @@
     }
   }
 
+  // A page that cannot start says why instead of staying blank.
+  function showFailure(error) {
+    console.error('[3LC] The plugin page could not start:', error);
+    var root = document.getElementById('tlc-plugin-root');
+    if (root) root.textContent = 'This plugin page could not start: ' + ((error && error.message) || String(error));
+  }
+
+  // The Hub's contract (MAJOR.MINOR) must be this runtime's: the calls behave differently across them (in 0.7
+  // jobs.cancel cancels at once; before, it asked). An unknown one (an older Hub says none) is let through.
+  function contractMismatch(hubContract) {
+    var hub = /^(\d+)\.(\d+)/.exec(String(hubContract || '')), own = /^(\d+)\.(\d+)/.exec(FRAME_VERSION);
+    if (!hub || !own || (hub[1] === own[1] && hub[2] === own[2])) return '';
+    var hubOlder = Number(hub[1]) < Number(own[1]) || (hub[1] === own[1] && Number(hub[2]) < Number(own[2]));
+    return 'This Hub runs plugin contract ' + hub[0] + ' and this compute service ' + own[0] + '. Update the '
+      + (hubOlder ? 'Hub' : 'compute service') + ' to open this plugin page.';
+  }
+
   function start(init) {
+    var mismatch = contractMismatch(init.contractVersion);
+    if (mismatch) return Promise.reject(failure('unsupported', mismatch));
     var html = document.documentElement;
     if (init.theme) html.setAttribute('data-theme', init.theme);
     if (init.rootStyle) html.style.cssText = init.rootStyle;
@@ -716,7 +741,7 @@
     if (!data || data.v !== PROTOCOL || data.type !== 'init' || !event.ports || !event.ports[0]) return;
     port = event.ports[0];
     port.onmessage = onPortMessage;
-    start(data);
+    start(data).catch(showFailure);
   });
 
   window.addEventListener('pagehide', function () { closePort('The plugin page was unloaded.'); });

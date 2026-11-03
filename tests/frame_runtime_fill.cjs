@@ -40,6 +40,20 @@ async function main() {
   assert.equal(await API.storage.choose('aws', {ask: 'always'}), 'c-2');
   assert.equal(JSON.stringify(posted.filter(m => m.method === 'storage.choose').map(m => m.args)), JSON.stringify([['aws', {ask: 'always'}]]));
   assert.equal(API.storage.remembered('aws'), 'c-2');
-  console.log('fill layout, nav.href and storage passed');
+  assert.equal(API.has('http.request'), true, 'a page asks by the names it calls');
+
+  // A Hub on another contract is told, and the page does not start.
+  const root2 = {querySelector: () => null, querySelectorAll: () => [], innerHTML: '', textContent: ''};
+  const ctx2 = {...context, document: {...doc, getElementById: () => root2}, console: {...console, error() {}}};
+  delete ctx2.PLUGIN_API; delete ctx2.PluginJobs;
+  const events2 = {};
+  ctx2.addEventListener = (name, fn) => events2[name] = fn; ctx2.window = ctx2;
+  vm.createContext(ctx2); vm.runInContext(source, ctx2);
+  events2.message({data: {v: 1, type: 'init', pluginId: 'one', html: 'hello', contractVersion: '0.6',
+    config: {compute_service_url: 'https://compute.test'}}, source: parent, origin: 'https://hub.test', ports: [{close() {}, postMessage() {}}]});
+  await new Promise(setImmediate);
+  assert.equal(ctx2.PLUGIN_API, undefined, 'no API on a mismatched contract');
+  assert.match(root2.textContent, /contract 0\.6 .*Update the Hub/);
+  console.log('fill layout, nav.href, storage and contract check passed');
 }
 main().catch(error => {console.error(error); process.exitCode = 1;});

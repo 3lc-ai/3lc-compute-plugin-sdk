@@ -1,7 +1,8 @@
 // Copyright 2026 3LC Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The browser-side plugin contract — ships in 3lc-compute-plugin-sdk 0.3.0.
+// The browser-side plugin contract. The framed runtime's namespaces (http, jobs, ...) ship in
+// 3lc-compute-plugin-sdk 0.7.0; a page checks `PLUGIN_API.protocol` before using them.
 //
 // This file DECLARES the JavaScript surface a plugin's `ui.html` programs against.
 // It does not implement it:
@@ -28,21 +29,22 @@
 //   /// <reference path="../contract/plugin-api.d.ts" />
 //
 //   var API = window.PLUGIN_API;          // typed
-//   API.authFetch(API.getConfig('compute_service_url') + '/api/plugins/x/compute');
-//   PluginJobs.run('my-plugin', { table_url: url }, { onDone: function (job) {} });
+//   if (!API.protocol) { /* an inline Hub: say it needs updating */ }
+//   API.http.request('/api/plugins/x/compute');
+//   API.jobs.run('my-plugin', { table_url: url }, { onDone: function (job) {} });
 
 // ── Object / Compute service method bags (TlcApi) ──────────────────────────────
 
 /**
- * Compute-service method bag, exposed as `PLUGIN_API.compute`.
- * Currently only `getHealth()` (GET /health).
+ * An inline host's `PLUGIN_API.compute` (SDK 0.6 and earlier): only `getHealth()` (GET /health).
+ * A framed page has none; it uses `http.request`.
  */
 export interface TlcComputeService {
   getHealth(): Promise<object>;
 }
 
 /**
- * Object-service method bag, exposed as `PLUGIN_API.objects`.
+ * An inline host's `PLUGIN_API.objects` (SDK 0.6 and earlier). A framed page has none.
  * All methods go through `authFetch` against the object-service URL; object URLs
  * are encoded via `TlcApi.encodeObjectUrl`.
  */
@@ -362,24 +364,27 @@ export interface PluginResultOptions {
  * for nothing else. Many plugins alias it: `var API = window.PLUGIN_API`.
  */
 export interface PluginApi {
-  /** Frame protocol (independent of SDK package version). Available in framed hosts. */
+  /**
+   * Frame protocol (independent of SDK package version). Set in framed hosts only; the namespaces
+   * below that say "framed hosts" exist exactly when it is, so check it once before using them.
+   */
   protocol?: number;
   frameVersion?: string;
   has?(capability: string): boolean;
-  lifecycle: { onDispose(callback: () => void): () => void };
+  lifecycle?: { onDispose(callback: () => void): () => void };
   /** Authenticated, host-mediated request to an allowed compute route. Framed hosts (SDK 0.7). */
-  http: { request(url: string, options?: PluginFetchOptions): Promise<Response> };
+  http?: { request(url: string, options?: PluginFetchOptions): Promise<Response> };
   /**
    * `cancel` cancels at once and resolves the compute's answer (`{cancelled}`): for a page's own Stop
    * button. `confirmCancel` opens the Hub's stop dialog (which can also delete the run) and resolves what
    * the person chose, `{status: 'dismissed'}` when they keep the job.
    */
-  jobs: Omit<PluginJobsApi, "cancel"> & {
+  jobs?: Omit<PluginJobsApi, "cancel"> & {
     cancel(jobId: string): Promise<{ cancelled: boolean; [key: string]: unknown }>;
     confirmCancel(jobId: string): Promise<{ status?: string; deleted?: boolean; [key: string]: unknown }>;
   };
-  pickers: { table(): Promise<string | null> };
-  credentials: { choose(service: string): Promise<string | null>; remembered(service: string): string | null };
+  pickers?: { table(): Promise<string | null> };
+  credentials?: { choose(service: string): Promise<string | null>; remembered(service: string): string | null };
   /**
    * The keyless Connection this plugin's jobs reach project storage through, for a provider the
    * manifest lists under `[runtime] storage_connections` (e.g. `"aws"`). Resolves its id, or null when
@@ -391,12 +396,12 @@ export interface PluginApi {
     choose(provider: string, options?: { ask?: 'if-needed' | 'always' }): Promise<string | null>;
     remembered(provider: string): string | null;
   };
-  nodes: {
+  nodes?: {
     create(providerId: string, request?: Record<string, unknown>): Promise<object | false>;
     mount(element: HTMLElement, options?: { openNodes?: boolean; openHistory?: boolean }): { refresh(): void; destroy(): void };
   };
-  run: { plan(body: Record<string, unknown>): Promise<PluginRunPlan>; checkTable(url: string): Promise<{ ok: boolean; notes: string[] }> };
-  nav: {
+  run?: { plan(body: Record<string, unknown>): Promise<PluginRunPlan>; checkTable(url: string): Promise<{ ok: boolean; notes: string[] }> };
+  nav?: {
     go(path: string): Promise<unknown>;
     open(url: string): Promise<unknown>;
     onChange(callback: (state: unknown) => void): () => void;
@@ -414,8 +419,8 @@ export interface PluginApi {
    * scrolls inside itself, so `100dvh` and `innerHeight` are that space. Framed hosts only.
    */
   layout?: { mode: 'flow' | 'fill' };
-  format: { date(value: string | number, mode?: string): string };
-  ui: { toast(message: string, kind?: string): void };
+  format?: { date(value: string | number, mode?: string): string };
+  ui?: { toast(message: string, kind?: string): void };
   identity?: { name(): Promise<string> };
 
   /** Launch context (resource type/urls + project). */
