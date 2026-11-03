@@ -57,7 +57,7 @@ def test_bundle_zips_the_prefix_with_relative_paths_and_reports_progress(tmp_pat
     stored: list[Path] = []
     registry = _registry(objects, stored, keep=tmp_path)
     first = registry.start(url="s3://bucket/data/fire", name="fire")
-    assert first["state"] in ("listing", "running") and first["bundle_id"]
+    assert first["state"] == "listing" and first["bundle_id"]
     status = _wait(registry, first["bundle_id"])
     assert status["state"] == "done", status
     assert status["files_total"] == 2 and status["files_done"] == 2

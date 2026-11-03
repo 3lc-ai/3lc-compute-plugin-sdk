@@ -151,8 +151,10 @@ class BundleRegistry:
         # request's Connection (``connections.current_credential()``) from it, and a bare thread
         # would start with none and fall back to the deployment's own identity.
         context = contextvars.copy_context()
+        # Taken before the thread starts, which may otherwise have moved past ``listing`` already.
+        first = bundle.public()
         threading.Thread(target=context.run, args=(self._run, bundle), name=f"bundle-{bundle.id}", daemon=True).start()
-        return bundle.public()
+        return first
 
     def status(self, bundle_id: str) -> dict[str, Any] | None:
         """The bundle's status, or None when unknown (or expired)."""
