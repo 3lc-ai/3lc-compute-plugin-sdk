@@ -341,10 +341,17 @@
       // Renew in place well before the server lease expires. A transient failure
       // leaves live updates flowing and retries; it never stops or restarts a job.
       var timer = null, snapshotTimer = null, generation = 0, closed = false, snapshotSeen = null;
+      // Jobs this page last saw under way: after a reconnect, one of them that finished meanwhile is replayed,
+      // so the page learns how it ended.
+      var underWay = {};
       var receive = socket.onevent;
       socket.onevent = function (packet) {
         var args = packet.data || [], job = args[1];
         if (snapshotSeen && args[0] === 'job_update' && job && job.id) snapshotSeen[job.id] = true;
+        if (args[0] === 'job_update' && job && job.id) {
+          if (TERMINAL.indexOf(job.status) < 0) underWay[job.id] = true;
+          else delete underWay[job.id];
+        }
         return receive.call(socket, packet);
       };
       function clearSnapshot() {
@@ -360,9 +367,11 @@
           jobs = Array.isArray(jobs) ? jobs : ((jobs && jobs.jobs) || []);
           var seen = snapshotSeen || {};
           jobs.forEach(function (job) {
-            // Only jobs still under way: a finished one the page missed is in its list, and replaying it
-            // would make a page that counts or toasts updates react to an old job again.
-            if (job && job.id && job.plugin_id === init.pluginId && !seen[job.id] && TERMINAL.indexOf(job.status) < 0) {
+            // Jobs still under way, and those this page saw under way that ended while it was away. Not a job that
+            // ended before: it is in the page's list, and replaying it would make a page that counts or toasts
+            // updates react to an old job again.
+            var ended = TERMINAL.indexOf(job && job.status) >= 0;
+            if (job && job.id && job.plugin_id === init.pluginId && !seen[job.id] && (!ended || underWay[job.id])) {
               socket.onevent({ data: ['job_update', job] });
             }
           });
