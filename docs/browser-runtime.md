@@ -13,6 +13,13 @@ fragment, theme, launch context and a private MessagePort. The runtime accepts
 initialization only from the expected parent origin. It installs `window.PLUGIN_API`
 before evaluating the fragment's scripts, in document order.
 
+The frame never fetches from the Hub's address. Its `ready` message says
+`inlineAssets: 1`, and the Hub then sends its own stylesheets and libraries as
+text (`{css}`, `{js}`) instead of URLs. Chrome's Local Network Access blocks a
+frame on a public Compute from loading files from a Hub on a private address,
+such as an internal or on-prem Hub. Files from another origin (a font service)
+still arrive as URLs.
+
 The Hub owns sign-in and all authorization decisions. The SDK provides convenience,
 serialization and lifecycle handling; it is not an authorization boundary. Every
 bridge operation must be validated by the Hub, and Compute must independently
