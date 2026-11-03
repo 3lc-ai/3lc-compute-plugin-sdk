@@ -39,6 +39,7 @@ Capture `const API = window.PLUGIN_API` inside your fragment. Prefer these names
 | `jobs.cancel(jobId)` | Explicit user cancellation through the trusted host confirmation flow |
 | `pickers.table()` | Host table picker; URL or null on dismissal |
 | `credentials.choose/remembered` | Select or recall a credential identifier, never a secret |
+| `storage.choose/remembered` | Select or recall the keyless Connection jobs reach project storage through (`[runtime] storage_connections`) |
 | `nodes.create/mount` | Host provisioning flow and frame-local node list |
 | `run.plan/checkTable` | Host planning and table accessibility checks |
 | `nav.go/open/onChange` | Host navigation, external link and unsubscribe-able navigation events |

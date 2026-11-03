@@ -18,10 +18,16 @@ async function main() {
     ResizeObserver: class {observe(el) {observed.push(el);} disconnect() {}},
     setTimeout: () => 0, clearTimeout() {}};
   context.window = context; vm.createContext(context); vm.runInContext(source, context);
-  const port = {close() {}, postMessage() {}};
+  const posted = [];
+  const port = {close() {}, postMessage(message) {
+    posted.push(message);
+    if (message.type === 'call' && message.method === 'storage.choose') {
+      queueMicrotask(() => port.onmessage({data: {v: 1, type: 'reply', id: message.id, ok: true, value: 'c-2'}}));
+    }
+  }};
   events.message({data: {v: 1, type: 'init', pluginId: 'one', layout: 'fill', html: 'hello',
     page: 'https://hub.test/plugin/one', hubQuery: {compute_service: 'https://c.test'},
-    config: {compute_service_url: 'https://compute.test'}},
+    config: {compute_service_url: 'https://compute.test'}, storage: {aws: 'c-1'}},
     source: parent, origin: 'https://hub.test', ports: [port]});
   await new Promise(setImmediate);
   const API = context.PLUGIN_API;
@@ -30,6 +36,10 @@ async function main() {
   assert.equal(observed.length, 0, 'a fill page reports no height');
   assert.equal(API.nav.href({search: 'view=reviews'}),
     'https://hub.test/plugin/one?view=reviews&compute_service=https%3A%2F%2Fc.test', "the Hub's keys stay");
-  console.log('fill layout and nav.href passed');
+  assert.equal(API.storage.remembered('aws'), 'c-1', 'the remembered storage Connection comes with init');
+  assert.equal(await API.storage.choose('aws', {ask: 'always'}), 'c-2');
+  assert.equal(JSON.stringify(posted.filter(m => m.method === 'storage.choose').map(m => m.args)), JSON.stringify([['aws', {ask: 'always'}]]));
+  assert.equal(API.storage.remembered('aws'), 'c-2');
+  console.log('fill layout, nav.href and storage passed');
 }
 main().catch(error => {console.error(error); process.exitCode = 1;});

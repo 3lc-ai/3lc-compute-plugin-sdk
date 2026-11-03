@@ -371,6 +371,17 @@ export interface PluginApi {
   jobs: Omit<PluginJobsApi, "cancel"> & { cancel(jobId: string): Promise<unknown> };
   pickers: { table(): Promise<string | null> };
   credentials: { choose(service: string): Promise<string | null>; remembered(service: string): string | null };
+  /**
+   * The keyless Connection this plugin's jobs reach project storage through, for a provider the
+   * manifest lists under `[runtime] storage_connections` (e.g. `"aws"`). Resolves its id, or null when
+   * there is none or the person cancels; send it as the run's `storage_connection_id`, and the compute
+   * service obtains the grant. `ask: 'if-needed'` (default) opens the Hub's chooser only when there is
+   * a choice to make; `'always'` opens it to change the choice. Framed hosts only: feature-detect.
+   */
+  storage?: {
+    choose(provider: string, options?: { ask?: 'if-needed' | 'always' }): Promise<string | null>;
+    remembered(provider: string): string | null;
+  };
   nodes: {
     create(providerId: string, request?: Record<string, unknown>): Promise<object | false>;
     mount(element: HTMLElement, options?: { openNodes?: boolean; openHistory?: boolean }): { refresh(): void; destroy(): void };

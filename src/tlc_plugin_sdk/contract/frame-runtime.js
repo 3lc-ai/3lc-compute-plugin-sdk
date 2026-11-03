@@ -420,6 +420,7 @@
   function buildApi(init) {
     runTarget = init.runTarget || { target: 'local', ready: true, label: '' };
     var credentials = init.credentials || {};
+    var storage = init.storage || {};
     var capabilities = DEFAULT_CAPABILITIES.concat(init.capabilities || []);
     var alert = component(init.components && init.components.alert, 'TlcAlert');
     var nodeList = component(init.components && init.components.nodeList, 'TlcNodeList', nodeListApi(init));
@@ -457,6 +458,16 @@
           return call('credentials.choose', [String(service)], 600000).then(function (id) { if (id) credentials[service] = id; return id; });
         },
         remembered: function (service) { return credentials[service] || null; },
+      },
+      storage: {
+        choose: function (provider, options) {
+          var ask = options && options.ask === 'always' ? 'always' : 'if-needed';
+          return call('storage.choose', [String(provider), { ask: ask }], 600000).then(function (id) {
+            if (id) storage[provider] = id;
+            return id;
+          });
+        },
+        remembered: function (provider) { return storage[provider] || null; },
       },
       nodes: {
         create: function (providerId, request) { return call('nodes.create', [String(providerId), request || {}], 600000); },
