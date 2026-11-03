@@ -31,6 +31,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -206,14 +207,6 @@ class Manifest:
 
 
 def _toml_load(path: Path) -> dict[str, Any]:
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:  # pragma: no cover - Python 3.10 only
-        try:
-            import tomli as tomllib
-        except ModuleNotFoundError as exc:
-            msg = "Reading a plugin manifest on Python 3.10 needs the 'tomli' package"
-            raise RuntimeError(msg) from exc
     with path.open("rb") as f:
         return tomllib.load(f)
 
