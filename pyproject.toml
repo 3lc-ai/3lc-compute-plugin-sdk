@@ -94,6 +94,10 @@ artifacts = [
 [tool.uv]
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'", "sys_platform == 'win32'"]
 
+# numpy 2.5 stubs use PEP 695 `type` statements, which mypy rejects under `python_version = 3.11`.
+# Lock-only, as in tlc-monorepo: not applied on 3.15+, where no numpy before 2.5 ships wheels.
+constraint-dependencies = ["numpy<2.5; python_version < '3.15'"]
+
 # The core this SDK requires is a staged build, not yet on PyPI: it resolves from the private
 # `staging` index (CloudRepo `prereleases`) with UV_INDEX_STAGING_USERNAME / _PASSWORD set. The
 # index is `explicit`, so only 3lc comes from it. Sources are not transitive: a plugin locking
