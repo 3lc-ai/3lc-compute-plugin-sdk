@@ -35,5 +35,7 @@ implement.
 :caption: Contents
 
 plugin-guide
+browser-runtime
+agent-guide
 api
 ```

@@ -1,7 +1,8 @@
 // Copyright 2026 3LC Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The browser-side plugin contract — ships in 3lc-compute-plugin-sdk 0.3.0.
+// The browser-side plugin contract. The framed runtime's namespaces (http, jobs, ...) ship in
+// 3lc-compute-plugin-sdk 0.7.0; a page checks `PLUGIN_API.protocol` before using them.
 //
 // This file DECLARES the JavaScript surface a plugin's `ui.html` programs against.
 // It does not implement it:
@@ -28,21 +29,22 @@
 //   /// <reference path="../contract/plugin-api.d.ts" />
 //
 //   var API = window.PLUGIN_API;          // typed
-//   API.authFetch(API.getConfig('compute_service_url') + '/api/plugins/x/compute');
-//   PluginJobs.run('my-plugin', { table_url: url }, { onDone: function (job) {} });
+//   if (!API.protocol) { /* an inline Hub: say it needs updating */ }
+//   API.http.request('/api/plugins/x/compute');
+//   API.jobs.run('my-plugin', { table_url: url }, { onDone: function (job) {} });
 
 // ── Object / Compute service method bags (TlcApi) ──────────────────────────────
 
 /**
- * Compute-service method bag, exposed as `PLUGIN_API.compute`.
- * Currently only `getHealth()` (GET /health).
+ * An inline host's `PLUGIN_API.compute` (SDK 0.6 and earlier): only `getHealth()` (GET /health).
+ * A framed page has none; it uses `http.request`.
  */
 export interface TlcComputeService {
   getHealth(): Promise<object>;
 }
 
 /**
- * Object-service method bag, exposed as `PLUGIN_API.objects`.
+ * An inline host's `PLUGIN_API.objects` (SDK 0.6 and earlier). A framed page has none.
  * All methods go through `authFetch` against the object-service URL; object URLs
  * are encoded via `TlcApi.encodeObjectUrl`.
  */
@@ -362,6 +364,65 @@ export interface PluginResultOptions {
  * for nothing else. Many plugins alias it: `var API = window.PLUGIN_API`.
  */
 export interface PluginApi {
+  /**
+   * Frame protocol (independent of SDK package version). Set in framed hosts only; the namespaces
+   * below that say "framed hosts" exist exactly when it is, so check it once before using them.
+   */
+  protocol?: number;
+  frameVersion?: string;
+  has?(capability: string): boolean;
+  lifecycle?: { onDispose(callback: () => void): () => void };
+  /** Authenticated, host-mediated request to an allowed compute route. Framed hosts (SDK 0.7). */
+  http?: { request(url: string, options?: PluginFetchOptions): Promise<Response> };
+  /**
+   * `cancel` cancels at once and resolves the compute's answer (`{cancelled}`): for a page's own Stop
+   * button. `confirmCancel` opens the Hub's stop dialog (which can also delete the run) and resolves what
+   * the person chose, `{status: 'dismissed'}` when they keep the job.
+   */
+  jobs?: Omit<PluginJobsApi, "cancel"> & {
+    cancel(jobId: string): Promise<{ cancelled: boolean; [key: string]: unknown }>;
+    confirmCancel(jobId: string): Promise<{ status?: string; deleted?: boolean; [key: string]: unknown }>;
+  };
+  pickers?: { table(): Promise<string | null> };
+  credentials?: { choose(service: string): Promise<string | null>; remembered(service: string): string | null };
+  /**
+   * The keyless Connection this plugin's jobs reach project storage through, for a provider the
+   * manifest lists under `[runtime] storage_connections` (e.g. `"aws"`). Resolves its id, or null when
+   * there is none or the person cancels; send it as the run's `storage_connection_id`, and the compute
+   * service obtains the grant. `ask: 'if-needed'` (default) opens the Hub's chooser only when there is
+   * a choice to make; `'always'` opens it to change the choice. Framed hosts only: feature-detect.
+   */
+  storage?: {
+    choose(provider: string, options?: { ask?: 'if-needed' | 'always' }): Promise<string | null>;
+    remembered(provider: string): string | null;
+  };
+  nodes?: {
+    create(providerId: string, request?: Record<string, unknown>): Promise<object | false>;
+    mount(element: HTMLElement, options?: { openNodes?: boolean; openHistory?: boolean }): { refresh(): void; destroy(): void };
+  };
+  run?: { plan(body: Record<string, unknown>): Promise<PluginRunPlan>; checkTable(url: string): Promise<{ ok: boolean; notes: string[] }> };
+  nav?: {
+    go(path: string): Promise<unknown>;
+    open(url: string): Promise<unknown>;
+    onChange(callback: (state: unknown) => void): () => void;
+    state?(state: { search?: string; hash?: string }, options?: { push?: boolean }): Promise<unknown>;
+    /**
+     * The Hub address of this plugin page with `state` as its query and hash: the link to give people
+     * (a review, a preview). The frame's own address is the compute service's, never one to share.
+     * The Hub's own keys (the deployment's services) are kept. Framed hosts only.
+     */
+    href?(state?: { search?: string; hash?: string }): string;
+  };
+  /**
+   * How the Hub sizes the frame. `flow` (default): the frame grows with the page. `fill`
+   * (`[ui] layout = "fill"`): the frame takes the space the Hub has below its header and the page
+   * scrolls inside itself, so `100dvh` and `innerHeight` are that space. Framed hosts only.
+   */
+  layout?: { mode: 'flow' | 'fill' };
+  format?: { date(value: string | number, mode?: string): string };
+  ui?: { toast(message: string, kind?: string): void };
+  identity?: { name(): Promise<string> };
+
   /** Launch context (resource type/urls + project). */
   context: PluginContext;
 
@@ -462,10 +523,10 @@ export interface PluginApi {
   dashboardUrl(params: { table?: string; project?: string; run?: string }): string;
 
   /**
-   * Authenticated `fetch`. Injects `Authorization` (from `TlcAuth`) and a default
+   * Host-mediated `fetch`; credentials stay in the Hub. Adds a default
    * `Accept: application/json`; sets `Content-Type: application/json` when the body
-   * is a string. Aborts after `options.timeout` ms (default 10000) unless the
-   * caller supplies a `signal`. Rejects non-ok responses with the parsed
+   * is a string. Aborts after `options.timeout` ms (default 10000) and supports
+   * caller abort through `signal`. Rejects non-ok responses with the parsed
    * detail/message. The most-used bridge member.
    */
   authFetch(url: string, options?: PluginFetchOptions): Promise<Response>;
@@ -494,7 +555,7 @@ export interface PluginApi {
    * changes — re-validate any selected data via `checkDataForRunTarget`.
    * Listeners are cleared when the fragment unmounts.
    */
-  onRunTargetChange?(callback: () => void): void;
+  onRunTargetChange?(callback: () => void): () => void;
 
   /**
    * Selection-time data verdict for the current run target: can this table work
@@ -527,12 +588,6 @@ export interface PluginApi {
    * browser never sends `_alias_overrides`. Absent on older frontends.
    */
   planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;
-
-  /** Reference to `TlcApi.computeService` (currently only `getHealth()`). */
-  compute: TlcComputeService;
-
-  /** Reference to `TlcApi.objectService`. Plugins usually reach data via `authFetch`. */
-  objects: TlcObjectService;
 
   /** Reference to the global `TlcData` helper (`null` if `TlcData` is undefined at mount). */
   data: TlcData | null;

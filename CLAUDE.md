@@ -198,3 +198,8 @@ section is the condensed working order.
   `threading.Event` for cancel) and assert the emitted `progress`/`metric`/`result`
   events — no GPU or queue needed.
 - The fragment through `tlc_plugin_sdk.lint.lint_plugin(dir)` — no findings.
+
+## Isolated browser runtime
+
+For SDK 0.7.0 framed hosts, follow the [browser runtime guide](docs/browser-runtime.md) and [agent instructions](docs/agent-guide.md).
+The framed runtime supersedes legacy inline/global browser examples in this document.
