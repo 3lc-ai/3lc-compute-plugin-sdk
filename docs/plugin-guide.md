@@ -2018,7 +2018,7 @@ min_frontend_version = "0.1.0"  # Minimum frontend version for this plugin's UI
 
 - **Compatible** plugins load normally and appear in the sidebar.
 - **Incompatible** plugins are still loaded but **disabled** — visible in the sidebar with an "update" badge, grayed out, not clickable. Users can see what's available but can't use it until the service is updated.
-- The Settings → Plugins page shows an "Incompatible" badge with the reason.
+- The Plugins page shows an "Incompatible" badge with the reason.
 
 ### Plugin catalog fields
 
@@ -2088,7 +2088,7 @@ plugin, not a workaround.
 ### Trying it out
 
 Host the JSON somewhere reachable — a raw GitHub file URL is the easiest — and point a
-tester's Hub at it: **Settings → Plugins → Catalogs → add URL**. Your plugin then shows up
+tester's Hub at it: **Plugins → Catalogs → add URL**. Your plugin then shows up
 as an installable card; Install resolves whatever `source` you declared. (A local `file://`
 path works too for testing on your own machine; plaintext `http://` is only accepted for a
 loopback host.)
