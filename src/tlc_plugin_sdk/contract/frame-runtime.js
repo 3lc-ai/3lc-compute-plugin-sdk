@@ -450,8 +450,15 @@
       has: has,
       getConfig: function (key) { return (init.config || {})[key] || ''; },
       // Namespaced calls (protocol 1).
-      compute: { request: computeRequest },
-      jobs: { cancel: function (jobId, options) { return call('jobs.cancel', [String(jobId), { runUrl: (options && options.runUrl) || null }], 600000); } },
+      // `http`, not `compute`: an inline host's PLUGIN_API.compute was another object, so a check for it
+      // would pass on hosts without this call.
+      http: { request: computeRequest },
+      // cancel: at once, answering as the Compute does ({cancelled}). confirmCancel: the Hub's stop dialog,
+      // resolving what the person chose ({status: 'dismissed'} when they keep the job).
+      jobs: {
+        cancel: function (jobId) { return call('jobs.cancel', [String(jobId)]); },
+        confirmCancel: function (jobId) { return call('jobs.confirmCancel', [String(jobId)], 600000); },
+      },
       pickers: { table: function () { return call('pickers.table', [], 600000); } },
       credentials: {
         choose: function (service) {
@@ -555,9 +562,9 @@
     window.TlcData = api.data;
     window.CancelJob = {
       show: function (jobId, opts) {
-        deprecated('CancelJob', 'PLUGIN_API.jobs.cancel()');
+        deprecated('CancelJob', 'PLUGIN_API.jobs.confirmCancel()');
         if (!jobId) return;
-        api.jobs.cancel(jobId, opts).then(function (result) {
+        api.jobs.confirmCancel(jobId).then(function (result) {
           if (result && opts && typeof opts.onDone === 'function') opts.onDone(result);
         }, function (error) { api.showToast(error.message, 'error'); });
       },

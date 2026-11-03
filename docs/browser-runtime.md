@@ -1,6 +1,6 @@
 # Plugin browser runtime
 
-This guide describes the SDK 0.6.2 frame runtime and protocol 1. It supplements
+This guide describes the SDK 0.7.0 frame runtime and protocol 1. It supplements
 [the Python author guide](plugin-guide.md) and the [typed API](api.md).
 It requires a Compute host serving this SDK runtime and a Hub implementing the
 frame bridge. Installing a newer SDK in a plugin alone does not upgrade the host.
@@ -34,9 +34,10 @@ Capture `const API = window.PLUGIN_API` inside your fragment. Prefer these names
 
 | Surface | Purpose |
 | --- | --- |
-| `compute.request(url, options)` | Authenticated, host-mediated request to an allowed Compute route; returns a Response |
+| `http.request(url, options)` | Authenticated, host-mediated request to an allowed Compute route; returns a Response |
 | `jobs.start/run/track/list/on/connect` | Shared job lifecycle and subscriptions; automatically installed |
-| `jobs.cancel(jobId)` | Explicit user cancellation through the trusted host confirmation flow |
+| `jobs.cancel(jobId)` | Cancel at once; resolves the compute's `{cancelled}` |
+| `jobs.confirmCancel(jobId)` | The Hub's stop dialog; resolves what the person chose (`{status: 'dismissed'}` when they keep the job) |
 | `pickers.table()` | Host table picker; URL or null on dismissal |
 | `credentials.choose/remembered` | Select or recall a credential identifier, never a secret |
 | `storage.choose/remembered` | Select or recall the keyless Connection jobs reach project storage through (`[runtime] storage_connections`) |
@@ -71,7 +72,7 @@ const API = window.PLUGIN_API;
 const controller = new AbortController();
 API.lifecycle.onDispose(() => controller.abort());
 try {
-  const response = await API.compute.request('/api/plugins/my-plugin/compute', {
+  const response = await API.http.request('/api/plugins/my-plugin/compute', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ greeting: 'hello' }), signal: controller.signal
   });

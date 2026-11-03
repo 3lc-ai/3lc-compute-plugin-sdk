@@ -54,7 +54,7 @@ async function main() {
   let updates = 0, done = 0;
   await API.jobs.run('one', {}, {onUpdate: () => updates++, onDone: () => done++});
   assert.equal(updates, 1); assert.equal(done, 1);
-  // Legacy helper cancellation also passes through trusted confirmation exactly once.
+  // Legacy helper cancellation cancels at once, exactly once (the dialog is jobs.confirmCancel).
   await context.PluginJobs.cancel('early');
   assert.equal(apiCalls.filter(x => x.method === 'jobs.cancel').length, 1);
   let nav = 0; const off = API.nav.onChange(() => nav++);
@@ -68,12 +68,12 @@ async function main() {
   assert.equal(API.nav.href(), 'https://hub.test/plugin/one');
   assert.equal(API.layout.mode, 'flow');
   const abort = new AbortController();
-  const request = API.compute.request('/api/plugins/one/slow', {signal:abort.signal});
+  const request = API.http.request('/api/plugins/one/slow', {signal:abort.signal});
   abort.abort(); await assert.rejects(request, error => error.code === 'aborted');
   const before = apiCalls.length;
-  await assert.rejects(API.compute.request('/never', {signal:abort.signal}), error => error.code === 'aborted');
+  await assert.rejects(API.http.request('/never', {signal:abort.signal}), error => error.code === 'aborted');
   assert.equal(apiCalls.length, before);
-  const pending = API.compute.request('/api/plugins/one/still-running');
+  const pending = API.http.request('/api/plugins/one/still-running');
   const rejected = assert.rejects(pending, error => error.code === 'closed');
   let disposed = 0; API.lifecycle.onDispose(() => disposed++);
   if (process.argv[3] === 'host-close') port.onmessage({data:{v:1,type:'event',name:'closed'}});
@@ -85,7 +85,7 @@ async function main() {
   events.pagehide(); events.message(init); await new Promise(setImmediate);
   assert.equal(disposed, 1); assert.equal(disconnected, 1);
   assert.throws(() => API.libs.io('https://compute.test/one'), error => error.code === 'closed');
-  await assert.rejects(API.compute.request('/closed'), error => error.code === 'closed');
+  await assert.rejects(API.http.request('/closed'), error => error.code === 'closed');
   console.log('handshake, early completion, trusted cancellation, abort, unsubscribe, disposal and job preservation passed');
 }
 main().catch(error => {console.error(error); process.exitCode = 1;});

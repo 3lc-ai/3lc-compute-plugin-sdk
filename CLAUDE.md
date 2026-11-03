@@ -201,5 +201,5 @@ section is the condensed working order.
 
 ## Isolated browser runtime
 
-For SDK 0.6.2 framed hosts, follow the [browser runtime guide](docs/browser-runtime.md) and [agent instructions](docs/agent-guide.md).
+For SDK 0.7.0 framed hosts, follow the [browser runtime guide](docs/browser-runtime.md) and [agent instructions](docs/agent-guide.md).
 The framed runtime supersedes legacy inline/global browser examples in this document.

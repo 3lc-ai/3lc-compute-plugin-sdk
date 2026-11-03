@@ -15,7 +15,7 @@ build configuration before edits. Do not import host internals or copy a private
 3. Keep server-side data access in the 3lc Python SDK. Long operations use background
    jobs, durable progress/results and cooperative explicit cancellation. A UI or socket
    disconnect must not terminate the job. Never add cleanup that cancels remote work.
-4. Capture `window.PLUGIN_API`. Use `compute.request`, `jobs`, `pickers`, `credentials`,
+4. Capture `window.PLUGIN_API`. Use `http.request`, `jobs`, `pickers`, `credentials`,
    `nodes`, `run`, `nav`, `data` and `lifecycle`; consult the type declarations for exact
    signatures. No Hub globals, parent DOM access, browser secrets or custom auth flows.
 5. Use least-privilege manifest capabilities, reject invalid server inputs and verify

@@ -451,13 +451,13 @@ The complete namespaced surface, examples, errors, capabilities, cleanup and
 migration instructions are in [Plugin browser runtime](browser-runtime.md).
 The shipped `contract/plugin-api.d.ts` provides the exact signatures.
 
-Prefer `API.compute.request`, `API.jobs`, `API.pickers`, `API.credentials`,
+Prefer `API.http.request`, `API.jobs`, `API.pickers`, `API.credentials`,
 `API.nodes`, `API.run`, `API.nav`, `API.ui` and `API.lifecycle`.
 `getConfig`, `getRunTarget`, `onRunTargetChange`, `dashboardUrl`, `data`, `libs`,
 `getIcon`, `container` and `showResult` remain available. Feature-detect optional
 members and libraries. `guide` and `location` are unavailable in the frame.
 
-`compute.request` forwards allowed requests to the Hub; it never exposes credentials.
+`http.request` forwards allowed requests to the Hub; it never exposes credentials.
 Requests reject on refusal, timeout or transport failure. Handle errors in the UI.
 Long work uses the job API, not a long HTTP request. Unmounting the page must never
 cancel a job. Local listeners and widgets belong in `lifecycle.onDispose` cleanup.
@@ -2226,5 +2226,5 @@ unchanged. A failed or cancelled copy prevents execution of the dependent run.
 
 ## Isolated browser runtime
 
-For SDK 0.6.2 framed hosts, follow the [browser runtime guide](browser-runtime.md) and [agent instructions](agent-guide.md).
+For SDK 0.7.0 framed hosts, follow the [browser runtime guide](browser-runtime.md) and [agent instructions](agent-guide.md).
 The framed runtime supersedes legacy inline/global browser examples in this document.

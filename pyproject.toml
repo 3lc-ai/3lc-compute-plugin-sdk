@@ -7,7 +7,7 @@ name = "3lc-compute-plugin-sdk"
 # The plugin-contract (ABI) version. This IS tlc_plugin_sdk.SDK_CONTRACT_VERSION
 # (read back via importlib.metadata) — one source of truth. SemVer MAJOR.MINOR.PATCH;
 # the 0.x line is additive-only (see README → Status).
-version = "0.6.2"
+version = "0.7.0"
 description = "Public Python SDK for building 3LC compute-service plugins."
 # Matches the core's range (3lc 3.5: 3.11–3.15). uv refuses to lock a Python range the core cannot
 # resolve, so this moves with it.

@@ -367,8 +367,17 @@ export interface PluginApi {
   frameVersion?: string;
   has?(capability: string): boolean;
   lifecycle: { onDispose(callback: () => void): () => void };
-  compute: { request(url: string, options?: PluginFetchOptions): Promise<Response> };
-  jobs: Omit<PluginJobsApi, "cancel"> & { cancel(jobId: string): Promise<unknown> };
+  /** Authenticated, host-mediated request to an allowed compute route. Framed hosts (SDK 0.7). */
+  http: { request(url: string, options?: PluginFetchOptions): Promise<Response> };
+  /**
+   * `cancel` cancels at once and resolves the compute's answer (`{cancelled}`): for a page's own Stop
+   * button. `confirmCancel` opens the Hub's stop dialog (which can also delete the run) and resolves what
+   * the person chose, `{status: 'dismissed'}` when they keep the job.
+   */
+  jobs: Omit<PluginJobsApi, "cancel"> & {
+    cancel(jobId: string): Promise<{ cancelled: boolean; [key: string]: unknown }>;
+    confirmCancel(jobId: string): Promise<{ status?: string; deleted?: boolean; [key: string]: unknown }>;
+  };
   pickers: { table(): Promise<string | null> };
   credentials: { choose(service: string): Promise<string | null>; remembered(service: string): string | null };
   /**
