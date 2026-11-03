@@ -19,6 +19,9 @@ written for inline hosts need migrating.
   opens the Hub's stop dialog. Legacy `PluginJobs.cancel` cancels; `CancelJob` confirms.
 - `[ui] layout = "fill"`, `nav.href`, a frame address that follows the Hub's, and
   `storage.choose/remembered`.
+- The Hub's stylesheets and libraries may arrive as text (`{css}`, `{js}`): the frame's `ready`
+  says `inlineAssets: 1`, so a frame on a public Compute never fetches from a Hub on a private
+  address, which Chrome's Local Network Access blocks.
 - Forward request aborts, and dispose sockets/listeners/observers without cancelling jobs.
 - Document frame ownership, capabilities, errors, long-session recovery, migration,
   release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.

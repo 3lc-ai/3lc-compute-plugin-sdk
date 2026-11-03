@@ -6,6 +6,9 @@
 // with a private MessagePort, and every call after that runs on the port:
 //   frame -> Hub  {v, type: 'call', id, method, args} | {v, type: 'cancel', id} | {v, type: 'height', value}
 //   Hub -> frame  {v, type: 'reply', id, ok, value | error: {code, message, status?}} | {v, type: 'event', name, value}
+// `ready` says `inlineAssets: 1`: `init.styles` and `init.scripts` may then carry the Hub's own files as text
+// ({css} / {js}) instead of URLs, so the frame never fetches from the Hub's address (Chrome blocks a public
+// frame from loading a private-network Hub's files).
 // Canonical SDK-owned runtime. Compute serves the assembled package asset.
 (function () {
   'use strict';
@@ -614,6 +617,28 @@
 
   // ── Loading the page ──
 
+  // A Hub stylesheet: a URL to link, or `{css}`, its text.
+  function addStyle(entry) {
+    if (entry && typeof entry === 'object') {
+      var style = document.createElement('style');
+      style.textContent = String(entry.css || '');
+      document.head.appendChild(style);
+      return Promise.resolve();
+    }
+    return load('link', { rel: 'stylesheet', href: entry });
+  }
+
+  // A Hub library: a URL to load, or `{js}`, its text.
+  function addScript(entry) {
+    if (entry && typeof entry === 'object') {
+      var script = document.createElement('script');
+      script.text = String(entry.js || '');
+      document.head.appendChild(script);
+      return Promise.resolve();
+    }
+    return load('script', { src: entry });
+  }
+
   function load(tag, attributes) {
     return new Promise(function (resolve) {
       var el = document.createElement(tag);
@@ -724,9 +749,9 @@
     if (init.bodyClass) document.body.className = init.bodyClass;
     if (init.layout === 'fill') html.setAttribute('data-tlc-layout', 'fill');
     mirrorAddress({ search: init.search, hash: init.hash });
-    var styles = (init.styles || []).map(function (href) { return load('link', { rel: 'stylesheet', href: href }); });
-    var libraries = (init.scripts || []).reduce(function (previous, src) {
-      return previous.then(function () { return load('script', { src: src }); });
+    var styles = (init.styles || []).map(addStyle);
+    var libraries = (init.scripts || []).reduce(function (previous, entry) {
+      return previous.then(function () { return addScript(entry); });
     }, Promise.resolve());
     return Promise.all(styles.concat([libraries])).then(function () {
       if (disposed) return;
@@ -755,5 +780,5 @@
 
   window.addEventListener('pagehide', function () { closePort('The plugin page was unloaded.'); });
 
-  if (hubOrigin) window.parent.postMessage({ tlc: 'plugin-frame', v: PROTOCOL, type: 'ready', frameVersion: FRAME_VERSION }, hubOrigin);
+  if (hubOrigin) window.parent.postMessage({ tlc: 'plugin-frame', v: PROTOCOL, type: 'ready', frameVersion: FRAME_VERSION, inlineAssets: 1 }, hubOrigin);
 })();
