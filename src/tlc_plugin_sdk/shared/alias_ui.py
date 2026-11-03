@@ -11,7 +11,7 @@ Usage in a plugin's ``get_ui_fragment()``::
     from tlc_plugin_sdk.shared.alias_ui import alias_ui_script
     from tlc_plugin_sdk.shared.ui_inject import inject_scripts
 
-    raw = Path("ui.html").read_text()
+    raw = Path("ui.html").read_text(encoding="utf-8")
     html = inject_scripts(raw, alias_ui_script())
 """
 

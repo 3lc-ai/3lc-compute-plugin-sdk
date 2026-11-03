@@ -29,7 +29,7 @@ import os
 import shutil
 import uuid
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -133,10 +133,10 @@ class PluginConfigStore(Generic[T]):
         if not getattr(config, "id", ""):
             config.id = str(uuid.uuid4())  # type: ignore[attr-defined]
         if not getattr(config, "created", ""):
-            config.created = datetime.now(timezone.utc).isoformat()  # type: ignore[attr-defined]
+            config.created = datetime.now(UTC).isoformat()  # type: ignore[attr-defined]
         path = self._path(config.id)  # type: ignore[attr-defined]
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(asdict(config), f, indent=2)  # type: ignore[call-overload]
         _restrict(path, 0o600)  # an existing world-readable file is tightened too
         return config
@@ -157,7 +157,7 @@ class PluginConfigStore(Generic[T]):
         """Stamp ``last_run`` with the current time, if the config exists."""
         config = self.get_config(config_id)
         if config is not None:
-            config.last_run = datetime.now(timezone.utc).isoformat()  # type: ignore[attr-defined]
+            config.last_run = datetime.now(UTC).isoformat()  # type: ignore[attr-defined]
             self.save_config(config)
 
     # ── internals ────────────────────────────────────────────────────────
@@ -179,7 +179,7 @@ class PluginConfigStore(Generic[T]):
         if not path.exists():
             return None
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             known = {k: v for k, v in data.items() if k in self._cls.__dataclass_fields__}  # type: ignore[attr-defined]
             return self._cls(**known)

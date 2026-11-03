@@ -95,8 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again while the chooser is open. Declared in the contract; guide → Forms → "Path fields".
 - The contract documents that `PLUGIN_API.planRun` always resolves to a plan on a Hub 1.2 host and
   rejects when the run cannot be planned; the browser never sends `_alias_overrides`.
-- The supported Python range is `>=3.10,<3.15`, matching the host: the core has no Python 3.15 wheels yet,
-  and uv 0.13 cannot lock a range it cannot resolve.
+- Python 3.15 support. The supported range is `>=3.11,<3.16`, matching the core (3lc 3.5); the
+  floor `3lc` build is the first with cp315 wheels.
 
 ### Changed
 
@@ -459,6 +459,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `""` when the host has nothing to say.
 
 ### Removed
+- Python 3.10 support, which reached end of life on 2026-10-01. Python 3.11 is the minimum.
 - `CreateNodeRequest.wheelhouse`, added earlier in this cycle and never in a release: a provider
   no longer ships a directory of wheels to a node or points the node's installs at one. Wheels
   for an unpublished build reach a node by the host's own channel to the node agent.
