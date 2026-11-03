@@ -436,7 +436,7 @@ _ALIAS_TOKEN_RE = re.compile(r"<([A-Z][A-Z0-9_]*)>")
 def get_table_aliases(table_url: str) -> list[dict[str, str]]:
     """Discover which URL aliases a table uses.
 
-    Loads the table, reads image-path columns from the first row, and
+    Loads the table, reads stored URL columns without resolving their aliases, and
     returns every alias token that appears together with its current
     resolved path.
 
@@ -460,7 +460,7 @@ def get_table_aliases(table_url: str) -> list[dict[str, str]]:
     for m in _ALIAS_TOKEN_RE.finditer(input_url):
         found_tokens.add(m.group(1))
 
-    # Check a sample row from URL columns.
+    # Check all stored rows in URL columns.
     from tlc_plugin_sdk.shared.url_utils import get_url_column_names
 
     url_col_names = get_url_column_names(table)
@@ -469,13 +469,13 @@ def get_table_aliases(table_url: str) -> list[dict[str, str]]:
         try:
             # STORED values, not the sample view: table[i] resolves aliases through
             # this machine's registry, so tokens would already be expanded away here.
-            row = table.table_rows[0]
-            for col in url_col_names:
-                val = str(row.get(col, ""))
-                for m in _ALIAS_TOKEN_RE.finditer(val):
-                    found_tokens.add(m.group(1))
+            for row in table.table_rows:
+                for col in url_col_names:
+                    val = str(row.get(col, ""))
+                    for m in _ALIAS_TOKEN_RE.finditer(val):
+                        found_tokens.add(m.group(1))
         except Exception:
-            logger.debug("Could not scan first row for alias tokens", exc_info=True)
+            logger.debug("Could not scan stored rows for alias tokens", exc_info=True)
 
     # Also scan the table URL itself
     for m in _ALIAS_TOKEN_RE.finditer(str(table.url)):

@@ -2086,7 +2086,7 @@ min_frontend_version = ""       # Minimum Hub version for this plugin's UI (empt
 
 - **Compatible** plugins load normally and appear in the sidebar.
 - **Incompatible** plugins are still loaded but **disabled** — visible in the sidebar with an "update" badge, grayed out, not clickable. Users can see what's available but can't use it until the service is updated.
-- The Settings → Plugins page shows an "Incompatible" badge with the reason.
+- The Plugins page shows an "Incompatible" badge with the reason.
 
 ### Plugin catalog fields
 
@@ -2297,3 +2297,22 @@ the launch body into the Config `workspace.create` grant. Null/omitted selects o
 services. The selected team's membership is checked by Config. Connection ownership does not
 choose deployment binding. Personal service binding requires the separate deployment-record
 contract and is not represented as a team id or a one-person organization.
+
+## Deployment scan locations
+
+Providers advertising `workspace_scan_urls: true` accept `WorkspaceRequest.project_scan_urls`, a list of additional locations to index for projects, tables and runs. These are distinct from storage permissions and the writable project root. Validate read access before provisioning and configure both deployment services through 3LC’s `scan-urls` setting (`TLC_SCAN_URLS` accepts a comma-separated list). Omit the environment override when no locations are selected so centrally configured scans remain effective. The host refuses explicit scan locations for older providers rather than silently dropping them.
+
+### Table data that must be local
+
+A plugin whose image reader requires filesystem paths declares
+`requires_local_table_data = true` in `[runtime]`. This is independent of
+`requires_gpu`: it applies on the deployment host and on an added worker.
+Leave it unset for readers that support cloud URLs through `tlc`.
+
+The shared preflight shows a copy hint without moving data. Starting a run opens
+the data confirmation; only confirming starts preparation. The host offers copy
+or an existing local path, never streaming for such a plugin. The data-copy job
+runs ahead of the dependent run on the same execution queue. Its resolved alias
+overrides apply to that run only; the original table and project aliases remain
+unchanged. A failed or cancelled copy prevents execution of the dependent run.
+

@@ -22,7 +22,8 @@ a plugin UI gets a ``window.PluginJobs`` object::
     PluginJobs.list(pluginId?)                                      // -> Promise<PluginJobUpdate[]>; seed-on-mount
 
 ``run`` pre-subscribes and buffers so a job that finishes between the ``/run``
-response and the client subscribing still delivers its terminal event.
+response and the client subscribing still delivers its terminal event. Active trackers
+also reconcile terminal state from the host job list, including after reconnects.
 """
 
 from __future__ import annotations
@@ -92,6 +93,44 @@ JOB_TRACKER_JS = r"""
       });
   }
 
+  // Socket.IO is live-only: a terminal event can be lost during a disconnect or
+  // before track() subscribes. Reconcile terminal states from the authoritative job
+  // list on subscription/reconnect and every five seconds while anything is tracked.
+  // All jobs share one request/timer. Polling never rolls back newer live progress.
+  var _tracked = [];
+  var _pollTimer = null;
+  var _polling = false;
+  function _terminal(job){
+    return job && (job.status === 'completed' || job.status === 'cancelled' || job.status === 'failed');
+  }
+  function _reconcile(){
+    if (!_tracked.length || _polling) { return; }
+    _polling = true;
+    list().then(function(jobs){
+      _tracked.slice().forEach(function(entry){
+        var job = jobs.find(function(j){ return j && j.id === entry.id; });
+        if (_terminal(job)) { entry.receive(job); }
+      });
+    }).catch(function(){
+      // A temporary network/auth failure is not a failed training job. Retry while
+      // tracking, and let the existing socket keep delivering live updates.
+    }).then(function(){
+      _polling = false;
+      if (_tracked.length && _pollTimer === null){
+        _pollTimer = setTimeout(function(){ _pollTimer = null; _reconcile(); }, 5000);
+      }
+    });
+  }
+  function _watchTerminal(jobId, receive){
+    var entry = {id: jobId, receive: receive};
+    _tracked.push(entry);
+    _reconcile();
+    return function(){
+      _tracked = _tracked.filter(function(item){ return item !== entry; });
+      if (!_tracked.length && _pollTimer !== null){ clearTimeout(_pollTimer); _pollTimer = null; }
+    };
+  }
+
   // Subscribe to a plugin's own custom ctx.emit() event on its namespace.
   // Returns an unsubscribe function. Use for rich per-job detail the flat generic
   // job_update schema can't carry (a result payload, a loss curve, per-item rows).
@@ -107,20 +146,24 @@ JOB_TRACKER_JS = r"""
   function track(namespace, jobId, handlers){
     handlers = handlers || {};
     var s = _socket(namespace);
-    if (!s) { return function(){}; }
     var done = false;
-    function off(){ s.off('job_update', onUpd); }
+    var unwatch = null;
+    function off(){
+      done = true;
+      if (s) { s.off('job_update', onUpd); s.off('connect', _reconcile); }
+      if (unwatch) { unwatch(); unwatch = null; }
+    }
     function onUpd(job){
-      if (!job || job.id !== jobId) { return; }
+      if (done || !job || job.id !== jobId) { return; }
       if (handlers.onUpdate) { handlers.onUpdate(job); }
-      if (done) { return; }
       if (job.status === 'completed' || job.status === 'cancelled'){
-        done = true; off(); if (handlers.onDone) { handlers.onDone(job); }
+        off(); if (handlers.onDone) { handlers.onDone(job); }
       } else if (job.status === 'failed'){
-        done = true; off(); if (handlers.onError) { handlers.onError(job); }
+        off(); if (handlers.onError) { handlers.onError(job); }
       }
     }
-    s.on('job_update', onUpd);
+    if (s) { s.on('job_update', onUpd); s.on('connect', _reconcile); }
+    unwatch = _watchTerminal(jobId, onUpd);
     return off;
   }
 
@@ -133,11 +176,15 @@ JOB_TRACKER_JS = r"""
     var jobId = null;
     var done = false;
     var buffer = [];
+    var unwatch = null;
 
-    function cleanup(){ if (s) { s.off('job_update', onUpd); } }
+    function cleanup(){
+      if (s) { s.off('job_update', onUpd); s.off('connect', _reconcile); }
+      if (unwatch) { unwatch(); unwatch = null; }
+    }
     function dispatch(job){
-      if (handlers.onUpdate) { handlers.onUpdate(job); }
       if (done) { return; }
+      if (handlers.onUpdate) { handlers.onUpdate(job); }
       if (job.status === 'completed' || job.status === 'cancelled'){
         done = true; cleanup(); if (handlers.onDone) { handlers.onDone(job); }
       } else if (job.status === 'failed'){
@@ -150,7 +197,7 @@ JOB_TRACKER_JS = r"""
       if (job.id !== jobId) { return; }
       dispatch(job);
     }
-    if (s) { s.on('job_update', onUpd); }
+    if (s) { s.on('job_update', onUpd); s.on('connect', _reconcile); }
 
     return start(pluginId, params).then(function(resp){
       if (!resp || resp.error || !resp.job_id){
@@ -164,12 +211,13 @@ JOB_TRACKER_JS = r"""
       if (resp.namespace && resp.namespace !== ns){
         cleanup();
         s = _socket(resp.namespace);
-        if (s) { s.on('job_update', onUpd); }
+        if (s) { s.on('job_update', onUpd); s.on('connect', _reconcile); }
       }
       // Replay anything buffered for this job (may include the terminal event).
       var pending = buffer.filter(function(j){ return j.id === jobId; });
       buffer = [];
       pending.forEach(dispatch);
+      if (!done) { unwatch = _watchTerminal(jobId, dispatch); }
       return resp;
     }, function(err){
       // A start the compute refused (a 409 with its reason, a 403, an unreachable service): the Hub's

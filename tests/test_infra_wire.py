@@ -64,7 +64,9 @@ ROUND_TRIPS: list[tuple[Any, set[str]]] = [
     (_FIELD, {"key", "label", "required", "secret", "help", "href", "placeholder"}),
     (ProjectStorage("s3://root", ["s3://a"]), {"project_root_url", "project_scan_urls"}),
     (
-        WorkspaceRequest("s3://root", "full", True, "ws", ["src"], ["b"], True, True),
+        WorkspaceRequest(
+            "s3://root", "full", True, "ws", ["src"], ["b"], True, True, project_scan_urls=["s3://readonly/projects"]
+        ),
         {
             "project_root_url",
             "mode",
@@ -72,6 +74,7 @@ ROUND_TRIPS: list[tuple[Any, set[str]]] = [
             "name",
             "bootstrap_plugins",
             "data_buckets",
+            "project_scan_urls",
             "create_bucket",
             "seed_provider_configs",
             "workspace_id",
