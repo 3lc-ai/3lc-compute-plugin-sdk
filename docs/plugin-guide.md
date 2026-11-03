@@ -172,7 +172,8 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   `<img>` fetches: **full paths under the plugin's own prefix**, `/api/plugins/<id>/…`, each
   naming a subpath — `"/api/plugins/example/patch.png"`; anything else is refused and listed on
   the plugin card as `auth_exempt_rejected`), `training` (marks a training plugin), `python` /
-  `venv_python` (pin the interpreter the plugin's venv is built with), `remote_capable` (a run
+  `venv_python` (pin the interpreter the plugin's venv is built with; without one a host builds it
+  on its own Python version, at most 3.14, so a plugin that supports 3.15 says `python = "3.15"`), `remote_capable` (a run
   may target a remote node even though `requires_gpu` is false).
 - `[ui]`: `min_input_count` (minimum selected resources an `action` plugin needs — defaults to
   `len(input_types)`; set `0` explicitly to require none), `action_param_names` (query params

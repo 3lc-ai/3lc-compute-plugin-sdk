@@ -9,9 +9,9 @@ name = "3lc-compute-plugin-sdk"
 # the 0.x line is additive-only (see README → Status).
 version = "0.6.1"
 description = "Public Python SDK for building 3LC compute-service plugins."
-# The ceiling matches the host's: the core publishes no wheels for Python 3.15 yet, and uv 0.13 refuses to
-# lock a Python range it cannot resolve. Raise it when 3lc ships 3.15 wheels.
-requires-python = ">=3.10,<3.15"
+# Matches the core's range (3lc 3.5: 3.11–3.15). uv refuses to lock a Python range the core cannot
+# resolve, so this moves with it.
+requires-python = ">=3.11,<3.16"
 readme = "README.md"
 authors = [{ name = "3LC", email = "support@3lc.ai" }]
 # Apache-2.0: the SDK is the public plugin contract, intended to go open-source. `{ text }`
@@ -25,9 +25,11 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Typing :: Typed",
 ]
 
@@ -50,7 +52,7 @@ dependencies = [
     # venv resolves fresh at install time and every worker depends on this SDK, so the broken release
     # is excluded here rather than in each plugin.
     "multidict!=7.2.0",
-    "3lc[pandas]>=3.5.0.dev149866,<4.0.0",
+    "3lc[pandas]>=3.5.0.dev154037,<4.0.0",
 ]
 
 [project.urls]
@@ -92,6 +94,10 @@ artifacts = [
 [tool.uv]
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'", "sys_platform == 'win32'"]
 
+# numpy 2.5 stubs use PEP 695 `type` statements, which mypy rejects under `python_version = 3.11`.
+# Lock-only, as in tlc-monorepo: not applied on 3.15+, where no numpy before 2.5 ships wheels.
+constraint-dependencies = ["numpy<2.5; python_version < '3.15'"]
+
 # The core this SDK requires is a staged build, not yet on PyPI: it resolves from the private
 # `staging` index (CloudRepo `prereleases`) with UV_INDEX_STAGING_USERNAME / _PASSWORD set. The
 # index is `explicit`, so only 3lc comes from it. Sources are not transitive: a plugin locking
@@ -107,7 +113,7 @@ explicit = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 exclude = [".git", ".mypy_cache", ".ruff_cache", ".venv", "build", "dist"]
 
 [tool.ruff.lint]
@@ -133,7 +139,7 @@ preview = true
 docstring-code-format = true
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

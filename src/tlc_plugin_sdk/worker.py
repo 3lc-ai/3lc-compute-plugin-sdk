@@ -213,7 +213,7 @@ class _Worker:
             return completed
         path = self.state_root / job_id / "worker-status.json"
         try:
-            saved: dict[str, Any] = json.loads(path.read_text())
+            saved: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         if not isinstance(saved, dict) or saved.get("job_id") != job_id:
@@ -393,7 +393,7 @@ class _Job:
     def _save_snapshot(self) -> None:
         payload = json.dumps(self.snapshot())
         temporary = self._status_path.with_suffix(".tmp")
-        temporary.write_text(payload)
+        temporary.write_text(payload, encoding="utf-8")
         temporary.chmod(0o600)
         temporary.replace(self._status_path)
 
