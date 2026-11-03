@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 async function main() {
-  let nextTimer = 0, disconnected = 0, observerClosed = 0, apiCalls = [], ready = [];
+  let nextTimer = 0, disconnected = 0, observerClosed = 0, apiCalls = [], ready = [], addresses = [];
   const timers = new Map(), events = {}, sockets = [], root = {
     querySelector: () => null, querySelectorAll: () => [], innerHTML: ''
   };
@@ -15,7 +15,7 @@ async function main() {
     createElement: () => ({}), addEventListener() {}, removeEventListener() {}};
   const context = {console, URL, URLSearchParams, Headers, Response, FormData, AbortController,
     document: doc, location: {search: '?hub=https://hub.test', href: 'https://compute.test/api/plugin-frame/', pathname: '/api/plugin-frame/'},
-    history: {replaceState() {}}, parent, addEventListener: (name, fn) => events[name] = fn,
+    history: {replaceState(state, title, url) {addresses.push(url);}}, parent, addEventListener: (name, fn) => events[name] = fn,
     ResizeObserver: class {observe() {} disconnect() {observerClosed++;}},
     setTimeout: (fn, ms) => {timers.set(++nextTimer, {fn,ms}); return nextTimer;}, clearTimeout: id => timers.delete(id),
     io: () => {const listeners = {}; const socket = {
@@ -60,6 +60,13 @@ async function main() {
   let nav = 0; const off = API.nav.onChange(() => nav++);
   port.onmessage({data:{v:1,type:'event',name:'nav',value:{}}}); off();
   port.onmessage({data:{v:1,type:'event',name:'nav',value:{}}}); assert.equal(nav, 1);
+  // Back/Forward in the Hub keeps the frame's own address in step, so the page reads the current query.
+  port.onmessage({data:{v:1,type:'event',name:'nav',value:{search:'view=reviews',hash:'top'}}});
+  assert.equal(addresses.at(-1), '/api/plugin-frame/?hub=https%3A%2F%2Fhub.test&view=reviews#top');
+  // A shareable link is the Hub's page of this plugin, not the frame's address.
+  assert.equal(API.nav.href({search:'?review=r1'}), 'https://hub.test/plugin/one?review=r1');
+  assert.equal(API.nav.href(), 'https://hub.test/plugin/one');
+  assert.equal(API.layout.mode, 'flow');
   const abort = new AbortController();
   const request = API.compute.request('/api/plugins/one/slow', {signal:abort.signal});
   abort.abort(); await assert.rejects(request, error => error.code === 'aborted');

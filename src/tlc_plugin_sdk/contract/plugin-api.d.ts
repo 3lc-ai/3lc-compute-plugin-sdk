@@ -381,7 +381,19 @@ export interface PluginApi {
     open(url: string): Promise<unknown>;
     onChange(callback: (state: unknown) => void): () => void;
     state?(state: { search?: string; hash?: string }, options?: { push?: boolean }): Promise<unknown>;
+    /**
+     * The Hub address of this plugin page with `state` as its query and hash: the link to give people
+     * (a review, a preview). The frame's own address is the compute service's, never one to share.
+     * The Hub's own keys (the deployment's services) are kept. Framed hosts only.
+     */
+    href?(state?: { search?: string; hash?: string }): string;
   };
+  /**
+   * How the Hub sizes the frame. `flow` (default): the frame grows with the page. `fill`
+   * (`[ui] layout = "fill"`): the frame takes the space the Hub has below its header and the page
+   * scrolls inside itself, so `100dvh` and `innerHeight` are that space. Framed hosts only.
+   */
+  layout?: { mode: 'flow' | 'fill' };
   format: { date(value: string | number, mode?: string): string };
   ui: { toast(message: string, kind?: string): void };
   identity?: { name(): Promise<string> };

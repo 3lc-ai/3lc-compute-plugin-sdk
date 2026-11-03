@@ -428,6 +428,16 @@
 
     function has(name) { return capabilities.indexOf(name) >= 0; }
     function navGo(path) { return call('nav.go', [String(path)]); }
+    // The Hub address of this plugin page with `state` as its query, for links people share: the
+    // Hub's own keys (its deployment's services) stay as the Hub has them.
+    function navHref(state) {
+      var page = init.page || (hubOrigin + '/plugin/' + encodeURIComponent(init.pluginId || ''));
+      var query = new URLSearchParams(String((state && state.search) || '').replace(/^\?/, ''));
+      var hubQuery = init.hubQuery || {};
+      Object.keys(hubQuery).forEach(function (key) { query.set(key, String(hubQuery[key])); });
+      var hash = String((state && state.hash) || '').replace(/^#/, '');
+      return page + (query.toString() ? '?' + query.toString() : '') + (hash ? '#' + hash : '');
+    }
     function toast(message, kind) { call('ui.toast', [String(message), kind || 'info']).catch(function () {}); }
 
     var api = {
@@ -466,7 +476,9 @@
         go: navGo,
         open: function (url) { return call('nav.open', [String(url)]); },
         onChange: function (callback) { return subscribe('nav', callback); },
+        href: navHref,
       },
+      layout: { mode: init.layout === 'fill' ? 'fill' : 'flow' },
       format: { date: formatLocalDate },
       ui: { toast: toast },
       data: data,
@@ -489,7 +501,8 @@
     };
     if (has('history')) {
       api.nav.state = function (state, options) {
-        return call('nav.state', [{ search: String((state && state.search) || ''), hash: String((state && state.hash) || '') }, { push: !!(options && options.push) }]);
+        return call('nav.state', [{ search: String((state && state.search) || ''), hash: String((state && state.hash) || '') }, { push: !!(options && options.push) }])
+          .then(function (now) { mirrorAddress(now); return now; });
       };
     }
     if (has('identity:name')) api.identity = { name: function () { return call('identity.name', []); } };
@@ -606,6 +619,17 @@
     heading.appendChild(document.createTextNode(text));
   }
 
+  // The page reads its address as it did inside the Hub: the frame's own address carries the Hub
+  // page's query and hash, kept in step as the page or Back/Forward change them.
+  function mirrorAddress(state) {
+    var search = String((state && state.search) || '').replace(/^\?/, '');
+    var hash = String((state && state.hash) || '').replace(/^#/, '');
+    history.replaceState(null, '', location.pathname + '?hub=' + encodeURIComponent(hubOrigin)
+      + (search ? '&' + search : '') + (hash ? '#' + hash : ''));
+  }
+
+  // A `flow` page tells the Hub its height, and the Hub sizes the frame to it. A `fill` page is
+  // sized by the Hub to the space it has and scrolls inside itself, so it reports nothing.
   function reportHeight() {
     var last = 0;
     var observer = new ResizeObserver(function () {
@@ -631,6 +655,7 @@
         runTarget = data.value;
         listeners.runTarget.forEach(function (listener) { try { listener(runTarget); } catch (e) { console.error(e); } });
       } else if (data.name === 'nav') {
+        mirrorAddress(data.value);
         listeners.nav.forEach(function (listener) { try { listener(data.value); } catch (e) { console.error(e); } });
       } else if (data.name === 'theme') {
         document.documentElement.setAttribute('data-theme', String(data.value || ''));
@@ -645,9 +670,8 @@
     if (init.theme) html.setAttribute('data-theme', init.theme);
     if (init.rootStyle) html.style.cssText = init.rootStyle;
     if (init.bodyClass) document.body.className = init.bodyClass;
-    // The page reads its launch context from the address, as it did inside the Hub.
-    history.replaceState(null, '', location.pathname + '?hub=' + encodeURIComponent(hubOrigin)
-      + (init.search ? '&' + init.search.replace(/^\?/, '') : ''));
+    if (init.layout === 'fill') html.setAttribute('data-tlc-layout', 'fill');
+    mirrorAddress({ search: init.search, hash: init.hash });
     var styles = (init.styles || []).map(function (href) { return load('link', { rel: 'stylesheet', href: href }); });
     var libraries = (init.scripts || []).reduce(function (previous, src) {
       return previous.then(function () { return load('script', { src: src }); });
@@ -663,7 +687,7 @@
       var root = document.getElementById('tlc-plugin-root');
       root.innerHTML = init.html;
       placeIcon(root, init.icon);
-      reportHeight();
+      if (init.layout !== 'fill') reportHeight();
       return runScripts(root);
     });
   }

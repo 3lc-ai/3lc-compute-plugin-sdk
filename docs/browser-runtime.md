@@ -43,6 +43,8 @@ Capture `const API = window.PLUGIN_API` inside your fragment. Prefer these names
 | `run.plan/checkTable` | Host planning and table accessibility checks |
 | `nav.go/open/onChange` | Host navigation, external link and unsubscribe-able navigation events |
 | `nav.state` | Optional history updates; requires `history` capability |
+| `nav.href` | The Hub address of this page with a given query: the link to share |
+| `layout.mode` | `flow` (the frame grows with the page) or `fill` (`[ui] layout = "fill"`: the Hub sizes the frame, the page scrolls inside it) |
 | `identity.name` | Optional display name; requires `identity:name` capability |
 | `data` | Frame-local snapshot of the host's data catalog; load before synchronous getters |
 | `ui.toast`, `format.date`, `dashboardUrl` | Presentation helpers |
@@ -95,6 +97,13 @@ Own plugin routes are the default. Declare additional needs in the manifest:
 [ui]
 capabilities = ["calls:other-plugin", "history", "identity:name"]
 ```
+
+A page laid out for a whole window, sized from `100dvh` or `innerHeight`, declares
+`[ui] layout = "fill"`. The Hub then gives the frame the space below its header and the page scrolls
+inside it; in the default `flow` layout the frame grows with the page, and those sizes would be the
+frame's own height. The frame's address carries the Hub page's query and hash and follows them as
+`nav.state` and Back/Forward change them, so `location.search` reads the current state. Build links
+people open with `nav.href`, never from `location`.
 
 Declare only necessary capabilities. They enable specific bridge operations, not
 arbitrary proxying, credentials, socket emission or authorization bypass. The host
