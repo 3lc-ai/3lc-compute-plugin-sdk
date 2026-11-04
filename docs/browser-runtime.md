@@ -13,12 +13,13 @@ fragment, theme, launch context and a private MessagePort. The runtime accepts
 initialization only from the expected parent origin. It installs `window.PLUGIN_API`
 before evaluating the fragment's scripts, in document order.
 
-The frame never fetches from the Hub's address. Its `ready` message says
-`inlineAssets: 1`, and the Hub then sends its own stylesheets and libraries as
+For inline assets, the frame normally does not fetch from the Hub's address.
+Its `ready` message says `inlineAssets: 1`, and the Hub sends its own stylesheets and libraries as
 text (`{css}`, `{js}`) instead of URLs. Chrome's Local Network Access blocks a
 frame on a public Compute from loading files from a Hub on a private address,
 such as an internal or on-prem Hub. Files from another origin (a font service)
-still arrive as URLs.
+still arrive as URLs. If an asset cannot be inlined, the Hub retains its URL as a
+fallback; browser network policy may still block that fallback.
 
 The Hub owns sign-in and all authorization decisions. The SDK provides convenience,
 serialization and lifecycle handling; it is not an authorization boundary. Every
@@ -34,6 +35,21 @@ Do not store secrets in browser storage or treat manifest capabilities as proof 
 server-side permission. Third-party scripts execute with the plugin's authority;
 pin and review dependencies, avoid rendering untrusted HTML, and use `textContent`.
 External network access remains subject to browser policy and deployment CSP.
+
+## Shared styling
+
+The Hub owns an ordered shared stylesheet manifest, used by both its template
+links and frame initialization. It includes fonts, base and Neo design tokens,
+plugin scaffolding, controls, connection indicators and node components; see the
+[styling catalog](plugin-guide.md#why-the-shared-classes-are-available-no-import-no-build-step).
+Protocol 1 delivers the same sequence as URL strings or inline `{css}` entries.
+The runtime preserves that order and applies the initial theme and theme updates.
+Plugins need no stylesheet imports and should not depend on asset URL paths.
+
+Shared design CSS does not include Hub shell or page layout. The document canvas
+stays transparent, while component surfaces remain themed. Hub body classes and
+root inline styles are not forwarded. Use tokens and documented shared classes;
+use `flow` or `fill` for sizing rather than assuming the Hub's viewport layout.
 
 ## Public API
 

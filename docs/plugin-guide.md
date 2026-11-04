@@ -264,7 +264,7 @@ The UI fragment is a self-contained `<style>` + `<div>` + `<script>` block. It h
 - `PLUGIN_API` — the bridge object with context, API clients, and libraries (the samples
   below alias `PLUGIN_API.getConfig('compute_service_url')` as `COMPUTE_URL`)
 - `PluginJobs` — the job-channel client, added to every fragment by the worker
-- All CSS variables and classes from `main.css` and `plugin-common.css` (see
+- Shared design tokens and component classes supplied by the Hub (see
   [Styling & UI Conventions](#styling--ui-conventions); `python -m tlc_plugin_sdk.lint src/`
   checks a fragment against them)
 - Vendor libraries through `PLUGIN_API.libs`; only `io` (Socket.IO) is stable
@@ -1532,14 +1532,32 @@ A plugin's `ui.html` gets the host's entire design system for free — and the h
 
 ### Why the shared classes are available (no import, no build step)
 
-The SDK runtime mounts the fragment in the plugin frame. The fragment runs in a separate Compute-origin frame, which loads these two host stylesheets:
+The SDK runtime mounts the fragment in a separate Compute-origin frame. The Hub
+supplies an ordered shared-style manifest, also used for its own template links:
 
-- `main.css` — the base design system (forms, buttons, cards, spinners, theme tokens)
-- `plugin-common.css` — the plugin page scaffolding (hero, workflow, metric cards, viewer)
+1. Shared fonts (Plus Jakarta Sans and JetBrains Mono)
+2. `main.css` — theme tokens, typography, forms, buttons, cards and spinners
+3. `3lc-neo.css` — Neo theme tokens and component treatments
+4. `plugin-common.css` — hero, workflow, metric cards and viewer scaffolding
+5. `controls.css` — shared controls
+6. `connection-status.css` — connection indicators
+7. `node-list.css` — node components
 
-Write `class="btn btn-primary"` or `class="form-control"` and you get the fully themed, dark-mode-correct component with zero CSS of your own. The flip side: your fragment shares its frame with its own widgets. Prefix any bespoke class with your plugin id (`.myplugin-…`) and never restyle a shared class globally — you would repaint other widgets in your page.
+These are host-provided assets, not imports a plugin should hardcode. The runtime
+receives them in cascade order, as URLs or inline CSS according to its asset
+capability. The Hub synchronizes the selected theme and subsequent theme changes.
+See [the browser runtime contract](browser-runtime.md#shared-styling).
 
-> **Only `main.css` and `plugin-common.css` are inherited.** Styles defined inside a host *template* — for example the `.pbadge` badges in `settings/plugins.html` — live in that page's own `<style>` block and are **not** available to a mounted fragment. Don't reach for them.
+Write `class="btn btn-primary"` or `class="form-control"` to get the themed component
+without custom CSS. Prefix bespoke classes with your plugin id (`.myplugin-…`) and
+never restyle a shared class globally: your widgets share the frame's CSS namespace.
+
+The frame document has a transparent canvas; cards and controls retain their themed
+surfaces. Hub shell styles (outer background, sidebar, navigation and viewport
+layout), Hub body classes and root inline styles are not part of the styling
+contract. Neither are page-template-only classes such as `.pbadge`. Do not depend
+on them or copy Hub layout resets into your fragment. Use the documented `flow`
+or `fill` layout for your page.
 
 ### Theme tokens — never hardcode a color
 
