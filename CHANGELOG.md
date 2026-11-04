@@ -23,6 +23,10 @@ written for inline hosts need migrating.
   says `inlineAssets: 1`, so a frame on a public Compute never fetches from a Hub on a private
   address, which Chrome's Local Network Access blocks.
 - Forward request aborts, and dispose sockets/listeners/observers without cancelling jobs.
+- Node-access setup can carry a choice of node buckets: `ConnectionNodeAccess` answers the active
+  `storage_access` rules and their `revision`, and `ConnectionCheckRequest` carries the reviewed
+  `storage_access` and `expected_revision` on `POST /infra/connection/node-access`, so a provider
+  applies exactly what an administrator reviewed and refuses a stale review.
 - Document frame ownership, capabilities, errors, long-session recovery, migration,
   release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.
 
