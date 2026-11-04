@@ -985,8 +985,10 @@ declare global {
   /** Bind the "Create project in" select; resolves the selected root once the roots are known. */
   function _tlcBindProjectLocation(idPrefix: string, pluginId?: string): Promise<string>;
   /**
-   * Bind a data-source field: a file chooser under it. `config.mode`: `'file'` (default) or
-   * `'folder'` (`'dir'` reads as `'folder'`); `config.accept`: a glob list (`'*.csv,*.tsv'`);
+   * Bind a data-source field: a file chooser under it. `config.mode`: `'file'` (default),
+   * `'folder'` (`'dir'` reads as `'folder'`), or `'any'` for an input that takes either (a click on
+   * a file picks it, and "Select this folder" picks the folder shown; an output reads it as
+   * `'file'`); `config.accept`: a glob list (`'*.csv,*.tsv'`);
    * `config.purpose`: `'input'` (default), or `'output'` for a Save dialog, whose name box starts
    * with `config.suggestedName` and whose pick is `<folder shown>/<name>` (a file output adds the
    * first extension `accept` names when the name has none; a folder output with an empty box picks
@@ -1000,7 +1002,7 @@ declare global {
     pluginId: string,
     config?: {
       accept?: string | (() => string);
-      mode?: 'file' | 'folder' | 'dir' | (() => 'file' | 'folder' | 'dir');
+      mode?: 'file' | 'folder' | 'dir' | 'any' | (() => 'file' | 'folder' | 'dir' | 'any');
       purpose?: 'input' | 'output';
       suggestedName?: string | (() => string);
     },
@@ -1010,7 +1012,7 @@ declare global {
   /** The field's markup: the text input (id `idPrefix`), Browse…, and the panel. Bind it once it is in the DOM. */
   function _tlcDataSourceHtml(
     idPrefix: string,
-    config?: { placeholder?: string; accept?: string; allowUpload?: boolean; mode?: 'file' | 'folder' | 'dir' },
+    config?: { placeholder?: string; accept?: string; allowUpload?: boolean; mode?: 'file' | 'folder' | 'dir' | 'any' },
   ): string;
   function _tlcDefaultAliasToken(projectName: string): string;
   /** The compute host's default project root (`GET /api/deployment/storage`), '' when it cannot say. */
