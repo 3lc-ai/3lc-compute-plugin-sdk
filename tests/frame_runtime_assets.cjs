@@ -17,7 +17,7 @@ async function main() {
       // An inline script runs as it is inserted; a linked file loads.
       if (el.tag === 'script' && el.text) vm.runInContext(el.text, context);
       else if (el.onload) el.onload();
-    }},
+    }, insertBefore() {}},
     createElement: tag => ({tag}), addEventListener() {}, removeEventListener() {}};
   context = {console, URL, URLSearchParams, Headers, Response, FormData, AbortController,
     document: doc, location: {search: '?hub=https://hub.test', href: 'https://compute.test/api/plugin-frame/', pathname: '/api/plugin-frame/'},

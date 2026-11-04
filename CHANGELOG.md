@@ -25,6 +25,7 @@ written for inline hosts need migrating.
 - Forward request aborts, and dispose sockets/listeners/observers without cancelling jobs.
 - Flow frames shrink after content collapses or is removed; measure the content root independently
   of the iframe viewport, including child margins and floats. Fill pages remain host-sized.
+  The root's `flow-root` is a rule without specificity, so a `display` the page sets on the root wins.
 - Document frame ownership, capabilities, errors, long-session recovery, migration,
   release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.
 

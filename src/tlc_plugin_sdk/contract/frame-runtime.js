@@ -691,7 +691,10 @@
   function reportHeight(root) {
     // A formatting context contains child margins and floats in the measured box. The document's
     // scrollHeight is floored by the current iframe viewport, so measuring it can grow but never shrink.
-    root.style.display = 'flow-root';
+    // `:where()` has no specificity and the rule comes first, so any `display` the page sets on the root wins.
+    var style = document.createElement('style');
+    style.textContent = ':where(#tlc-plugin-root){display:flow-root}';
+    document.head.insertBefore(style, document.head.firstChild);
     var last = 0;
     var observer = new ResizeObserver(function () {
       var box = root.getBoundingClientRect();
