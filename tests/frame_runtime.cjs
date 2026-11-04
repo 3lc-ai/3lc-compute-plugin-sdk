@@ -7,7 +7,7 @@ const source = fs.readFileSync(process.argv[2], 'utf8');
 async function main() {
   let nextTimer = 0, disconnected = 0, observerClosed = 0, apiCalls = [], ready = [], addresses = [];
   const timers = new Map(), events = {}, sockets = [], root = {
-    querySelector: () => null, querySelectorAll: () => [], innerHTML: ''
+    querySelector: () => null, querySelectorAll: () => [], innerHTML: '', style: {}
   };
   const parent = {postMessage: (...args) => ready.push(args)};
   const doc = {documentElement: {setAttribute() {}, style: {}, scrollHeight: 100},
