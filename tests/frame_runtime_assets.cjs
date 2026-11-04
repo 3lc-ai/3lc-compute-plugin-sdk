@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 async function main() {
   const appended = [], events = {}, ready = [];
-  const root = {querySelector: () => null, querySelectorAll: () => [], innerHTML: ''};
+  const root = {querySelector: () => null, querySelectorAll: () => [], innerHTML: '', style: {}};
   const parent = {postMessage(message, origin) { ready.push([message, origin]); }};
   let context;
   const doc = {documentElement: {setAttribute() {}, style: {}, scrollHeight: 100},

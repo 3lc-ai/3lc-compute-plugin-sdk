@@ -23,6 +23,8 @@ written for inline hosts need migrating.
   says `inlineAssets: 1`, so a frame on a public Compute never fetches from a Hub on a private
   address, which Chrome's Local Network Access blocks.
 - Forward request aborts, and dispose sockets/listeners/observers without cancelling jobs.
+- Flow frames shrink after content collapses or is removed; measure the content root independently
+  of the iframe viewport, including child margins and floats. Fill pages remain host-sized.
 - Document frame ownership, capabilities, errors, long-session recovery, migration,
   release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.
 
