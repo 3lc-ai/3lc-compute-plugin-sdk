@@ -27,6 +27,10 @@ written for inline hosts need migrating.
   of the iframe viewport, including child margins and floats. Fill pages remain host-sized.
 - Document frame ownership, capabilities, errors, long-session recovery, migration,
   release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.
+- The data-source picker takes `mode: 'any'`, for an input that takes a file or a folder: a click
+  on a file picks it, and "Select this folder" picks the folder shown. Since 0.6.0 a folder picker
+  dims its files, so a field like COCO's annotations path (a JSON file, or a folder of them) could
+  only pick a folder. An older SDK reads `'any'` as `'file'`.
 
 ## [Unreleased]
 
