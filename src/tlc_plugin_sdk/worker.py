@@ -15,7 +15,7 @@ The worker serves the plugin's Litestar app
 plus the generic reserved routes (``/health``, ``/ui``, ``/compute``). On top of that
 it adds the job channel the host supervisor drives:
 
-- ``POST /jobs/{job_id}/run``      → runs ``run_job(ctx)`` on a thread; the response
+- ``POST /jobs/{job_id}/run``      → runs ``run_job(ctx)`` in an isolated process when requested; the response
                                      **streams NDJSON events** (progress/metric/log)
                                      ending in a terminal ``done``/``error`` event.
 - ``POST /jobs/{job_id}/cancel``   → cooperative cancel (sets ``ctx.cancelled``), escalated
@@ -50,12 +50,16 @@ import contextlib
 import gc
 import json
 import logging
+import multiprocessing
 import os
 import queue
 import re
+import signal
 import sys
 import threading
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
+from multiprocessing.connection import wait as wait_connections
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -74,6 +78,9 @@ from tlc_plugin_sdk.connections import (
 from tlc_plugin_sdk.job_context import IDENTITY_KEY, JobContext, JobFailed, JobIdentity
 
 if TYPE_CHECKING:
+    from multiprocessing.connection import Connection
+    from multiprocessing.process import BaseProcess
+
     from litestar.handlers import BaseRouteHandler
 
     from tlc_plugin_sdk.contract import ComputePlugin
@@ -136,8 +143,9 @@ class JobAlreadyRunning(RuntimeError):
 class _Worker:
     """Holds the single plugin instance and its in-flight jobs."""
 
-    def __init__(self, plugin: ComputePlugin, plugin_id: str, state_root: Path) -> None:
+    def __init__(self, plugin: ComputePlugin, plugin_id: str, state_root: Path, *, entry: str | None = None) -> None:
         self.plugin = plugin
+        self.entry = entry
         self.plugin_id = plugin_id
         self.state_root = state_root
         self._jobs: dict[str, _Job] = {}
@@ -150,8 +158,16 @@ class _Worker:
             # 4 KB string) must not reach the filesystem.
             msg = f"job id must match {_JOB_ID_RE.pattern}, got {job_id!r}"
             raise ValueError(msg)
+        require_isolation = params.pop("_require_job_isolation", False)
+        if require_isolation and self.entry is None:
+            msg = "This worker cannot isolate concurrent jobs; update its SDK."
+            raise ValueError(msg)
         state_dir = self.state_root / job_id
-        job = _Job(job_id, params, state_dir, self.plugin, on_end=self.finish_job)
+        job = (
+            _ProcessJob(job_id, params, state_dir, self.plugin, self.entry, self.plugin_id, on_end=self.finish_job)
+            if require_isolation and self.entry is not None
+            else _Job(job_id, params, state_dir, self.plugin, on_end=self.finish_job)
+        )
         with self._lock:
             live = self._jobs.get(job_id)
             if live is not None and live.is_alive():
@@ -265,6 +281,8 @@ def _escalate_cancel(job: _Job, worker: _Worker) -> None:
     running and reported; it is still counted by ``/busy`` and ends with the process.
     One watchdog per job: repeated cancels do not stack clocks.
     """
+    if isinstance(job, _ProcessJob):
+        return  # its monitor owns cancellation and kills only this job's process group
     grace = _cancel_grace_seconds()
     if grace <= 0 or not job.mark_escalated():
         return
@@ -304,9 +322,12 @@ class _Job:
         state_dir: Path,
         plugin: ComputePlugin,
         on_end: Callable[[str], None] | None = None,
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.job_id = job_id
         self._on_end = on_end
+        self._event_sink = event_sink
+        self._sink_lock = threading.Lock()
         self._ended = threading.Event()
         self._escalate_lock = threading.Lock()
         self._escalated = False
@@ -429,6 +450,10 @@ class _Job:
             pass
 
     def _put_event(self, event: dict[str, Any]) -> None:
+        if self._event_sink is not None:
+            with self._sink_lock:
+                self._event_sink(event)
+            return
         kind = event.get("event")
         if kind in {"progress", "log", "metric", "result", "done", "error"}:
             key = str(kind) + (":" + str(event.get("label", "")) if kind == "metric" else "")
@@ -475,6 +500,158 @@ class _Job:
         self._ended.set()
         if self._on_end is not None:
             self._on_end(self.job_id)
+
+
+def _kill_job_process(process: BaseProcess) -> None:
+    """End one job and its data-loader children, leaving sibling jobs alive."""
+    if process.pid is None:
+        return
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            return
+        except ProcessLookupError:
+            pass  # it may not have established its session yet
+        except PermissionError:
+            # Darwin reports EPERM for a group containing only the unreaped zombie.
+            # A live child must never be mistaken for this case or lose its lease.
+            if sys.platform != "darwin" or not wait_connections([process.sentinel], timeout=0):
+                raise
+    if process.is_alive():
+        process.kill()
+
+
+def _run_job_process(entry: str, plugin_id: str, job_id: str, state_dir: str, channel: Connection) -> None:
+    """Spawn entry point: credentials arrive over private IPC, never argv or files."""
+    if os.name == "posix":
+        os.setsid()
+    os.environ.pop("TLC_WORKER_TOKEN", None)
+    sys.argv = ["plugin-job"]  # the worker's command line may contain its control token
+    params = channel.recv()
+    cancel = threading.Event()
+
+    def control() -> None:
+        try:
+            while True:
+                if channel.recv() == "cancel":
+                    cancel.set()
+        except (EOFError, OSError):
+            # A dead worker must not leave untracked training consuming its GPU.
+            if os.name == "posix":
+                os.killpg(os.getpgrp(), signal.SIGKILL)
+            os._exit(3)
+
+    threading.Thread(target=control, name="job-control", daemon=True).start()
+    try:
+        plugin = _load_plugin(entry)
+        plugin.id = plugin_id
+        _initialise_runtime(plugin, plugin_id)
+        job = _Job(job_id, params, Path(state_dir), plugin, event_sink=channel.send)
+        job._cancel = cancel
+        job.ctx._cancel = cancel
+        job._run()
+    except BaseException as exc:
+        channel.send({"event": "error", "job_id": job_id, "message": f"{type(exc).__name__}: {exc}"})
+    finally:
+        channel.close()
+
+
+class _ProcessJob(_Job):
+    """One fresh process per invocation: aliases, native runtimes and cancellation are isolated.
+
+    Reuses the installed plugin environment and the existing event/status protocol;
+    plugins keep their synchronous run_job(ctx) implementation unchanged.
+    """
+
+    def __init__(
+        self,
+        job_id: str,
+        params: dict[str, Any],
+        state_dir: Path,
+        plugin: ComputePlugin,
+        entry: str,
+        plugin_id: str,
+        *,
+        on_end: Callable[[str], None] | None = None,
+    ) -> None:
+        self._wire = dict(params)
+        self._entry = entry
+        self._plugin_id = plugin_id
+        super().__init__(job_id, params, state_dir, plugin, on_end=on_end)
+
+    def _run(self) -> None:
+        parent: Connection | None = None
+        child: Connection | None = None
+        process: BaseProcess | None = None
+        terminal: dict[str, Any] | None = None
+        cancel_at: float | None = None
+        try:
+            context = multiprocessing.get_context("spawn")  # never fork an initialized CUDA/threaded runtime
+            parent, child = context.Pipe()
+            process = context.Process(
+                target=_run_job_process,
+                args=(self._entry, self._plugin_id, self.job_id, str(self.ctx.state_dir), child),
+                name=f"plugin-job-{self.job_id}",
+            )
+            self._plugin.prepare_job(self.ctx)
+            prepared = dict(self.ctx.params)
+            for key in (IDENTITY_KEY, CREDENTIAL_KEY, CREDENTIALS_KEY):
+                if key in self._wire:
+                    prepared[key] = self._wire[key]
+            self._wire = prepared
+            process.start()
+            child.close()
+            parent.send(self._wire)
+            self._wire.clear()
+            while True:
+                if self.ctx.cancelled and cancel_at is None:
+                    cancel_at = time.monotonic()
+                    with contextlib.suppress(BrokenPipeError, EOFError, OSError):
+                        parent.send("cancel")
+                grace = _cancel_grace_seconds()
+                if cancel_at is not None and grace > 0 and time.monotonic() - cancel_at >= grace:
+                    break  # cleanup below kills this job's process group, never siblings
+                if parent.poll(0.1):
+                    try:
+                        event = parent.recv()
+                    except (EOFError, OSError):
+                        break
+                    if event.get("event") in _TERMINAL:
+                        terminal = event
+                        break
+                    else:
+                        self._put_event(event)
+                elif wait_connections([process.sentinel], timeout=0):
+                    break
+        except Exception as exc:
+            terminal = {"event": "error", "job_id": self.job_id, "message": f"{type(exc).__name__}: {exc}"}
+        finally:
+            self._wire.clear()
+            if process is not None and process.pid is not None:
+                # Do not reap yet: retaining the child PID prevents reuse before group
+                # cleanup. Descendants (e.g. data loaders) share this private group.
+                wait_connections([process.sentinel], timeout=2 if terminal is not None else 0)
+                _kill_job_process(process)
+                process.join()  # retain the resource lease until exit is confirmed
+            if parent is not None:
+                parent.close()
+            if child is not None:
+                child.close()
+            if terminal is None:
+                exit_code = process.exitcode if process is not None else None
+                terminal = (
+                    {"event": "done", "job_id": self.job_id, "status": "cancelled"}
+                    if self.ctx.cancelled
+                    else {
+                        "event": "error",
+                        "job_id": self.job_id,
+                        "message": f"Job process exited without an outcome (exit code {exit_code}).",
+                    }
+                )
+            self._put_event(terminal)
+            self._ended.set()
+            if self._on_end is not None:
+                self._on_end(self.job_id)
 
 
 @contextlib.contextmanager
@@ -681,14 +858,17 @@ def serve(
     plugin.id = plugin_id
     root = Path(state_root) if state_root else Path(os.getcwd()) / ".plugin-state" / plugin_id
     root.mkdir(parents=True, exist_ok=True)
-    worker = _Worker(plugin, plugin_id, root)
+    # Process-group cleanup is available on Linux/macOS. Other platforms retain
+    # the existing worker and advertise no isolation, so hosts keep it serialized.
+    isolated = os.name == "posix"
+    worker = _Worker(plugin, plugin_id, root, entry=entry if isolated else None)
 
     _initialise_runtime(plugin, plugin_id)
 
     if socket_path is not None and os.path.exists(socket_path):
         os.unlink(socket_path)
 
-    app = build_plugin_app(plugin, extra_handlers=_control_handlers(worker), token=token)
+    app = build_plugin_app(plugin, extra_handlers=_control_handlers(worker), token=token, isolated_jobs=isolated)
 
     bind: dict[str, Any] = {"uds": socket_path} if socket_path is not None else {"host": host, "port": port}
     target = f"uds={socket_path}" if socket_path is not None else f"{host}:{port}"

@@ -1144,8 +1144,30 @@ provision_extra = "my-gpu-plugin"   # venv deps installed via `uv sync --extra <
 ```
 
 GPU jobs are serialized — only one runs at a time across every GPU plugin (YOLO, SAM3,
-timm, image-metrics). `requires_gpu = false` jobs run on the CPU queue. Either way the
-plugin never names or touches a queue.
+timm, image-metrics). `requires_gpu = false` jobs use a bounded CPU pool, independent
+of the GPU slot. CPU capacity respects the node's detected CPU allocation, falls back
+to four when unknown, and can be lowered with `TLC_CPU_JOB_CONCURRENCY`. A slot is a
+concurrent job, not a pinned core: multithreaded or memory-heavy jobs may need a lower cap.
+The plugin never names or touches a queue. Data-copy dependencies are resolved before
+allocating training's GPU slot; failed or cancelled copies prevent that training from starting.
+
+Workers advertising `isolated_job_processes` can run finite jobs in separate spawned
+processes on Linux/macOS. Each process uses the installed plugin environment and calls
+`initialise_runtime()` then `run_job(ctx)`. This isolates 3LC's process-global aliases,
+credentials bound to a job, and native runtime state. It is process isolation, not a sandbox
+for untrusted plugin code. Older workers and platforms without process-group cleanup keep
+same-plugin jobs serialized. Long-running services keep their shared serving runtime.
+
+Usually no plugin change is needed. A plugin that reads transient state created by one
+of its routes (for example uploaded file bytes) may implement `prepare_job(ctx)`. This
+fast hook runs on the serving worker before spawning: add picklable inputs to `ctx.params`.
+The SDK sends them over private IPC on that same node; nothing is written to a queue
+journal or sent through another node. Do not do lengthy work or change global aliases in
+this hook. Durable configuration should continue to use the existing stores.
+
+The generic job record optionally includes `queue_kind`, `execution_slot`, and
+`waiting_reason`. Interfaces display these on job rows within the existing CPU/GPU
+sections; they must not create a separate visual queue per CPU.
 
 **Implement `run_job(ctx)`.** `ctx` is a `JobContext` (`tlc_plugin_sdk`); the
 host provides it and the surface is identical in both modes:
@@ -1201,14 +1223,14 @@ field ever reaches the frontend.
 cooperative first: the worker sets `ctx.cancelled` and your loop returns at its next
 checkpoint (the host marks the job "cancelled"). A loop that never checks is not allowed
 to keep a GPU busy: after `TLC_WORKER_CANCEL_GRACE_S` seconds (default 60; `0` disables)
-the worker process exits with status 3 when the unresponsive job is the last one live in it,
-and the supervisor spawns a fresh worker for the next job — so an
-unhonoured cancel costs you the process, and any partial state you did not flush. The grace
-period includes your cleanup: flush checkpoints before you return from a cancel, not after.
-When other jobs are live in the same worker the unresponsive thread is left running (it ends
-with the process) and reported in the worker log; nothing else is interrupted.
-The worker keeps a job registered for as long as its **thread** runs, not its event
-stream: a host that restarts mid-run can still cancel the job afterwards
+the isolated job process group is terminated, including its data-loader children, without
+interrupting sibling jobs. Its slot is held until process exit is confirmed. A worker that
+exits also terminates its isolated children. The grace period includes cleanup: flush
+checkpoints before returning. Legacy shared-runtime jobs retain the earlier behavior:
+if no siblings are live, their worker exits with status 3; otherwise the unresponsive
+thread is logged and remains live until the worker exits.
+The worker keeps a job registered for its full execution lifetime, even if its event
+stream disconnects: the host can reconnect to its status or cancel it afterwards
 (`POST /jobs/{id}/cancel`, or `POST /jobs/cancel-all` for everything still live), so a lost
 stream never leaves a training running for nobody. Job ids are chosen by the host and must
 match `[A-Za-z0-9_-]{1,64}`; a run for an id that is still live on the worker answers 409.

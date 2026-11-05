@@ -117,7 +117,17 @@ class ComputePlugin(HubPlugin):
     def initialise_runtime(self) -> None:
         """Initialise the plugin's runtime resources (runners, stores, models).
 
-        Called once after the shared GPU queue is ready.  Default is a no-op.
+        Called in the serving worker and in each isolated job process. Default is a no-op.
+        """
+
+    def prepare_job(self, ctx: JobContext) -> None:
+        """Hand off transient worker-local inputs before an isolated job starts.
+
+        Optional, fast, in-memory preparation on the serving worker. Add picklable
+        input values to ``ctx.params``; they travel over private local IPC, never
+        back through the host or a durable queue. The fresh job process calls
+        ``run_job`` as usual. Do not perform the workload or change global aliases
+        here. The default is a no-op; most plugins need no override.
         """
 
     def run_job(self, ctx: JobContext) -> None:

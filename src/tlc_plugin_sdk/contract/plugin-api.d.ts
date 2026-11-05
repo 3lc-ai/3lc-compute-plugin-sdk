@@ -635,6 +635,10 @@ export interface PluginJobUpdate {
   title?: string;
   /** Secondary status line (the current progress label); NOT the failure message. */
   subtitle?: string;
+  /** Scheduling metadata, absent on older hosts. Slots identify concurrency, not OS CPU affinity. */
+  queue_kind?: 'cpu' | 'gpu';
+  execution_slot?: number | null;
+  waiting_reason?: string;
   /** Failure message on a failed job (host >= 0.6); empty/absent otherwise. */
   error?: string;
   progress?: { percent?: number; label?: string; timing?: any };

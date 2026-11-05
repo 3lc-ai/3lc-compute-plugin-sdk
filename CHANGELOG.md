@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - Unreleased
 
+- Linux/macOS workers support isolated job processes, with per-job cancellation and cleanup of
+  child processes. The optional `prepare_job(ctx)` hook hands transient inputs from the serving
+  worker to its job over private local IPC. Long-running services keep their shared runtime.
+
 A minor version, not a patch: framed pages get a different `PLUGIN_API`. In particular,
 `PLUGIN_API.compute` (an inline host's compute service) and `objects` are gone. Plugin pages
 written for inline hosts need migrating.
