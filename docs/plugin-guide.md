@@ -622,8 +622,8 @@ an explicit `None` in it is emitted as `null`, and `from_dict` leaves it empty.
 | `GET /infra/nodes/{id}` | `?diagnostics=true` for `node_diagnostics` | `NodeStateResponse`: `state` (`pending`, `running`, `exited`, `terminated`, `gone`, `unknown`), `detail`, and with diagnostics `bootstrap_history`, `bootstrap_detail`, `bootstrap_failed` (`None` when the console could not be read) |
 | `DELETE /infra/nodes/{id}` | — | `NodeStateResponse`; idempotent: a repeated delete answers `terminated` or `gone` |
 | `GET /infra/connection/check` | a Connection in `x-3lc-connection` (400 without one), optional `project_root_url` query | `ConnectionCheckResponse`: `identity` (who the Connection acts as, `""` when not asked), `checked[]` (the verification steps that succeeded, in order; a step that fails raises instead of being listed), optional `checks[]` (`PreflightCheck` diagnostic samples, which may fail without failing the check). The default (`connection_check()`) answers `{"identity": "", "checked": ["resolve"]}`: reaching it means the binding resolved. Override to ask the provider who the credential is |
-| `GET /infra/connection/node-access` | a host-authorized Connection, `project_root_url` query | `ConnectionNodeAccess`: `supported`, `ready`, `title`, `detail`, `action_label`, `checks[]` |
-| `POST /infra/connection/node-access` | a host-authorized Connection, `{project_root_url}` | Explicitly apply the advertised node-access setup; same response shape |
+| `GET /infra/connection/node-access` | a host-authorized Connection, `project_root_url` query | `ConnectionNodeAccess`: `supported`, `ready`, `title`, `detail`, `action_label`, `checks[]`, and when the provider offers a choice of node buckets, `storage_access` (the active rules) and `revision` |
+| `POST /infra/connection/node-access` | a host-authorized Connection, `{project_root_url}`, optional `storage_access` and `expected_revision` | Explicitly apply the advertised node-access setup, or the reviewed `storage_access` exactly; same response shape |
 
 
 For checks that depend on deployment storage, override
@@ -2189,6 +2189,14 @@ The host's public setup surface checks that the project location matches the rev
 A browser cannot choose arbitrary policies or substitute storage scope. The plugin routes require a
 host-owned Connection header; generic browser proxying must strip caller-supplied authority headers.
 Setup is a reserved generic infrastructure operation, not a plugin-private route for the frontend to call.
+
+A provider may let an administrator give nodes bucket access beyond the project location. It
+answers the active rules as `storage_access` (the Connection `storage_access` shape) with a
+`revision`, and on `POST` receives the reviewed `storage_access` and the `expected_revision` the
+review was based on. Apply it as one operation: refuse a stale revision with `Conflict`, validate
+before any cloud write, and make the rules active only once the cloud setup succeeded, so a refused
+setup leaves the previous one in effect. Keep the rules out of the plugin's settings, where anyone
+who may save settings could change them; only this host-authorized operation may.
 
 `preflight_with_context(request: ConnectionCheckRequest, *, node_type, datacenter)` receives the
 same host project-root context. Its default delegates to `preflight`, preserving existing providers.
