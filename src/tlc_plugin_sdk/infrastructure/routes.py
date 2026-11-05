@@ -300,7 +300,13 @@ def core_handlers(plugin: InfrastructurePlugin) -> list[Any]:
         root = data.get("project_root_url")
         if not isinstance(root, str):
             raise HTTPException(status_code=400, detail="The host's project root is required")
-        return answer(plugin, lambda: plugin.connection_node_access(ConnectionCheckRequest(root), apply=True).to_dict())
+        storage = data.get("storage_access")
+        if storage is not None and not isinstance(storage, dict):
+            raise HTTPException(status_code=400, detail="storage_access must be an object")
+        request = ConnectionCheckRequest(
+            root, storage_access=storage, expected_revision=str(data.get("expected_revision") or "")
+        )
+        return answer(plugin, lambda: plugin.connection_node_access(request, apply=True).to_dict())
 
     return [
         _capabilities,

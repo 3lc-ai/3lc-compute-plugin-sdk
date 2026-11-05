@@ -469,3 +469,28 @@ def test_node_access_requires_binding_and_only_post_applies():
         ).json()["ready"]
         assert client.post("/infra/connection/node-access", json={}, headers=header).status_code == 400
     assert seen == [("s3://b/a b", False), ("s3://b/a b", True)]
+
+
+def test_node_access_carries_reviewed_storage_access_and_revision():
+    from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
+    from tlc_plugin_sdk.infrastructure import ConnectionNodeAccess
+
+    seen = []
+    rules = {"rules": [{"scope": {"kind": "bucket", "bucket": "data"}, "prefix": "", "access": "read"}]}
+
+    class Setup(_StubProvider):
+        def connection_node_access(self, request, *, apply=False):
+            seen.append((request.storage_access, request.expected_revision, apply))
+            return ConnectionNodeAccess(supported=True, ready=apply, storage_access=rules, revision="r2")
+
+    header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
+    with _checking_client(Setup()) as client:
+        got = client.get("/infra/connection/node-access", params={"project_root_url": "s3://b"}, headers=header).json()
+        assert got["storage_access"] == rules and got["revision"] == "r2"
+        body = {"project_root_url": "s3://b", "storage_access": rules, "expected_revision": "r1"}
+        assert client.post("/infra/connection/node-access", json=body, headers=header).json()["ready"]
+        bad = {"project_root_url": "s3://b", "storage_access": ["not", "an", "object"]}
+        assert client.post("/infra/connection/node-access", json=bad, headers=header).status_code == 400
+    assert seen == [(None, "", False), (rules, "r1", True)]
+    assert "storage_access" not in ConnectionNodeAccess(supported=True).to_dict(), "no choice offered, none sent"
+    assert ConnectionNodeAccess.from_dict({"storage_access": rules, "revision": "r2"}).revision == "r2"

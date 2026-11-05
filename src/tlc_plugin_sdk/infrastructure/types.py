@@ -651,6 +651,10 @@ class ConnectionNodeAccess:
 
     ``ready`` confirms configuration only, not live storage access. ``action_label`` is empty
     when no setup action is available. GET inspects; POST explicitly applies the displayed setup.
+
+    A provider whose node access an administrator may widen beyond the project location answers
+    ``storage_access`` (the active rules, in the Connection ``storage_access`` shape) and its
+    ``revision``. ``None`` means the provider offers no such choice; the Hub then shows no editor.
     """
 
     supported: bool = False
@@ -659,6 +663,8 @@ class ConnectionNodeAccess:
     detail: str = ""
     action_label: str = ""
     checks: list[PreflightCheck] = field(default_factory=list)
+    storage_access: dict[str, Any] | None = None
+    revision: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ConnectionNodeAccess:
@@ -671,11 +677,13 @@ class ConnectionNodeAccess:
             detail=_str(data.get("detail")),
             action_label=_str(data.get("action_label")),
             checks=[PreflightCheck.from_dict(c) for c in checks] if isinstance(checks, list) else [],
+            storage_access=dict(data["storage_access"]) if isinstance(data.get("storage_access"), Mapping) else None,
+            revision=_str(data.get("revision")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the generic setup result."""
-        return {
+        """Serialize the generic setup result; ``storage_access`` and ``revision`` only when offered."""
+        out: dict[str, Any] = {
             "supported": self.supported,
             "ready": self.ready,
             "title": self.title,
@@ -683,6 +691,10 @@ class ConnectionNodeAccess:
             "action_label": self.action_label,
             "checks": [c.to_dict() for c in self.checks],
         }
+        if self.storage_access is not None:
+            out["storage_access"] = self.storage_access
+            out["revision"] = self.revision
+        return out
 
 
 @dataclass
@@ -694,9 +706,17 @@ class ConnectionCheckRequest:
             unavailable or omitted by an older host; ``""`` means explicitly no root. A provider
             must not substitute its worker-local configuration for this value. This is a probe
             target, not an authorization grant or a change to any job's destination.
+        storage_access: Node-access setup only (``POST``): the rules an administrator reviewed, in
+            the Connection ``storage_access`` shape, for the setup to apply exactly. ``None`` applies
+            the active setup unchanged. The host forwards it only after its administration check.
+        expected_revision: Node-access setup only: the ``revision`` the review was based on. A
+            provider applying ``storage_access`` refuses (:class:`Conflict`) when its active setup
+            has moved on, so concurrent edits never replace each other.
     """
 
     project_root_url: str | None = None
+    storage_access: dict[str, Any] | None = None
+    expected_revision: str = ""
 
 
 @dataclass
