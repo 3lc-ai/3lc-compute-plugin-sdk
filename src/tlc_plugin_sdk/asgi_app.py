@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
+def _generic_handlers(plugin: HubPlugin, *, isolated_jobs: bool = False) -> list[BaseRouteHandler]:
     """The host-reserved generic routes, bound to ``plugin`` (served by the worker)."""
 
     @get("/health", sync_to_thread=False)
@@ -56,7 +56,8 @@ def _generic_handlers(plugin: HubPlugin) -> list[BaseRouteHandler]:
             "ok": True,
             "plugin": getattr(plugin, "id", "?"),
             "sdk_version": SDK_CONTRACT_VERSION,
-            "capabilities": ["job_credentials_by_service", "job_status_recovery"],
+            "capabilities": ["job_credentials_by_service", "job_status_recovery"]
+            + (["isolated_job_processes"] if isolated_jobs else []),
         }
 
     # def + sync_to_thread: get_ui_fragment()/compute() are synchronous and may do
@@ -142,6 +143,7 @@ def build_plugin_app(
     extra_handlers: list[BaseRouteHandler] | None = None,
     debug: bool = False,
     token: str | None = None,
+    isolated_jobs: bool = False,
 ) -> Litestar:
     """Build the Litestar app serving ``plugin``'s HTTP surface.
 
@@ -162,7 +164,7 @@ def build_plugin_app(
     """
     handlers: list[Any] = [
         *_without_reserved(plugin.get_route_handlers(), plugin),
-        *_generic_handlers(plugin),
+        *_generic_handlers(plugin, isolated_jobs=isolated_jobs),
         *(extra_handlers or []),
     ]
     from tlc_plugin_sdk.connections import connection_middleware, credential_middleware
