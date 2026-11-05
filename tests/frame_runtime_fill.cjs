@@ -10,7 +10,7 @@ async function main() {
   const root = {querySelector: () => null, querySelectorAll: () => [], innerHTML: ''};
   const parent = {postMessage() {}};
   const doc = {documentElement: {setAttribute(name, value) {attributes[name] = value;}, style: {}, scrollHeight: 100},
-    body: {}, getElementById: () => root, head: {appendChild: el => el.onload()},
+    body: {}, getElementById: () => root, head: {appendChild: el => el.onload(), insertBefore() {}},
     createElement: () => ({}), addEventListener() {}, removeEventListener() {}};
   const context = {console, URL, URLSearchParams, Headers, Response, FormData, AbortController,
     document: doc, location: {search: '?hub=https://hub.test', href: 'https://compute.test/api/plugin-frame/', pathname: '/api/plugin-frame/'},

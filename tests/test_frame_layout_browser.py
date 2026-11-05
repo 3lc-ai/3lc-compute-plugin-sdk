@@ -92,6 +92,22 @@ def test_flow_grows_and_shrinks_including_margins_and_floats(browser: playwright
     page.close()
 
 
+def test_page_display_on_the_root_wins_and_still_shrinks(browser: playwright.Browser) -> None:
+    page, frame = _mount(browser)
+    frame.evaluate("""() => {
+      var style = document.createElement('style');
+      style.textContent = '.plugin-frame-root{display:flex;flex-direction:column}';
+      document.head.appendChild(style);
+      document.getElementById('tlc-plugin-root').className = 'plugin-frame-root';
+    }""")
+    assert frame.locator("#tlc-plugin-root").evaluate("el => getComputedStyle(el).display") == "flex"
+    frame.locator("#content").evaluate("el => el.style.height = '1400px'")
+    _height(page, 1400)
+    frame.locator("#content").evaluate("el => el.style.height = '200px'")
+    _height(page, 200)
+    page.close()
+
+
 def test_flow_reflows_when_width_changes(browser: playwright.Browser) -> None:
     page, frame = _mount(browser)
     frame.locator("#content").evaluate("""el => {

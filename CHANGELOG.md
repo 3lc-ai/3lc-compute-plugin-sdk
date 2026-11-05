@@ -25,6 +25,7 @@ written for inline hosts need migrating.
 - Forward request aborts, and dispose sockets/listeners/observers without cancelling jobs.
 - Flow frames shrink after content collapses or is removed; measure the content root independently
   of the iframe viewport, including child margins and floats. Fill pages remain host-sized.
+  The root's `flow-root` is a rule without specificity, so a `display` the page sets on the root wins.
 - Node-access setup can carry a choice of node buckets: `ConnectionNodeAccess` answers the active
   `storage_access` rules and their `revision`, and `ConnectionCheckRequest` carries the reviewed
   `storage_access` and `expected_revision` on `POST /infra/connection/node-access`, so a provider
