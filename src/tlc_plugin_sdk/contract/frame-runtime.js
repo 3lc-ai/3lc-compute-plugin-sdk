@@ -688,13 +688,17 @@
 
   // A `flow` page tells the Hub its height, and the Hub sizes the frame to it. A `fill` page is
   // sized by the Hub to the space it has and scrolls inside itself, so it reports nothing.
-  function reportHeight() {
+  function reportHeight(root) {
+    // A formatting context contains child margins and floats in the measured box. The document's
+    // scrollHeight is floored by the current iframe viewport, so measuring it can grow but never shrink.
+    root.style.display = 'flow-root';
     var last = 0;
     var observer = new ResizeObserver(function () {
-      var height = Math.ceil(document.documentElement.scrollHeight);
+      var box = root.getBoundingClientRect();
+      var height = Math.ceil(box.top + window.scrollY + Math.max(box.height, root.scrollHeight));
       if (height !== last && port) { last = height; port.postMessage({ v: PROTOCOL, type: 'height', value: height }); }
     });
-    observer.observe(document.body);
+    observer.observe(root);
     onDispose(function () { observer.disconnect(); });
   }
 
@@ -764,7 +768,7 @@
       var root = document.getElementById('tlc-plugin-root');
       root.innerHTML = init.html;
       placeIcon(root, init.icon);
-      if (init.layout !== 'fill') reportHeight();
+      if (init.layout !== 'fill') reportHeight(root);
       return runScripts(root);
     });
   }

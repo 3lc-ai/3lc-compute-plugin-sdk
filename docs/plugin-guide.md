@@ -264,7 +264,7 @@ The UI fragment is a self-contained `<style>` + `<div>` + `<script>` block. It h
 - `PLUGIN_API` — the bridge object with context, API clients, and libraries (the samples
   below alias `PLUGIN_API.getConfig('compute_service_url')` as `COMPUTE_URL`)
 - `PluginJobs` — the job-channel client, added to every fragment by the worker
-- All CSS variables and classes from `main.css` and `plugin-common.css` (see
+- Shared design tokens and component classes supplied by the Hub (see
   [Styling & UI Conventions](#styling--ui-conventions); `python -m tlc_plugin_sdk.lint src/`
   checks a fragment against them)
 - Vendor libraries through `PLUGIN_API.libs`; only `io` (Socket.IO) is stable
@@ -1532,14 +1532,32 @@ A plugin's `ui.html` gets the host's entire design system for free — and the h
 
 ### Why the shared classes are available (no import, no build step)
 
-The SDK runtime mounts the fragment in the plugin frame. The fragment runs in a separate Compute-origin frame, which loads these two host stylesheets:
+The SDK runtime mounts the fragment in a separate Compute-origin frame. The Hub
+supplies an ordered shared-style manifest, also used for its own template links:
 
-- `main.css` — the base design system (forms, buttons, cards, spinners, theme tokens)
-- `plugin-common.css` — the plugin page scaffolding (hero, workflow, metric cards, viewer)
+1. Shared fonts (Plus Jakarta Sans and JetBrains Mono)
+2. `main.css` — theme tokens, typography, forms, buttons, cards and spinners
+3. `3lc-neo.css` — Neo theme tokens and component treatments
+4. `plugin-common.css` — hero, workflow, metric cards and viewer scaffolding
+5. `controls.css` — shared controls
+6. `connection-status.css` — connection indicators
+7. `node-list.css` — node components
 
-Write `class="btn btn-primary"` or `class="form-control"` and you get the fully themed, dark-mode-correct component with zero CSS of your own. The flip side: your fragment shares its frame with its own widgets. Prefix any bespoke class with your plugin id (`.myplugin-…`) and never restyle a shared class globally — you would repaint other widgets in your page.
+These are host-provided assets, not imports a plugin should hardcode. The runtime
+receives them in cascade order, as URLs or inline CSS according to its asset
+capability. The Hub synchronizes the selected theme and subsequent theme changes.
+See [the browser runtime contract](browser-runtime.md#shared-styling).
 
-> **Only `main.css` and `plugin-common.css` are inherited.** Styles defined inside a host *template* — for example the `.pbadge` badges in `settings/plugins.html` — live in that page's own `<style>` block and are **not** available to a mounted fragment. Don't reach for them.
+Write `class="btn btn-primary"` or `class="form-control"` to get the themed component
+without custom CSS. Prefix bespoke classes with your plugin id (`.myplugin-…`) and
+never restyle a shared class globally: your widgets share the frame's CSS namespace.
+
+The frame document has a transparent canvas; cards and controls retain their themed
+surfaces. Hub shell styles (outer background, sidebar, navigation and viewport
+layout), Hub body classes and root inline styles are not part of the styling
+contract. Neither are page-template-only classes such as `.pbadge`. Do not depend
+on them or copy Hub layout resets into your fragment. Use the documented `flow`
+or `fill` layout for your page.
 
 ### Theme tokens — never hardcode a color
 
@@ -1621,7 +1639,7 @@ For a list of tables, put one field below the list to add to it: take its value 
 
 A Hub before 1.2 doesn't define the element, so a plugin that uses it sets `min_frontend_version = "1.2.0"` in `plugin.toml`. The bare `openTablePicker(inputId)` still works for a field you build yourself, without the double-click or the tags. See `TlcTableFieldElement` in `plugin-api.d.ts`.
 
-**Path fields.** For a file or folder on the machine the run reads from, or in a bucket, render the SDK's data-source field: `_tlcDataSourceHtml(id, {placeholder, accept})` for the markup and `_tlcBindDataSource(id, computeUrl, pluginId, {mode, purpose, accept, suggestedName})` once it is in the DOM (`shared.data_source_ui`; its docstring has the full usage). Browse…, or a double-click in the empty field, opens a file chooser under the field: a Location line naming the place being browsed (a folder of the run target's machine, or a bucket; a dropdown when there are several), a path bar that follows the browsing, and the rows. A click opens a folder or picks a file (an output picker puts the file's name in its box instead); the arrow keys highlight a row, Enter opens a highlighted folder or picks a highlighted file, Backspace goes up and Escape closes. A file picker has no buttons: the click is the pick. A folder picker (`mode: 'folder'`) dims files and has a footer with Cancel and "Select this folder", which picks the folder shown. The picked path lands in the field and fires `input` and `change`.
+**Path fields.** For a file or folder on the machine the run reads from, or in a bucket, render the SDK's data-source field: `_tlcDataSourceHtml(id, {placeholder, accept})` for the markup and `_tlcBindDataSource(id, computeUrl, pluginId, {mode, purpose, accept, suggestedName})` once it is in the DOM (`shared.data_source_ui`; its docstring has the full usage). Browse…, or a double-click in the empty field, opens a file chooser under the field: a Location line naming the place being browsed (a folder of the run target's machine, or a bucket; a dropdown when there are several), a path bar that follows the browsing, and the rows. A click opens a folder or picks a file (an output picker puts the file's name in its box instead); the arrow keys highlight a row, Enter opens a highlighted folder or picks a highlighted file, Backspace goes up and Escape closes. A file picker has no buttons: the click is the pick. A folder picker (`mode: 'folder'`) dims files and has a footer with Cancel and "Select this folder", which picks the folder shown. For an input that takes a file or a folder, such as COCO annotations (one JSON file, or a folder of them), pass `mode: 'any'`: a click on a file picks it, as in a file picker, and the footer's "Select this folder" picks the folder shown. An SDK before `'any'` reads it as `'file'`. The picked path lands in the field and fires `input` and `change`.
 
 For a field that names where a job will *write*, pass `purpose: 'output'`: the footer gains a name box, prefilled from `suggestedName`, and the pick is `<folder shown>/<name>`. A file output's Save adds the first extension in `accept` when the name has none, and a click on a file puts its name in the box ("Replaces <name>"). A folder output's box names a new folder under the one shown, or an existing one ("Adds to <name>"); empty, it picks the folder shown. The job creates the folder. `mode`, `accept` and `suggestedName` may be functions, read every time the chooser opens, for a form whose choice changes them, such as an export format; when that choice changes while the chooser may be open, call `refresh()` on the handle the bind returns:
 

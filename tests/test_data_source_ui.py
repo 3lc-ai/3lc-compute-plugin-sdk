@@ -458,6 +458,48 @@ def test_a_folder_picker_opens_a_folder_on_a_click_and_selects_the_one_shown(tmp
 
 
 @needs_node
+def test_a_picker_for_either_picks_a_file_on_a_click_or_selects_the_folder_shown(tmp_path: Path) -> None:
+    # COCO's annotations path: one JSON file, or a folder of them.
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'any', accept: '*.yaml'});\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); var listed = els();\n"
+        "clickOn(rowWith({'data-ds-row': '2'})); var file = els();\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); clickOn(primary()); var here = els();\n"
+        # The highlight says what the footer does: a folder opens, a file is selected, Enter does it.
+        "_els['f-ds-browse-btn'].click(); await tick();\n"
+        "keyOn('ArrowDown'); var dirHl = els(); keyOn('ArrowDown'); keyOn('ArrowDown'); var fileHl = els();\n"
+        "keyOn('Enter'); var byKey = els();\n"
+        "return [listed, file, here, dirHl, fileHl, byKey];",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_MIXED},
+    )
+    listed, file, here, dir_hl, file_hl, by_key = out
+    panel = listed["panel"]
+    # Files are a choice, as in a file picker; the footer is a folder picker's, for the folder shown.
+    assert '<div class="tlc-ds-entry" data-ds-row="2">' in panel and "tlc-ds-entry-disabled" not in panel
+    assert '<span class="ds-note">Showing *.yaml</span>' in panel
+    assert "data-ds-cancel" in panel and "data-ds-primary>Select this folder</button>" in panel
+    assert file["value"] == "/Users/me/a.yaml" and not file["open"]
+    assert here["value"] == "/Users/me" and not here["open"]
+    assert "data-ds-primary>Open</button>" in dir_hl["panel"]
+    assert "data-ds-primary>Select</button>" in file_hl["panel"]
+    assert by_key["value"] == "/Users/me/a.yaml" and not by_key["open"]
+
+
+@needs_node
+def test_an_output_reads_any_as_a_file(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        "_tlcBindDataSource('f', 'http://127.0.0.1:5020', 'p', {mode: 'any', purpose: 'output',"
+        " suggestedName: 'export.csv'});\n"
+        "_els['f-ds-browse-btn'].click(); await tick(); return els();",
+        routes={**_NO_BUCKETS, "/browse": _LOCAL_BROWSE_OUT},
+    )
+    assert '<label class="ds-name-label">File name</label>' in out["panel"]
+    assert "data-ds-primary>Save</button>" in out["panel"]
+
+
+@needs_node
 def test_the_keyboard_moves_the_highlight_picks_goes_up_and_closes(tmp_path: Path) -> None:
     out = _run(
         tmp_path,

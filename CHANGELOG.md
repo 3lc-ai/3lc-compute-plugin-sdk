@@ -23,12 +23,18 @@ written for inline hosts need migrating.
   says `inlineAssets: 1`, so a frame on a public Compute never fetches from a Hub on a private
   address, which Chrome's Local Network Access blocks.
 - Forward request aborts, and dispose sockets/listeners/observers without cancelling jobs.
+- Flow frames shrink after content collapses or is removed; measure the content root independently
+  of the iframe viewport, including child margins and floats. Fill pages remain host-sized.
 - Node-access setup can carry a choice of node buckets: `ConnectionNodeAccess` answers the active
   `storage_access` rules and their `revision`, and `ConnectionCheckRequest` carries the reviewed
   `storage_access` and `expected_revision` on `POST /infra/connection/node-access`, so a provider
   applies exactly what an administrator reviewed and refuses a stale review.
 - Document frame ownership, capabilities, errors, long-session recovery, migration,
   release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.
+- The data-source picker takes `mode: 'any'`, for an input that takes a file or a folder: a click
+  on a file picks it, and "Select this folder" picks the folder shown. Since 0.6.0 a folder picker
+  dims its files, so a field like COCO's annotations path (a JSON file, or a folder of them) could
+  only pick a folder. An older SDK reads `'any'` as `'file'`.
 
 ## [Unreleased]
 

@@ -20,7 +20,10 @@ build configuration before edits. Do not import host internals or copy a private
    signatures. No Hub globals, parent DOM access, browser secrets or custom auth flows.
 5. Use least-privilege manifest capabilities, reject invalid server inputs and verify
    ownership server-side. Client validation is for usability, never authorization.
-6. Use shared UI styles and safe text rendering. Include loading, success, refusal,
+6. Use the [shared styling contract](browser-runtime.md#shared-styling) and safe text rendering.
+   The Hub supplies ordered design/component CSS and theme updates; its shell, navigation
+   and page layout stay outside the frame. Keep the frame canvas transparent and use
+   themed component surfaces. Include loading, success, refusal,
    dismissal and failure states. Handle rejected promises. Clean up local resources
    using `lifecycle.onDispose`, preserving remote jobs.
 

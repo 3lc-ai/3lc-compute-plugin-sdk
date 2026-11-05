@@ -30,7 +30,7 @@ Then in the plugin's ``ui.html`` JavaScript:
     // Bind the browse/upload handlers (call AFTER inserting into DOM)
     _tlcBindDataSource('my-field', computeUrl, pluginId, {
         accept: '*.yaml,*.yml',
-        mode: 'file',                 // 'file' or 'folder' ('dir' is read as 'folder')
+        mode: 'file',                 // 'file', 'folder' ('dir' is read as 'folder'), or 'any': either
         purpose: 'input',             // 'input' (default) or 'output': a Save dialog
         suggestedName: 'export.csv',  // output only: what the name box starts with
     });
@@ -45,7 +45,10 @@ picks a file (an output picker puts the file's name in its box instead); the arr
 highlight a row, Enter opens a highlighted folder or does the footer's action, Backspace goes
 up, Escape closes. A folder picker's footer has Cancel and "Select this folder", for the folder
 shown; files there are listed dimmed and cannot be picked. A file picker has no buttons: the
-click on the file is the pick. A double-click in the empty field opens the panel, as Browse… does
+click on the file is the pick. ``mode: 'any'`` is for an input that takes a file or a folder (a
+COCO annotations file, or a folder of them): a click on a file picks it, as in a file picker, and
+the footer has a folder picker's "Select this folder" for the folder shown. An output picker reads
+``'any'`` as ``'file'``. A double-click in the empty field opens the panel, as Browse… does
 (the Hub's ``<tlc-table-field>`` does the same for a table URL).
 
 An output picker (``purpose: 'output'``) saves: its footer has a name box, prefilled from
@@ -332,12 +335,17 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "  config = config || {};\n"
     "  // mode, accept and suggestedName may be functions, read every time the panel opens, for a form whose\n"
     "  // choice changes them (an export format). 'dir' is what some plugins pass for a folder picker: 'folder'.\n"
-    "  function _cfg(key) { var v = config[key]; return typeof v === 'function' ? v() : v; }\n"
-    "  function _modeNow() { var m = _cfg('mode'); return m === 'dir' ? 'folder' : (m || 'file'); }\n"
-    "  var glob = String(_cfg('accept') || '');\n"
-    "  var mode = _modeNow();\n"
+    "  // 'any' is an input that takes a file or a folder; an output names what it writes, so there it is 'file'.\n"
     "  var purpose = config.purpose || 'input';\n"
     "  var output = purpose === 'output';\n"
+    "  function _cfg(key) { var v = config[key]; return typeof v === 'function' ? v() : v; }\n"
+    "  function _modeNow() {\n"
+    "    var m = _cfg('mode');\n"
+    "    m = m === 'dir' ? 'folder' : (m || 'file');\n"
+    "    return m === 'any' && output ? 'file' : m;\n"
+    "  }\n"
+    "  var glob = String(_cfg('accept') || '');\n"
+    "  var mode = _modeNow();\n"
     "  var input = document.getElementById(idPrefix);\n"
     "  var browseBtn = document.getElementById(idPrefix + '-ds-browse-btn');\n"
     "  var panel = document.getElementById(idPrefix + '-ds-panel');\n"
@@ -758,7 +766,10 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "      return { label: 'Open', run: function() { _browseTo(row.url); } };\n"
     "    }\n"
     "    if (!output) {\n"
-    "      if (mode === 'folder') return { label: 'Select this folder', run: function() { _pick(here, _loc); } };\n"
+    "      // A picker for either ('any') selects the folder shown until a file is highlighted.\n"
+    "      if (mode === 'folder' || (mode === 'any' && !row)) {\n"
+    "        return { label: 'Select this folder', run: function() { _pick(here, _loc); } };\n"
+    "      }\n"
     "      if (!row) return { label: 'Select', disabled: true, title: 'Choose a file to enable Select.' };\n"
     "      return { label: 'Select', run: function() { _pick(row.url, _loc); } };\n"
     "    }\n"
@@ -876,9 +887,10 @@ DATA_SOURCE_UI_JS = RUN_TARGET_JS + (
     "    h += '</div>';\n"
     "    // The footer: an output picker's name box with its note, else the filter (only files are filtered, see\n"
     "    // data_source_routes.py); then Cancel and the one action. A file picker has no buttons: the click on\n"
-    "    // the file is the pick (Enter from the keyboard), and Escape or a click outside closes.\n"
+    "    // the file is the pick (Enter from the keyboard), and Escape or a click outside closes. A picker for\n"
+    "    // either ('any') has the buttons, for the folder shown, and a click on a file still picks the file.\n"
     "    var p = _primary();\n"
-    "    var buttons = output || mode === 'folder';\n"
+    "    var buttons = output || mode === 'folder' || mode === 'any';\n"
     "    if (buttons || glob || data.truncated) {\n"
     "      h += '<div class=\"tlc-ds-footer\">';\n"
     "      if (output) {\n"

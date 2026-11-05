@@ -17,6 +17,23 @@ env:
   UV_INDEX_STAGING_PASSWORD: ${{ secrets.CLOUDREPO_READ_PASSWORD || secrets.CLOUDREPO_PASSWORD }}
 
 jobs:
+  browser-layout:
+    name: Plugin frame layout (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.6"
+      - name: Install browser test environment
+        run: |
+          uv venv --python 3.12
+          uv pip install --no-deps .
+          uv pip install pytest playwright==1.64.1
+          .venv/bin/python -m playwright install --with-deps chromium
+      - name: Frame layout regression tests
+        run: .venv/bin/python -m pytest tests/test_frame_layout_browser.py -q
+
   lint-type-test:
     name: ruff · mypy · pytest
     runs-on: ubuntu-latest
