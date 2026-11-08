@@ -23,6 +23,9 @@ written for inline hosts need migrating.
   says `inlineAssets: 1`, so a frame on a public Compute never fetches from a Hub on a private
   address, which Chrome's Local Network Access blocks.
 - Forward request aborts, and dispose sockets/listeners/observers without cancelling jobs.
+- A link written as a Hub path (`<a href="/projects/…">`, as "Open in Project" is) goes to the Hub
+  through `nav.go`, or `nav.open` for a new tab. In a frame it resolved against the compute service,
+  which answered 404. `/api/` paths, `download` links and absolute links are left alone.
 - Flow frames shrink after content collapses or is removed; measure the content root independently
   of the iframe viewport, including child margins and floats. Fill pages remain host-sized.
   The root's `flow-root` is a rule without specificity, so a `display` the page sets on the root wins.
