@@ -48,6 +48,20 @@ def test_runtime_takes_hub_assets_as_text(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_hub_path_links_go_to_the_hub(tmp_path: Path) -> None:
+    """A relative Hub link in the page (e.g. Open in Project) navigates the Hub, not the frame's compute origin."""
+    script = tmp_path / "frame.js"
+    script.write_text(frame_runtime_script(), encoding="utf-8")
+    subprocess.run(
+        ["node", str(Path(__file__).with_name("frame_runtime_links.cjs")), str(script)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_runtime_fill_layout_and_hub_links(tmp_path: Path) -> None:
     script = tmp_path / "frame.js"
     script.write_text(frame_runtime_script(), encoding="utf-8")

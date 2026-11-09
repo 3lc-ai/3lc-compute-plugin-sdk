@@ -686,6 +686,38 @@
       + (search ? '&' + search : '') + (hash ? '#' + hash : ''));
   }
 
+  // A link written as a Hub path ("/projects/p?…#datasets") resolves against the frame's own address,
+  // the compute service, which has no such page: it answered 404 where the page had meant the Hub. Such
+  // a click goes to the Hub instead, with nav.go, or nav.open where the person asked for a new tab. A
+  // page's own handler that cancels the click still wins. Left alone: absolute and protocol-relative
+  // links, `/api/` paths and `download` links, which mean the compute service, and fragments.
+  function hubLinkPath(link) {
+    var href = link.getAttribute('href') || '';
+    if (href.charAt(0) !== '/' || href.charAt(1) === '/' || href.charAt(1) === '\\') return '';
+    if (/^\/api(\/|$|\?|#)/.test(href) || link.hasAttribute('download')) return '';
+    return href;
+  }
+  function routeHubLinks(api) {
+    function onClick(event) {
+      if (event.defaultPrevented || (event.type === 'click' && event.button !== 0) || (event.type === 'auxclick' && event.button !== 1)) return;
+      var link = event.target && typeof event.target.closest === 'function' ? event.target.closest('a[href]') : null;
+      var path = link ? hubLinkPath(link) : '';
+      if (!path) return;
+      event.preventDefault();
+      var newTab = event.type === 'auxclick' || event.ctrlKey || event.metaKey || event.shiftKey
+        || String(link.getAttribute('target') || '').toLowerCase() === '_blank';
+      (newTab ? api.nav.open(hubOrigin + path) : api.nav.go(path)).catch(function (error) {
+        console.error('[3LC] The Hub did not open ' + path + ':', error);
+      });
+    }
+    document.addEventListener('click', onClick);
+    document.addEventListener('auxclick', onClick);
+    onDispose(function () {
+      document.removeEventListener('click', onClick);
+      document.removeEventListener('auxclick', onClick);
+    });
+  }
+
   // A `flow` page tells the Hub its height, and the Hub sizes the frame to it. A `fill` page is
   // sized by the Hub to the space it has and scrolls inside itself, so it reports nothing.
   function reportHeight(root) {
@@ -767,6 +799,7 @@
       /* SDK_JOB_TRACKER */
       ['start', 'track', 'run', 'on', 'list', 'connect'].forEach(function (name) { api.jobs[name] = window.PluginJobs[name]; });
       installGlobals(api);
+      routeHubLinks(api);
       register(init.components && init.components.tableField, '<tlc-table-field>');
       var root = document.getElementById('tlc-plugin-root');
       root.innerHTML = init.html;
