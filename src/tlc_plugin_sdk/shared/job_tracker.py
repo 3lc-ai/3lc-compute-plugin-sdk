@@ -21,6 +21,9 @@ a plugin UI gets a ``window.PluginJobs`` object::
     PluginJobs.on(namespace, event, handler)                        // -> unsubscribe(); custom ctx.emit() events
     PluginJobs.list(pluginId?)                                      // -> Promise<PluginJobUpdate[]>; seed-on-mount
 
+``onDone`` fires for ``completed`` and for ``cancelled`` (read ``job.status`` before saying the
+job finished), ``onError`` for ``failed``.
+
 ``run`` pre-subscribes and buffers so a job that finishes between the ``/run``
 response and the client subscribing still delivers its terminal event. Active trackers
 also reconcile terminal state from the host job list, including after reconnects.
