@@ -56,7 +56,7 @@ def _generic_handlers(plugin: HubPlugin, *, isolated_jobs: bool = False) -> list
             "ok": True,
             "plugin": getattr(plugin, "id", "?"),
             "sdk_version": SDK_CONTRACT_VERSION,
-            "capabilities": ["job_credentials_by_service", "job_status_recovery"]
+            "capabilities": ["job_credentials_by_service", "job_status_recovery", "host_requests"]
             + (["isolated_job_processes"] if isolated_jobs else []),
         }
 
@@ -83,7 +83,23 @@ def _generic_handlers(plugin: HubPlugin, *, isolated_jobs: bool = False) -> list
         params: dict[str, Any] = dict(request.query_params)
         return plugin.compute(params)
 
-    return [health, ui, compute]
+    # The plugin's runtime MCP tools; the manifest's static ones the host reads itself. A plugin that
+    # raises here offers no dynamic tools rather than taking the catalogue down with it.
+    @get("/mcp/tools", sync_to_thread=True)
+    def mcp_tools() -> dict[str, Any]:
+        try:
+            tools = plugin.get_mcp_tools()
+        except Exception:
+            logger.exception("Plugin %s: get_mcp_tools() failed; no dynamic MCP tools", getattr(plugin, "id", "?"))
+            return {"tools": [], "error": "get_mcp_tools() failed; see the worker log"}
+        from tlc_plugin_sdk.mcp_tools import mcp_tools_as_wire, packaged_knowledge, parse_mcp_tools
+
+        return {
+            "tools": mcp_tools_as_wire(parse_mcp_tools([t for t in tools if isinstance(t, dict)])),
+            "knowledge": packaged_knowledge(plugin),
+        }
+
+    return [health, ui, compute, mcp_tools]
 
 
 def _bearer_guard(token: str) -> Any:
@@ -167,14 +183,16 @@ def build_plugin_app(
         *_generic_handlers(plugin, isolated_jobs=isolated_jobs),
         *(extra_handlers or []),
     ]
+    from tlc_plugin_sdk.caller import caller_middleware
     from tlc_plugin_sdk.connections import connection_middleware, credential_middleware
 
-    # Outermost first: an unauthenticated request is refused before any Connection is resolved
-    # or any granted credential is bound.
+    # Outermost first: an unauthenticated request is refused before any Connection is resolved,
+    # any granted credential is bound, or the caller the host named is read.
     middleware: list[Any] = [
         *([_bearer_guard(token)] if token else []),
         connection_middleware,
         credential_middleware,
+        caller_middleware,
     ]
     # No generated OpenAPI/Swagger routes: a worker is an internal endpoint, and on a node the
     # schema would describe the job channel to anyone who reached the port.
@@ -185,7 +203,7 @@ def build_plugin_app(
 # worker's (``/busy`` shadowed = a node-agent's self-destruct guard answers whatever the
 # plugin says). Plugins mount first for trie priority, so collisions are removed here.
 RESERVED_WORKER_PATHS: frozenset[str] = frozenset({"/health", "/ui", "/compute", "/busy", "/reclaim"})
-RESERVED_WORKER_PREFIXES: tuple[str, ...] = ("/jobs",)
+RESERVED_WORKER_PREFIXES: tuple[str, ...] = ("/jobs", "/mcp")
 
 
 def _without_reserved(handlers: list[Any], plugin: HubPlugin) -> list[Any]:

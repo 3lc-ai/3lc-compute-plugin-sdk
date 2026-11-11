@@ -22,7 +22,7 @@ file. Intended core mapping:
 - ``resolve_image_url(path, table_url)`` → already in core:
   ``Url(path).to_absolute(owner)`` (= ``Table.absolute_url_from_relative``).
 - ``load_image(path, table_url)`` → ``ImageHelper.open_image(url)``
-  (local file → PIL directly, else ``BytesIO(url.read_bytes())``; faithful
+  (``BytesIO(url.read_bytes())`` for every adapter, including local files; faithful
   mode by default — the RGB conversion is this app's policy and stays here).
 - ``read_image_from_table(table, idx, col)`` → ``Table.read_image(idx, column)``.
 - ``get_image_paths(table, col)`` → ``Table.get_image_urls(column)``.
@@ -147,9 +147,8 @@ def resolve_image_url(img_path: str, table_url: Any = None) -> tlc.Url:
 def load_image(img_path: str, table_url: Any = None) -> Image:
     """Load an image from a stored path as an RGB PIL image.
 
-    Resolves the path via :func:`resolve_image_url`, then opens local files
-    directly with PIL and everything else through the URL adapters
-    (``BytesIO(url.read_bytes())``).
+    Resolves the path via :func:`resolve_image_url`, then reads through the
+    registered URL adapter for every scheme, including local files.
 
     Args:
         img_path: The image path stored in the table.
@@ -163,24 +162,21 @@ def load_image(img_path: str, table_url: Any = None) -> Image:
     import io
 
     from PIL import Image as PILImage
-    from tlc.url import Scheme
 
     url = resolve_image_url(str(img_path), table_url)
-    if url.scheme == Scheme.FILE:
-        image = PILImage.open(url.to_str())
-    else:
-        image = PILImage.open(io.BytesIO(url.read_bytes()))
-    return image.convert("RGB")
+    # File URLs also belong to the registered adapter (for example a sandbox's
+    # authorized storage bridge). Bypassing it breaks file:// and remote access.
+    with PILImage.open(io.BytesIO(url.read_bytes())) as image:
+        return image.convert("RGB")
 
 
 def read_image_size(img_path: str, table_url: Any = None) -> tuple[int, int]:
     """Return a stored image's ``(width, height)`` without decoding its pixels.
 
     Resolves the path the same way as :func:`load_image` (through the URL
-    adapters, so any storage backend works), but reads only the image header
-    rather than the full image — much cheaper when only the dimensions are
-    needed (e.g. populating ``image_width``/``image_height`` for empty
-    annotations on a table built from images alone).
+    adapters, so any storage backend works). The adapter supplies the encoded
+    file; Pillow reads its dimensions without allocating the decoded pixels.
+    This also preserves sandbox adapters for local file URLs.
 
     Args:
         img_path: The image path stored in the table.
@@ -194,12 +190,8 @@ def read_image_size(img_path: str, table_url: Any = None) -> tuple[int, int]:
     import io
 
     from PIL import Image as PILImage
-    from tlc.url import Scheme
 
     url = resolve_image_url(str(img_path), table_url)
-    if url.scheme == Scheme.FILE:
-        with PILImage.open(url.to_str()) as image:
-            return image.width, image.height
     with PILImage.open(io.BytesIO(url.read_bytes())) as image:
         return image.width, image.height
 

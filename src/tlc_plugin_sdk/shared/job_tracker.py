@@ -66,16 +66,18 @@ JOB_TRACKER_JS = r"""
       merged.project_name = ctxProject;
       params = merged;
     }
+    // A run on a node is answered only after the compute has planned the node's data copy, which can
+    // take well over the frame's default 10 s; the start waits two minutes (`timeout`: PluginFetchOptions).
     return API.authFetch(_computeUrl() + '/api/plugins/' + pluginId + '/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
+      body: JSON.stringify(params), timeout: 120000
     }).then(function(r){ return r.json(); });
   }
 
   function cancel(jobId){
     if (API.jobs && API.jobs.cancel) { return API.jobs.cancel(jobId); }
     return API.authFetch(_computeUrl() + '/api/plugins/jobs/' + jobId + '/cancel', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', timeout: 30000
     }).then(function(r){ return r.json(); });
   }
 

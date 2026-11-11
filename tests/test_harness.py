@@ -199,3 +199,14 @@ def test_the_manifest_declares_its_data_keys(tmp_path: Path) -> None:
 def test_a_wrong_data_key_is_named(tmp_path: Path, runtime: str, match: str) -> None:
     with pytest.raises(ValueError, match=match):
         read_manifest(_data_manifest(tmp_path, runtime))
+
+
+@pytest.mark.parametrize("workload", ["compute", "agent"])
+def test_manifest_declares_node_workload(tmp_path: Path, workload: str) -> None:
+    manifest = read_manifest(_data_manifest(tmp_path, f'node_workload = "{workload}"\n'))
+    assert manifest.node_workload == workload
+
+
+def test_invalid_node_workload_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="node_workload"):
+        read_manifest(_data_manifest(tmp_path, 'node_workload = "agant"\n'))

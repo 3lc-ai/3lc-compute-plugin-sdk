@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.14
+
+- Expose exact table parent URLs and original-table status through the shared project catalog.
+
+## 0.7.13
+
+- Add import-light job configuration contracts for shared native validation and MCP catalog generation.
+- Add deterministic, path-bounded UI source packaging and generated-artifact checks.
+- Load JSON Schema validation only when normalizing job inputs.
+- Share bounded project/table/run reads and epoch summaries across host and worker adapters.
+
 All notable changes to `3lc-compute-plugin-sdk` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -15,6 +26,7 @@ A minor version, not a patch: framed pages get a different `PLUGIN_API`. In part
 `PLUGIN_API.compute` (an inline host's compute service) and `objects` are gone. Plugin pages
 written for inline hosts need migrating.
 
+- A failed job reports what failed: an exception group (a task group's) is reported by its leaf exceptions, not as "unhandled errors in a TaskGroup".
 - Package the canonical isolated browser runtime and Python asset loader with typed
   namespaced helpers, automatic job tracking and local lifecycle cleanup.
 - `http.request` is the host-mediated request (not `compute.request`, so a check for
@@ -39,6 +51,10 @@ written for inline hosts need migrating.
   applies exactly what an administrator reviewed and refuses a stale review.
 - Document frame ownership, capabilities, errors, long-session recovery, migration,
   release gates and plugin-authoring agent workflows. Preserve worker recovery from 0.6.1.
+- `actions.register/unregister` in framed pages: the page's actions reach the Hub's registry
+  over the frame port, and the Hub runs them in the frame (`run`, answered with `done`).
+- A page put in the back/forward cache keeps its channel to the Hub, so Back no longer brings
+  back a page whose every call fails with "The Hub is not connected to this page".
 - The data-source picker takes `mode: 'any'`, for an input that takes a file or a folder: a click
   on a file picks it, and "Select this folder" picks the folder shown. Since 0.6.0 a folder picker
   dims its files, so a field like COCO's annotations path (a JSON file, or a folder of them) could
@@ -46,7 +62,26 @@ written for inline hosts need migrating.
 
 ## [Unreleased]
 
+### Fixed
+
+- Isolated jobs retain their authenticated host request/reply channel across process boundaries,
+  including reconnect recovery, cancellation, and redaction of credentials renewed during a job.
+
+### Documentation
+
+- Make early run publication explicit in the plugin and agent guides: call `ctx.result(str(run.url))`
+  as soon as a run exists, before work begins. This associates live queue progress with the actual
+  run and name without finishing the job. No new API or minimum SDK version is required.
+
 ### Added
+
+- `current_caller()` and `CALLER_HEADER` (`tlc_plugin_sdk.caller`): who a plugin route is called for, stamped by
+  the host on every forwarded route as the ids it puts into a job's `_identity`. A route keys per-person state on
+  it; it carries no authority, and the person's bearer never reaches a worker.
+- MCP tools: `[mcp]` in the manifest (`[[mcp.tools]]` job and route tools, `knowledge`, `agent`), validated by
+  `harness.read_manifest`; `HubPlugin.get_mcp_tools()` for runtime tools, served at the reserved worker route
+  `GET /mcp/tools` (`/mcp` is now a reserved prefix); `ctx.output(name, value)` recording named job outputs in
+  the job record; `PLUGIN_API.actions` for a fragment's buttons. See the guide's "MCP tools" section.
 
 - Worker `job_status_recovery` capability and authenticated `GET /jobs/{id}/status` for
   recovering generic progress and outcomes after a controller disconnect. A finished outcome

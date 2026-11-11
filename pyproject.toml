@@ -7,7 +7,7 @@ name = "3lc-compute-plugin-sdk"
 # The plugin-contract (ABI) version. This IS tlc_plugin_sdk.SDK_CONTRACT_VERSION
 # (read back via importlib.metadata) — one source of truth. SemVer MAJOR.MINOR.PATCH;
 # the 0.x line is additive-only (see README → Status).
-version = "0.7.0"
+version = "0.7.14"
 description = "Public Python SDK for building 3LC compute-service plugins."
 # Matches the core's range (3lc 3.5: 3.11–3.15). uv refuses to lock a Python range the core cannot
 # resolve, so this moves with it.
@@ -45,6 +45,8 @@ classifiers = [
 # imports fine and then fails on first use. Light consumers that only want the contract core
 # (the .d.ts, SDK_CONTRACT_VERSION) pay the install weight; none of them ship it.
 dependencies = [
+    # Shared native/MCP request validation; imported lazily, without the ML stack.
+    "jsonschema>=4.23,<5",
     "uvicorn>=0.34.0",
     "litestar>=2.22.0,<3.0.0",
     # multidict 7.2.0 (2026-10-24) made CIMultiDictProxy.__new__ refuse anything but a multidict, which
@@ -70,6 +72,8 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.15,<0.16",
     "mypy>=1.14",
+    "types-jsonschema>=4.23",
+    "pyarrow-stubs",
 ]
 
 [tool.hatch.metadata]
@@ -154,5 +158,15 @@ module = [
     "tlc.*",
     "tlcurl.*",
     "torch",
+    "_tlc_auth_state",
+    "_tlcnative.*",
+    "tlcconfig",
+    "tlcconfig.*",
 ]
 ignore_missing_imports = true
+
+# Read the typed adapter base shipped by 3lc while its distribution lacks py.typed.
+[[tool.mypy.overrides]]
+module = ["tlcurl.url_adapters._base"]
+follow_untyped_imports = true
+follow_imports = "silent"

@@ -113,6 +113,7 @@ layout.
 # The host loads the plugin via runtime.entrypoint; there is no register()
 # call at import and no metadata on the plugin class.
 id = "my-plugin"                    # URL-safe slug
+previous_ids = []                    # Optional former IDs for read-only link redirects
 name = "My Plugin"                  # Display name
 description = "Analyzes table data quality."
 version = "1.0.0"
@@ -130,6 +131,8 @@ input_types = ["table"]             # What it consumes
 output_types = []                   # What it produces (empty = analysis only)
 priority = 50                       # Sort order in sidebar (higher = first)
 quick_action = false                # Show in dashboard quick actions?
+# target_bound = false              # The page stays the deployment's: no session on the chosen node. For a page
+#                                   # of settings that are the person's on this deployment; its jobs still take a run target.
 # Optional sidebar grouping:
 # group = "My Group"
 # group_icon_svg = '<svg ...><rect x="2" y="2" width="12" height="12" rx="2"/></svg>'
@@ -139,6 +142,7 @@ entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
 provision_extra = "my-plugin"       # your plugin's dependency group: host runs `uv sync --extra <this>`
 # remote_capable = true             # a run may target a remote node the Hub manages although requires_gpu is false
+# node_workload = "agent"           # a stateful agent module; defaults to "compute"
 # isolation = "venv"                # the one runtime there is; older manifests still say it, nothing reads it
 # Custom routes that must run where the model lives when a host with remote-node support
 # runs this plugin on a remote worker (inference, model warm-up/status). Path prefixes
@@ -1868,6 +1872,99 @@ def test_the_ui_follows_the_hub_styling_conventions() -> None:
 
 ---
 
+## MCP tools: what an agent may ask your plugin to do
+
+The deployment's Compute Service is an MCP server (`/api/mcp`). Every
+installed plugin's tools are in its catalogue the moment the plugin is installed, with no MCP code in the
+plugin and no restart: declare them in the manifest.
+
+```toml
+[mcp]
+knowledge = ["docs/mcp/*.md"]            # pages the host serves as MCP resources (optional)
+
+[[mcp.tools]]
+name = "export"                          # the host lists it as "<plugin id>_export"
+description = "Export a table to YOLO, COCO, CSV or XLSX"
+[mcp.tools.input_schema]                 # JSON Schema of the arguments
+required = ["table_url", "format", "output_path"]
+[mcp.tools.input_schema.properties]
+table_url = { type = "string", description = "The table to export" }
+format = { type = "string", enum = ["yolo", "coco", "csv", "xlsx"] }
+output_path = { type = "string" }
+[mcp.tools.job]                          # a job tool: starts run_job with this body
+outputs = ["output_path"]                # what ctx.output() will report
+[mcp.tools.job.body]
+table_url = "{{table_url}}"              # "{{argument}}" is replaced by the argument's value
+format = "{{format}}"
+output_path = "{{output_path}}"
+
+[[mcp.tools]]
+name = "formats"
+description = "The export formats this plugin supports"
+input_schema = { properties = {} }
+[mcp.tools.route]                        # a route tool: calls one of your custom routes
+method = "GET"
+path = "/formats"
+```
+
+- A **job** tool is the same `POST /run` the fragment's button sends: the host fills the body from the
+  arguments, adds `project_name` and the caller's run target, stamps identity and Connections, and starts the
+  job for the caller. Report what the job produced with `ctx.output(name, value)` (a table URL, a path, a
+  count): outputs live in the job record, so a caller reads them from `GET /api/plugins/jobs` without
+  listening to events. `ctx.result(url)` stays the Open link. A plugin whose result today exists only in a
+  custom `emit` event adds an `output` for it.
+- A **route** tool calls one of your routes with the arguments (JSON body for `POST`, query for `GET`) and
+  returns its answer; `GET`-only, side-effect-free routes make the best tools.
+- Tools that depend on runtime state (a model list) come from `get_mcp_tools()` on the plugin object, in the
+  same dict shape (`tlc_plugin_sdk.mcp_tools.mcp_tools_as_wire`); the worker serves them at the reserved route
+  `GET /mcp/tools`. Packaged contracts remain authoritative. Runtime-only tools are scoped to the caller
+  and node, with explicit node constraints when their schemas differ. Prefer a stable tool returning model
+  choices as data rather than changing its input schema.
+- Buttons that only make sense in the browser (a chart, a download) are offered through
+  `PLUGIN_API.actions.register(id, {title, description, params, run})`: the Hub lists them as
+  `plugin.<id>.<action>` in the tab's UI session, and the MCP's `ui_act` runs them in that tab.
+- Plugins using the shared preset bar also offer `plugin.<id>.get_form` and `plugin.<id>.set_form`
+  after their form is ready (SDK 0.6.3). `get_form` returns `values` and `defaults`; `set_form` accepts
+  `{values, replace?: boolean}`, merges nested settings (or starts from defaults with `replace`), waits
+  for the plugin's `apply` to finish and returns the actual `values`, `applied`, and any `mismatches`.
+  Explicit input fields are edits, so they can replace the launch table. This changes the browser draft
+  only: it does not save a named preset or submit a job. Check the returned values before starting one.
+- `plugin.<id>.save_preset` (SDK 0.7) stores the filled form as a named preset (`{name, replace?}`): not when a
+  preset with the same values exists (`{saved: false, same_as, id}`), and a name in use is replaced only with
+  `replace`. In a framed page (Hubs on SDK 0.7) these registrations travel to the Hub over the frame port and
+  the Hub runs the action in the frame; the page's code is the same.
+- `[mcp] agent = true` declares a host-request agent runtime. Only a deployment-approved
+  chat or background reasoning provider receives agent authority. Ordinary AI modules
+  use `host_services = ["ai"]` instead; `node_workload = "agent"` controls their placement.
+
+Validation runs with the rest of the manifest (`tlc_plugin_sdk.harness.read_manifest`); a tool of the wrong
+shape fails the manifest, in words.
+
+### Published contracts and typed results (SDK 0.7.6)
+
+For larger contracts, set `tools_file = "mcp-tools.json"` under `[mcp]`. Package that
+JSON array beside `plugin.toml`. It uses the same tool objects as `[[mcp.tools]]`;
+inline and file definitions are combined and duplicate names are rejected. The
+file is limited to 4 MiB and must remain within the package, including symlinks.
+Generate it from your typed models at build time and test that it matches those
+models. Discovery imports no plugin code and starts no worker.
+
+Each tool may declare `title`, `output_schema` (JSON Schema with `type: object`),
+and boolean `annotations.readOnlyHint`, `destructiveHint`, `idempotentHint`, and
+`openWorldHint`. Describe the actual operation. An unspecified write is treated
+conservatively as destructive, non-idempotent and open-world. Safety annotations
+are advisory: a POST or job still requires write authority even if it claims to
+be read-only. Use required properties and concrete types in output schemas.
+
+Successful results are returned as `structuredContent` and compatible JSON text.
+A native non-object result is wrapped as `{"result": value}`; declare that shape
+in its output schema. Job tools return a submission receipt or, with `wait`, the
+job record. A submission receipt includes `job_id`, `status`, `outputs_expected`
+and a `next_action` naming `job_status`. Large results may instead return a private
+`result_resource` link with byte count and expiry; the advertised output contract
+includes that alternative. Follow resource `next_uri` links and concatenate their
+`data` strings to recover the JSON. Results expire and do not survive restart.
+
 ## Existing Plugins Reference
 
 The plugins 3LC maintains, as of Hub 1.2. Read the one closest to what you are building.
@@ -2178,8 +2275,16 @@ address:
    training form has). Keep that route and field if your plugin saves its configs.
 
 While the job runs, any event whose payload carries `project_name` (or a `run_url` under a project) also sets
-the project if it was still unknown. Emit `ctx.result(run_url)` as soon as the run exists and the panel
-catches up even when the start carried nothing.
+the project if it was still unknown. Every job that creates a run should call `ctx.result(str(run.url))`
+**immediately after creating it**, before training, prediction, or collection starts. This is the common
+run-identity contract: the queue adopts the actual run name and the Hub attaches live progress to that
+run's row by its canonical URL. Publishing a result link does **not** complete the job.
+
+Use the URL of the created run, not a URL assembled from the requested name: the library may choose a
+unique name, and identically named runs can live under different project roots. If the trainer is a
+separate adapter, give it an `on_run(url)` callback bound to `ctx.result`; don't parse human-readable
+log messages for identity. Jobs without a created run remain on the Queue page until they can publish
+one. Continue reporting `ctx.progress(...)`, metrics, and cancellation through the normal job API.
 
 
 ### Alias location validation
@@ -2276,3 +2381,94 @@ unchanged. A failed or cancelled copy prevents execution of the dependent run.
 
 For SDK 0.7.0 framed hosts, follow the [browser runtime guide](browser-runtime.md) and [agent instructions](agent-guide.md).
 The framed runtime supersedes legacy inline/global browser examples in this document.
+
+### Agent transport requirement
+
+Set `runtime.requires_secure_transport = true` when a plugin must not run over an
+unencrypted remote channel. The host enforces HTTPS or numeric loopback (an
+operator-managed secure tunnel). Infrastructure providers with a direct node-agent
+listener may advertise `node_tls: true` in capabilities and must pass the host's
+boot-only TLS environment to the matching node-agent build. Providers terminating
+HTTPS themselves must not advertise direct node TLS unless they support it.
+
+
+### MCP jobs that require preparation
+
+A job tool can declare `job.prepare` and `job.cancel`, both fixed `POST` routes using
+the same path/query validation as route tools. Both are required. `job.body` then
+templates the preparation request; include `project_scope` when its route declares
+that query parameter. The host requires an explicit `node_id` (`local` is valid),
+prepares and dispatches on that same target, and applies the normal job permissions
+and approval policy. For a node-aware preparation, template `target` from `{{node_id}}`.
+
+Preparation returns `{run_id, params, credential_connection_ids?}`. `params` is private
+job input, including any plugin run capability; it is never a tool result. The optional
+Connection map contains IDs only and undergoes the normal per-user/plugin grant check.
+The host forwards these fields through the generic job route and returns only the host
+job reference plus `operation_id`. Cleanup uses the returned `run_id` in `job.cancel`
+if dispatch fails. The plugin must authorize preparation and cancellation exactly as
+its UI routes do, retire unused preparations on expiry, and keep credentials out of
+its job outputs and errors. Do not expose a capability-returning preparation as a
+plain route tool. Dynamic tools are cached separately by caller, plugin, and node;
+discover tools again after switching nodes.
+
+Infrastructure providers may advertise `bootstrap_specs: true` in capabilities to accept
+`CreateNodeRequest.bootstrap_specs`: an optional list of operator-selected PEP 508 requirements
+installed alongside `compute_spec`. This supplies private or locally built artifacts without
+publishing them to a package index. Preserve the host's Compute pin; conflicting artifacts must
+fail resolution. Omit the field when empty for compatibility. Resolve private download URLs at
+launch, preserve content hashes, and never log URLs, credentials or the request body. A host must
+refuse configured artifacts before creating resources when the provider lacks this capability.
+These requirements apply to worker-node bootstrap; they do not configure a separate deployment.
+
+
+### Shared job contracts and UI sources
+
+A plugin owns one execution path. Its UI submits a native job body; an MCP `job`
+declaration maps typed tool arguments into that same body. Neither adapter should
+implement training, data staging, publication, or authorization independently.
+
+`tlc_plugin_sdk.job_contract.JobContract` (SDK 0.7.13) describes configuration
+fields by native path, such as `params.epochs`. `form_field_schema()` translates
+existing form metadata into JSON Schema. `contract.normalize()` applies defaults,
+normalizes numeric/boolean HTML form values, and validates the resulting native
+configuration before loading the execution engine. Preserve host-managed fields
+outside the configuration; they are not model-editable training options.
+
+Use `contract.tool()` to generate the manifest job declaration. `constants` can
+select training versus collection, while `aliases` translate public argument
+names to native paths. `contract.arguments()` performs the reverse mapping for
+saved configurations. This keeps false, zero and exact table revisions intact.
+For routes already using typed request models, derive the schema from those
+models and retain the same native authorization and revision checks.
+
+`write_tools(path, tools)` validates and writes a stable packaged catalog.
+`write_tools(..., check=True)` fails when the checked-in catalog is stale. Keep this
+check in pytest/CI, and package the catalog using `[mcp] tools_file`. Discovery
+then requires neither a running worker nor imports of ML libraries.
+
+`tlc_plugin_sdk.ui_bundle.build_fragment()` can package `ui/index.html`, CSS and
+JavaScript into one self-contained fragment. Use `{{asset:styles.css}}` and
+`{{asset:app.js}}` in the markup; assets must resolve inside the UI directory.
+`form_values()` binds escaped control defaults and options from the same field
+metadata. Check the packaged fragment with `check=True` in CI. These are build
+time helpers, not a new browser runtime or an alternative plugin frame protocol.
+
+
+### Project read service
+
+`tlc_plugin_sdk.project_catalog.ProjectCatalog` is the transport-independent reader
+for configured project roots. Construct it with default-root and allowed-root
+resolvers. URL validation, project/run/table listings, bounded row previews,
+weight summaries and epoch metric summaries then use one implementation on a host
+or worker. Callers retain authentication, role checks and credential scoping;
+constructing a catalog does not grant access to an otherwise unreadable location.
+The `data_tools` module keeps the worker-facing function API as a thin adapter.
+
+### Coordinated SDK changes
+
+When a plugin starts using a new SDK API, raise its SDK minimum and build against
+the corresponding SDK wheel. Unpublished changes can be exercised with the host's
+local wheel catalog. Do not pin an absolute checkout path or fabricate a registry
+artifact in a lockfile. Release the SDK artifact first, then refresh dependent
+`uv.lock` files and validate `uv sync --locked` before releasing the plugins.

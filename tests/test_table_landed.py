@@ -63,7 +63,7 @@ def test_script_parses(tmp_path: Path) -> None:
 def test_open_in_project_lands_on_the_datasets_tab_with_the_table_selected(tmp_path: Path) -> None:
     html = _render(tmp_path, {}, "my proj", "train", "s3://b/p/my proj/datasets/train/tables/t.json")
     assert 'href="/projects/my%20proj?dataset=train&amp;table=s3%3A%2F%2Fb%2Fp%2Fmy%20proj' in html
-    assert html.count("#datasets") == 1
+    assert html.count("#datasets") == 2  # visible href and bridge navigation path
     assert "Open in Project" in html and "btn-primary" in html
     assert "Open in Dashboard" not in html  # the host knows no Dashboard
     assert _render(tmp_path, {}, "", "train", "s3://x") == ""  # nothing to link to
@@ -77,3 +77,23 @@ def test_dashboard_link_is_the_hosts_when_it_can_build_one(tmp_path: Path) -> No
     assert 'href="https://dash.example?table=s3%3A%2F%2Fb%2Ft.json"' in older  # older host: concatenated
     secondary = _render(tmp_path, {}, "p", "d", "s3://b/t.json", {"primary": False})
     assert "btn-secondary" in secondary and "btn-primary" not in secondary
+
+
+@needs_node
+def test_sandboxed_project_link_uses_hub_bridge_and_preserves_storage_root(tmp_path: Path) -> None:
+    harness = tmp_path / "bridge.js"
+    harness.write_text(
+        "let listener, navigated, prevented=false; "
+        "var document={addEventListener:(_,fn)=>listener=fn}; "
+        "var window={PLUGIN_API:{nav:{href:()=> 'https://hub.example/plugin/refine',"
+        "go:path=>{navigated=path;}}}};\n" + TABLE_LANDED_JS + "\nlet html=_tlcTableLandedHtml('my project','train',"
+        "'s3://bucket/projects/my project/datasets/train/tables/fixed');"
+        "let path='/projects/my%20project?root=s3%3A%2F%2Fbucket%2Fprojects#datasets';"
+        "listener({target:{closest:()=>({getAttribute:()=>path})},button:0,preventDefault:()=>{prevented=true}});"
+        "process.stdout.write(JSON.stringify({html,navigated,prevented}));"
+    )
+    result = json.loads(subprocess.run(["node", str(harness)], check=True, capture_output=True, text=True).stdout)
+    assert 'href="https://hub.example/projects/my%20project?' in result["html"]
+    assert "&amp;root=s3%3A%2F%2Fbucket%2Fprojects#datasets" in result["html"]
+    assert result["navigated"].startswith("/projects/my%20project?root=")
+    assert result["prevented"] is True

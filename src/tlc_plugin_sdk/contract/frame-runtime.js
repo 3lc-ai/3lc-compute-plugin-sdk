@@ -28,6 +28,7 @@
   var nextId = 1;
   var pending = {};
   var listeners = { runTarget: [], nav: [] };
+  var actions = {};  // id -> run(params): the page's actions, which the Hub may run
   var runTarget = null;
   var warned = {};
   var disposed = false;
@@ -89,6 +90,7 @@
     disposed = true;
     disposers.splice(0).forEach(function (fn) { try { fn(); } catch (error) { console.error(error); } });
     listeners = { runTarget: [], nav: [] };
+    actions = {};
     Object.keys(pending).forEach(function (id) {
       clearTimeout(pending[id].timer);
       pending[id].cleanup();
@@ -132,7 +134,9 @@
 
   function computeRequest(url, options) {
     var sendable = sendableOptions(options);
-    var wait = Math.min((typeof sendable.timeout === 'number' ? sendable.timeout : 10000) + 5000, 125000);
+    // The Hub allows 120 s for cold plugin workers and data planning. The message
+    // channel must not cancel that request after 15 s while the host is still working.
+    var wait = Math.min((typeof sendable.timeout === 'number' ? sendable.timeout : 120000) + 5000, 125000);
     return call('compute.request', [String(url), sendable], wait, options && options.signal).then(function (reply) {
       var noBody = reply.status === 204 || reply.status === 205 || reply.status === 304;
       return new Response(noBody ? null : reply.body, { status: reply.status, statusText: reply.statusText, headers: reply.headers });
@@ -433,6 +437,80 @@
     return connect;
   }
 
+  // ── Table data checks ──
+  // The Hub cannot inspect a framed plugin's fields. Keep its generic table warnings
+  // here, including presets which set .value without dispatching an input event.
+  function watchTableInputs(api) {
+    var root = api.container;
+    var selector = 'input[type="text"], input:not([type]), input[type="url"], textarea';
+    var stopped = false, timer = null;
+    function stamp(el) {
+      return JSON.stringify([api.getConfig('compute_service_url'), api.getRunTarget(),
+        String(el.value || '').trim(), el.getAttribute('data-run-target-check') || '']);
+    }
+    function hide(el) { if (el._tlcRunTargetNote) el._tlcRunTargetNote.style.display = 'none'; }
+    function check(el) {
+      var url = String(el.value || '').trim(), key = stamp(el);
+      if (el._tlcRunTargetChecked === key && (!el._tlcRunTargetRetryAt || Date.now() < el._tlcRunTargetRetryAt)) return;
+      el._tlcRunTargetChecked = key;
+      el._tlcRunTargetRetryAt = 0;
+      hide(el);
+      var mode = el.getAttribute('data-run-target-check');
+      if (mode === 'off' || !/^(?:[a-z][a-z0-9+.-]*:\/\/|\/|~)/i.test(url)) return;
+      if (mode !== 'table' && url.indexOf('/tables/') === -1 && !/table/i.test((el.id || '') + ' ' + (el.name || ''))) return;
+      function current() { return !stopped && el.isConnected !== false && el._tlcRunTargetChecked === key && stamp(el) === key; }
+      function show(verdict) {
+        if (!current()) return;
+        el._tlcRunTargetRetryAt = verdict.retry ? Date.now() + 30000 : 0;
+        var notes = verdict.notes || [];
+        if (verdict.ok && !notes.length) { hide(el); return; }
+        var note = el._tlcRunTargetNote;
+        if (!note || !note.parentNode) {
+          note = document.createElement('div');
+          note.setAttribute('data-run-target-data-note', '');
+          note.style.cssText = 'margin-top:4px;font-size:11.5px;line-height:1.45;word-break:break-word';
+          var row = el.parentElement;
+          var anchor = row && row !== root && row.tagName !== 'FORM' ? row : el;
+          anchor.parentNode.insertBefore(note, anchor.nextSibling);
+          el._tlcRunTargetNote = note;
+        }
+        note.textContent = (verdict.ok ? '⚠️ ' : '❌ Data needs attention: ') + notes.join(' ');
+        note.style.color = verdict.ok ? 'var(--warning, #d97706)' : 'var(--error, #dc2626)';
+        note.style.display = '';
+      }
+      api.checkDataForRunTarget(url).then(show, function (error) {
+        show({ok: true, retry: true, notes: ['Data access has not been verified. ' +
+          ((error && error.message) || 'The Compute Service could not check this table.') +
+          ' Copy or streaming requirements will be checked again before the job starts.']});
+      });
+    }
+    function checkAll() {
+      if (stopped) return;
+      Array.prototype.forEach.call(root.querySelectorAll(selector), check);
+    }
+    function poll() { checkAll(); if (!stopped) timer = setTimeout(poll, 1000); }
+    function changed(event) {
+      var el = event.target;
+      if (!el || !root.contains(el) || !el.matches(selector)) return;
+      if (event.type === 'input') {
+        // Hide stale text at once; the poll checks the edited value without a
+        // backend request for every keystroke.
+        if (stamp(el) !== el._tlcRunTargetChecked) hide(el);
+      } else check(el);
+    }
+    document.addEventListener('input', changed, true);
+    document.addEventListener('change', changed, true);
+    var unsubscribe = api.onRunTargetChange(checkAll);
+    api.lifecycle.onDispose(function () {
+      stopped = true;
+      clearTimeout(timer);
+      unsubscribe();
+      document.removeEventListener('input', changed, true);
+      document.removeEventListener('change', changed, true);
+    });
+    poll();
+  }
+
   // ── PLUGIN_API ──
 
   function buildApi(init) {
@@ -478,6 +556,7 @@
         confirmCancel: function (jobId) { return call('jobs.confirmCancel', [String(jobId)], 600000); },
       },
       pickers: { table: function () { return call('pickers.table', [], 600000); } },
+      organization: { directory: function () { return call('organization.directory', []); } },
       credentials: {
         choose: function (service) {
           return call('credentials.choose', [String(service)], 600000).then(function (id) { if (id) credentials[service] = id; return id; });
@@ -506,7 +585,7 @@
       },
       run: {
         plan: function (body) { return call('run.plan', [body]); },
-        checkTable: function (url) { return call('run.checkTable', [String(url)]); },
+        checkTable: function (url) { return call('run.checkTable', [String(url)], 125000); },
       },
       nav: {
         go: navGo,
@@ -520,7 +599,7 @@
       data: data,
       location: null,
       guide: null,
-      hostChecksTableInputs: false,
+      hostChecksTableInputs: true,
       container: root,
       libs: {
         Chart: window.Chart || null,
@@ -541,7 +620,29 @@
           .then(function (now) { mirrorAddress(now); return now; });
       };
     }
+    if (has('assistant')) api.assistant = { open: function () { return call('assistant.open', []); } };
     if (has('identity:name')) api.identity = { name: function () { return call('identity.name', []); } };
+    // The page's actions, offered to the Hub's registry so the deployment's MCP and the chat can drive the
+    // page as a person would. The Hub keeps the title and the schema (as plugin.<plugin id>.<id>) and
+    // runs one by sending `run`; the page keeps run() and answers with `done`.
+    if (has('actions')) {
+      api.actions = {
+        register: function (id, action) {
+          id = String(id || '');
+          if (!id || !action || typeof action.run !== 'function') throw failure('invalid', 'An action needs an id and run().');
+          actions[id] = action.run;
+          call('actions.register', [id, { title: String(action.title || id), description: String(action.description || ''), readOnly: action.readOnly === true,
+            params: action.params && typeof action.params === 'object' ? action.params : { type: 'object' } }])
+            .catch(function (error) { delete actions[id]; console.error('[3LC] The Hub refused the action ' + id + ':', error); });
+        },
+        unregister: function (id) {
+          id = String(id || '');
+          if (!actions[id]) return;
+          delete actions[id];
+          call('actions.unregister', [id]).catch(function () {});
+        },
+      };
+    }
 
     // The names pages already use, kept as aliases of the namespaced calls.
     api.authFetch = computeRequest;
@@ -737,6 +838,26 @@
     onDispose(function () { observer.disconnect(); });
   }
 
+  // The Hub runs one of the page's actions (the chat or the MCP asked): run() does what the button does,
+  // and its result, or why it failed, goes back as `done`.
+  function runAction(data) {
+    var id = data.id, run = actions[String(data.action)];
+    function done(ok, value) {
+      if (!port) return;
+      var message = ok ? { v: PROTOCOL, type: 'done', id: id, ok: true, value: value === undefined ? { ok: true } : value }
+        : { v: PROTOCOL, type: 'done', id: id, ok: false, error: { code: (value && value.code) || 'error', message: (value && value.message) || String(value) } };
+      try {
+        port.postMessage(message);
+      } catch (error) {
+        // A result that cannot cross (a DOM node, a function) fails the run, not the page.
+        port.postMessage({ v: PROTOCOL, type: 'done', id: id, ok: false, error: { code: 'invalid', message: error.message } });
+      }
+    }
+    if (!run) { done(false, failure('unknown', 'This page offers no action ' + data.action)); return; }
+    var params = data.params && typeof data.params === 'object' ? data.params : {};
+    Promise.resolve().then(function () { return run(params); }).then(function (value) { done(true, value); }, function (error) { done(false, error); });
+  }
+
   function onPortMessage(event) {
     var data = event.data;
     if (!data || data.v !== PROTOCOL) return;
@@ -747,6 +868,8 @@
       request.cleanup();
       if (data.ok) request.resolve(data.value);
       else request.reject(failure((data.error && data.error.code) || 'error', (data.error && data.error.message) || 'The Hub refused the request.', data.error));
+    } else if (data.type === 'run') {
+      runAction(data);
     } else if (data.type === 'event') {
       if (data.name === 'runTarget') {
         runTarget = data.value;
@@ -779,6 +902,31 @@
       + (hubOlder ? 'Hub' : 'compute service') + ' to open this plugin page.';
   }
 
+  function dismissDialogs() {
+    var pressed = null;
+    function onDim(event) {
+      var dialog = event.target;
+      if (!dialog || dialog.tagName !== 'DIALOG' || !dialog.open || dialog.getAttribute('closedby') === 'none') return null;
+      var box = dialog.getBoundingClientRect();
+      return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom ? dialog : null;
+    }
+    function down(event) { pressed = onDim(event); }
+    function click(event) {
+      var dialog = onDim(event), close = dialog && dialog === pressed;
+      pressed = null;
+      if (!close) return;
+      // Follow Escape's cancel path, so plugins can guard edits and in-flight saves.
+      if (typeof dialog.requestClose === 'function') dialog.requestClose();
+      else if (dialog.dispatchEvent(new Event('cancel', {cancelable:true}))) dialog.close();
+    }
+    document.addEventListener('pointerdown', down, true);
+    document.addEventListener('click', click);
+    onDispose(function () {
+      document.removeEventListener('pointerdown', down, true);
+      document.removeEventListener('click', click);
+    });
+  }
+
   function start(init) {
     var mismatch = contractMismatch(init.contractVersion);
     if (mismatch) return Promise.reject(failure('unsupported', mismatch));
@@ -803,6 +951,8 @@
       register(init.components && init.components.tableField, '<tlc-table-field>');
       var root = document.getElementById('tlc-plugin-root');
       root.innerHTML = init.html;
+      dismissDialogs();
+      watchTableInputs(api);
       placeIcon(root, init.icon);
       if (init.layout !== 'fill') reportHeight(root);
       return runScripts(root);
@@ -818,7 +968,12 @@
     start(data).catch(showFailure);
   });
 
-  window.addEventListener('pagehide', function () { closePort('The plugin page was unloaded.'); });
+  // A page going into the back/forward cache keeps its channel: Back brings it and the Hub's page back
+  // together, ports intact. Only a real unload closes it.
+  window.addEventListener('pagehide', function (event) {
+    if (event && event.persisted) return;
+    closePort('The plugin page was unloaded.');
+  });
 
   if (hubOrigin) window.parent.postMessage({ tlc: 'plugin-frame', v: PROTOCOL, type: 'ready', frameVersion: FRAME_VERSION, inlineAssets: 1 }, hubOrigin);
 })();

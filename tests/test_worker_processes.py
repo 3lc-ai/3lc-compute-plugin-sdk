@@ -52,8 +52,20 @@ class IsolatedPlugin(ComputePlugin):
         (root / (ctx.job_id + ".started")).write_text(
             json.dumps({"pid": os.getpid(), "child": child.pid if child else None})
         )
+        if ctx.params.get("host_request"):
+            try:
+                response = ctx.request_host("renew", {"job": ctx.job_id}, 5)
+            except RuntimeError:
+                if ctx.cancelled:
+                    return
+                raise
+            ctx.protect_secret(response["secret"])
+            ctx.log(response["secret"])
+            ctx.output("answer", response["answer"])
         if ctx.params.get("crash"):
             os._exit(7)
+        if ctx.params.get("fail"):
+            ctx.fail("Missing training column")
         deadline = time.monotonic() + 15
         while not (root / (ctx.job_id + ".release")).exists():
             if not ctx.params.get("stubborn") and ctx.cancelled:
@@ -111,6 +123,46 @@ def test_concurrent_processes_keep_aliases_and_credentials_private(tmp_path, mon
         snapshot = (tmp_path / "state" / name / "worker-status.json").read_text()
         assert name + "-secret" not in snapshot
     assert not _REGISTRY
+
+
+@pytest.mark.parametrize("cancel_first", [False, True])
+def test_isolated_host_requests_survive_disconnect_and_stay_job_scoped(tmp_path, cancel_first):
+    w = worker(tmp_path)
+    a = w.start_job("one", params(tmp_path, "one", host_request=True))
+    b = w.start_job("two", params(tmp_path, "two", host_request=True))
+    try:
+        wait_for(lambda: bool(a.host_requests.pending()) and bool(b.host_requests.pending()))
+        a.abandon()
+        first = a.host_requests.pending()[0]
+        second = b.host_requests.pending()[0]
+        assert first["payload"] == {"job": "one"}
+        assert second["payload"] == {"job": "two"}
+        assert any(e.get("request_id") == first["request_id"] for e in w.job_status("one")["events"])
+        assert not a.host_requests.answer(second["request_id"], {"result": "wrong job"})
+        assert b.host_requests.answer(second["request_id"], {"result": {"secret": "renewed-two", "answer": "two"}})
+        if cancel_first:
+            assert w.cancel_job("one")
+            assert a.wait(8)
+            assert w.job_status("one")["state"] == "cancelled"
+        else:
+            assert a.host_requests.answer(first["request_id"], {"result": {"secret": "renewed-one", "answer": "one"}})
+            assert not a.host_requests.answer(first["request_id"], {"result": "duplicate"})
+    except BaseException:
+        w.cancel_all()
+        raise
+    finally:
+        for name in ("one", "two"):
+            (tmp_path / (name + ".release")).touch()
+        assert a.wait(8) and b.wait(8)
+    for name in ("one", "two"):
+        snapshot = w.job_status(name)
+        assert not any(e.get("event") == "host_request" for e in snapshot["events"])
+        assert "renewed-" not in json.dumps(snapshot)
+        assert "renewed-" not in (tmp_path / "state" / name / "worker-status.json").read_text()
+        if name == "one" and cancel_first:
+            continue
+        assert snapshot["state"] == "completed"
+        assert any(e.get("name") == "answer" and e.get("value") == name for e in snapshot["events"])
 
 
 def test_stubborn_cancel_kills_only_that_job_and_its_children(tmp_path, monkeypatch):
@@ -212,3 +264,26 @@ def test_process_setup_failure_reports_outcome_and_clears_busy(tmp_path, monkeyp
     assert w.job_status("setup")["state"] == "failed"
     assert "test resource exhaustion" in str(w.job_status("setup"))
     assert w.active_jobs() == 0
+
+
+def test_cleanup_race_keeps_the_original_failure_and_releases_queue(tmp_path, monkeypatch):
+    from tlc_plugin_sdk import worker as worker_module
+
+    original = worker_module._kill_job_process
+    calls = []
+
+    def delayed_cleanup(process):
+        calls.append(process.pid)
+        if len(calls) == 1:
+            msg = "group exit race"
+            raise PermissionError(msg)
+        original(process)
+
+    monkeypatch.setattr(worker_module, "_kill_job_process", delayed_cleanup)
+    w = worker(tmp_path)
+    job = w.start_job("failed", params(tmp_path, "failed", fail=True))
+    assert job.wait(15)
+    assert w.job_status("failed")["state"] == "failed"
+    assert "Missing training column" in str(w.job_status("failed"))
+    assert w.active_jobs() == 0
+    assert len(calls) == 2

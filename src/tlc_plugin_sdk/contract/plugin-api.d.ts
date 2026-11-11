@@ -363,6 +363,22 @@ export interface PluginResultOptions {
  * `window.PLUGIN_API` when it mounts a plugin fragment; a fragment should reach
  * for nothing else. Many plugins alias it: `var API = window.PLUGIN_API`.
  */
+/** One action a fragment offers (see `PluginApi.actions`). */
+export interface PluginAction {
+  /** True only for reading context or changing the current view; never for saved edits or paid work. */
+  readOnly?: boolean;
+  title: string;
+  description: string;
+  /** JSON Schema (type "object") of `params`; `{ type: "object" }` when the action takes none. */
+  params?: Record<string, unknown>;
+  run(params: Record<string, unknown>): unknown | Promise<unknown>;
+}
+
+export interface PluginActions {
+  register(id: string, action: PluginAction): void;
+  unregister(id: string): void;
+}
+
 export interface PluginApi {
   /**
    * Frame protocol (independent of SDK package version). Set in framed hosts only; the namespaces
@@ -384,6 +400,11 @@ export interface PluginApi {
     confirmCancel(jobId: string): Promise<{ status?: string; deleted?: boolean; [key: string]: unknown }>;
   };
   pickers?: { table(): Promise<string | null> };
+  /** Open Hub Assistant without sending a message or replacing a draft. */
+  assistant?: { open(): Promise<{ opened: boolean }> };
+  /** Read-only directory for this deployment's verified organization; requires organization:directory. */
+  organization?: { directory(): Promise<{ available: boolean; org_id: string;
+    people: {id: string; name: string; org_role: string}[]; teams: {id: string; name: string}[] }> };
   credentials?: { choose(service: string): Promise<string | null>; remembered(service: string): string | null };
   /**
    * The keyless Connection this plugin's jobs reach project storage through, for a provider the
@@ -606,6 +627,17 @@ export interface PluginApi {
 
   /** Show a host toast notification; no-op fallback if the host's `showToast` is unavailable. */
   showToast(message: string, type?: string): void;
+
+  /**
+   * The fragment's actions: what its buttons do, offered to the Hub's action registry so the
+   * deployment's MCP (and the chat agent) can drive this page as a person would. An action has a
+   * title, a one-line description, a JSON Schema for its parameters and `run(params)`, which does
+   * what the button does and resolves with a small JSON result. Registered as
+   * `plugin.<plugin id>.<id>`; unregistered when the fragment unmounts. Absent on older hosts —
+   * feature-detect. In a framed page the registration travels to the Hub: `register` returns at once,
+   * the Hub runs the action by asking the page, and a refused registration is logged, not thrown.
+   */
+  actions?: PluginActions;
 
   /**
    * Draw a finished action's result into `target`, replacing its content: the Hub's result box,

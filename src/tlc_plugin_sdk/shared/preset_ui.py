@@ -498,6 +498,17 @@ function _tlcPluginPresets(opts) {
     }
     var body;
     try { body = collect() || {}; } catch (e) { body = {}; }
+    return persist(name, existing, body).then(function () { return true; }).catch(function (e) {
+      var msg = e && e.message ? e.message : String(e);
+      setText(els["save-note"], "Could not save: " + msg);
+      if (els["save-note"]) els["save-note"].classList.add("is-error");
+      toast("Could not save the preset: " + msg, "error");
+      return false;
+    });
+  }
+  // Save the form as the preset ``name`` (or replace ``existing``): the button's path and the action's.
+  function persist(name, existing, values) {
+    var body = JSON.parse(JSON.stringify(values || {}));
     body.id = existing ? existing.id : "";
     body.name = existing ? existing.name : name;
     // A replaced preset keeps when it was made and when it was last used.
@@ -517,14 +528,13 @@ function _tlcPluginPresets(opts) {
     }).then(function () {
       recompute();
       toast((existing ? "Replaced preset “" : "Saved preset “") + body.name + "”", "success");
-      return true;
-    }).catch(function (e) {
-      var msg = e && e.message ? e.message : String(e);
-      setText(els["save-note"], "Could not save: " + msg);
-      if (els["save-note"]) els["save-note"].classList.add("is-error");
-      toast("Could not save the preset: " + msg, "error");
-      return false;
+      return { id: origin.id, name: body.name, replaced: !!existing };
     });
+  }
+  // The saved preset whose settings equal ``values`` (the launch inputs aside, as the modified mark compares).
+  function twinOf(values) {
+    var wanted = comparable(values);
+    return list.filter(function (q) { return comparable(valuesOf(q)) === wanted; })[0] || null;
   }
 
   /* ── Delete: asks nothing ── */
@@ -551,6 +561,96 @@ function _tlcPluginPresets(opts) {
     return deletePreset(target).then(function () { return true; }, function (e) {
       toast("Could not delete the preset: " + (e && e.message ? e.message : e), "error");
       return false;
+    });
+  }
+
+  /* The form is reviewable before a job starts. These actions use the plugin's own collect/apply pair;
+     they never save a preset, submit a job, or override the host's run target. */
+  function formState() { return { values: collect() || {}, defaults: defaults() || {} }; }
+  function object(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
+  function mergeForm(base, patch) {
+    var out = JSON.parse(JSON.stringify(base || {}));
+    Object.keys(patch).forEach(function (key) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error("Invalid field: " + key);
+      out[key] = object(patch[key]) ? mergeForm(object(out[key]) ? out[key] : {}, patch[key]) : patch[key];
+    });
+    return out;
+  }
+  function differences(wanted, actual, prefix) {
+    var paths = [];
+    Object.keys(wanted).forEach(function (key) {
+      var path = prefix ? prefix + "." + key : key, value = wanted[key], found = actual && actual[key];
+      if (object(value)) paths = paths.concat(differences(value, found, path));
+      else if (typeof value === "number" && typeof found === "string"
+        && found.trim() !== "" && Number(found) === value) {
+        // Native numeric inputs collect strings; these are the same visible setting.
+      } else if (_tlcPresetStable(value) !== _tlcPresetStable(found)) paths.push(path);
+    });
+    return paths;
+  }
+  function registerFormActions() {
+    var actions = api().actions;
+    if (!actions || typeof actions.register !== "function") return;
+    actions.register("get_form", {
+      title: "Read the plugin settings",
+      readOnly: true,
+      description: "Read the current form values and defaults. Use this shape with set_form before starting a job.",
+      params: { type: "object" },
+      run: formState,
+    });
+    actions.register("set_form", {
+      title: "Fill the plugin settings",
+      // View-only: apply/collect the visible form; neither persist() nor job dispatch is called.
+      readOnly: true,
+      description: "Fill the visible form without starting a job or saving a preset. values uses the get_form shape; " +
+        "nested fields merge with the current form. replace starts from defaults instead. Explicit inputs replace " +
+        "the opened table, just like editing it. Read values and mismatches in the result before claiming success.",
+      params: { type: "object", required: ["values"], properties: {
+        values: { type: "object" }, replace: { type: "boolean" },
+      } },
+      run: function (p) {
+        if (!object(p.values)) throw new Error("values must be an object in the get_form shape.");
+        var current = collect() || {}, initial = defaults() || {};
+        Object.keys(p.values).forEach(function (key) {
+          if (!Object.prototype.hasOwnProperty.call(current, key)
+            && !Object.prototype.hasOwnProperty.call(initial, key)) {
+            throw new Error("Unknown form field: " + key + ". Read get_form first.");
+          }
+        });
+        var values = mergeForm(p.replace ? initial : current, p.values);
+        // Direct apply is intentional: this is an explicit edit, not picking a preset with locked launch inputs.
+        return Promise.resolve(apply(values)).then(function () {
+          changed();
+          var actual = collect() || {}, mismatches = differences(p.values, actual, "");
+          return { applied: mismatches.length === 0, values: actual, mismatches: mismatches };
+        });
+      },
+    });
+    actions.register("save_preset", {
+      title: "Save the settings as a preset",
+      description: "Save the filled form as a named preset for next time. Not saved when a preset with the same " +
+        "values already exists: the result names it. A name already in use is replaced only with replace true. " +
+        "Starts no job.",
+      params: { type: "object", properties: { name: { type: "string" }, replace: { type: "boolean" } } },
+      run: function (p) {
+        var current;
+        try { current = collect() || {}; } catch (e) { throw new Error("The form cannot be read right now."); }
+        var twin = twinOf(current);
+        if (twin) return { saved: false, same_as: twin.name || "", id: twin.id };
+        var name = String((p && p.name) || "").trim();
+        if (!name) {
+          var auto;
+          try { auto = autoName(current); } catch (e) { auto = ""; }
+          name = _tlcPresetUniqueName(auto || pluginId + " preset", names());
+        }
+        var existing = byName(name);
+        if (existing && !(p && p.replace)) {
+          throw new Error("A preset named \u201c" + name + "\u201d exists: pass replace true, or another name.");
+        }
+        return persist(name, existing, current).then(function (r) {
+          return { saved: true, id: r.id, name: r.name, replaced: r.replaced };
+        });
+      },
     });
   }
 
@@ -586,7 +686,7 @@ function _tlcPluginPresets(opts) {
       dropLegacy();
       if (lp) return pick(lp.id);
       return pick("");
-    });
+    }).then(function () { registerFormActions(); });
   }
 
   return {

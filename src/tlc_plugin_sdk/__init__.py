@@ -30,6 +30,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from tlc_plugin_sdk.caller import CALLER_HEADER, current_caller
 from tlc_plugin_sdk.contract import ComputePlugin, HubPlugin
 from tlc_plugin_sdk.infrastructure import InfrastructurePlugin
 from tlc_plugin_sdk.job_context import PROJECT_ROOT_KEY, JobContext, JobFailed, JobIdentity
@@ -48,6 +49,7 @@ except PackageNotFoundError:  # running from a raw checkout that was never insta
     SDK_CONTRACT_VERSION = "0.0.0"
 
 __all__ = [
+    "CALLER_HEADER",
     "PROJECT_ROOT_KEY",
     "SDK_CONTRACT_VERSION",
     "ComputePlugin",
@@ -56,4 +58,5 @@ __all__ = [
     "JobContext",
     "JobFailed",
     "JobIdentity",
+    "current_caller",
 ]

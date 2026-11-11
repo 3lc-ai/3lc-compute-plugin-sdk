@@ -602,3 +602,125 @@ def test_the_time_is_the_last_use_else_the_save_and_replace_keeps_both(tmp_path:
     replaced = next(p for p in out["after"]["store"] if p["id"] == "p1")
     assert replaced["epochs"] == 7
     assert replaced["created"] == P1["created"] and replaced["last_run"] == used["last_run"]
+
+
+@needs_node
+def test_assistant_form_actions_wait_for_apply_and_keep_unmentioned_settings(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        r"""
+var actions = {};
+api.actions = { register: (id, action) => { actions[id] = action; } };
+window.ASYNC_APPLY = true;
+var p = make({ defaults: () => ({...DEFAULTS, params: {weights: 'base.pt', epochs: 50, sampling: false}}) });
+var ready = p.init();
+var registeredEarly = Object.keys(actions);
+await ready;
+var before = actions.get_form.run();
+var answer = await actions.set_form.run({values: {params: {weights: 'nano.pt', epochs: 30}}});
+await settle();
+return {before, answer, registeredEarly, state: state(p), viewOnly: actions.set_form.readOnly,
+  saveRequiresApproval: actions.save_preset.readOnly !== true};
+""",
+    )
+    assert result["registeredEarly"] == []
+    assert result["viewOnly"] is True and result["saveRequiresApproval"] is True
+    assert result["before"]["values"]["params"]["epochs"] == 50
+    assert result["answer"] == {
+        "applied": True,
+        "values": {**DEFAULTS, "params": {"weights": "nano.pt", "epochs": 30, "sampling": False}},
+        "mismatches": [],
+    }
+    assert result["state"]["modified"] is True
+    assert result["state"]["calls"] == ["GET /api/plugins/x/presets"]
+    draft = next(iter(result["state"]["ls"].values()))
+    assert json.loads(draft)["values"] == result["answer"]["values"]
+
+
+@needs_node
+def test_assistant_can_edit_launch_inputs_and_replace_other_settings_with_defaults(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        r"""
+var actions = {};
+api.actions = { register: (id, action) => { actions[id] = action; } };
+var p = make({contextInputs: () => ({train_table_url: 'reviewed'})});
+await p.init();
+edit({epochs: 999});
+return await actions.set_form.run({replace: true, values: {train_table_url: 'original', epochs: 30}});
+""",
+    )
+    assert result["applied"] is True
+    assert result["values"] == {**DEFAULTS, "train_table_url": "original", "epochs": 30}
+
+
+@needs_node
+def test_assistant_reports_unapplied_fields_and_rejects_invalid_edits(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        r"""
+var actions = {};
+api.actions = { register: (id, action) => { actions[id] = action; } };
+var p = make({apply: (v) => {form = {...v, epochs: String(v.epochs), model: 'supported-only'};}});
+await p.init();
+var answer = await actions.set_form.run({values: {model: 'not-installed', epochs: 30}});
+var errors = [];
+for (var values of [[], {typo: 10}, JSON.parse('{"model":{"__proto__":{"bad":true}}}')]) {
+  try {await actions.set_form.run({values});} catch (e) {errors.push(e.message);}
+}
+return {answer, errors, polluted: ({}).bad || false};
+""",
+    )
+    assert result["answer"]["applied"] is False
+    assert result["answer"]["mismatches"] == ["model"]
+    assert len(result["errors"]) == 3
+    assert result["polluted"] is False
+
+
+@needs_node
+def test_assistant_propagates_form_apply_errors(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        r"""
+var actions = {}, fail = false;
+api.actions = { register: (id, action) => { actions[id] = action; } };
+var p = make({apply: (v) => {if (fail) return Promise.reject(new Error('model unavailable')); applyFn(v);}});
+await p.init(); fail = true;
+try {await actions.set_form.run({values: {model: 'nano'}});} catch (e) {return e.message;}
+return 'should have failed';
+""",
+    )
+    assert result == "model unavailable"
+
+
+@needs_node
+def test_assistant_saves_a_preset_unless_an_equal_one_exists(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        r"""
+var actions = {};
+api.actions = { register: (id, action) => { actions[id] = action; } };
+var p = make(); await p.init(); await settle();
+var defaultsTwice = await actions.save_preset.run({});
+var again = await actions.save_preset.run({});
+await actions.set_form.run({values: {epochs: 7}}); await settle();
+var taken;
+try { await actions.save_preset.run({name: 'yolo11n today'}); taken = 'saved'; } catch (e) { taken = e.message; }
+var replaced = await actions.save_preset.run({name: 'yolo11n today', replace: true}); await settle();
+await p.pick('p1'); await settle();
+var picked = await actions.save_preset.run({});
+return {first: defaultsTwice, again, taken, replaced, picked, state: state(p)};
+""",
+    )
+    first = result["first"]
+    assert first["saved"] is True and first["name"] == "yolo11n today" and first["replaced"] is False
+    assert result["again"] == {"saved": False, "same_as": "yolo11n today", "id": first["id"]}
+    assert "exists" in result["taken"] and "replace" in result["taken"], result["taken"]
+    assert result["replaced"] == {"saved": True, "id": first["id"], "name": "yolo11n today", "replaced": True}
+    saved = next(q for q in result["state"]["store"] if q["id"] == first["id"])
+    assert saved["epochs"] == 7
+    assert result["picked"]["saved"] is False and result["picked"]["same_as"] == "Small objects 1280"
+    assert result["state"]["toasts"][-2:] == [
+        "success: Saved preset “yolo11n today”",
+        "success: Replaced preset “yolo11n today”",
+    ]

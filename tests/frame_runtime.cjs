@@ -6,14 +6,14 @@ const fs = require('node:fs');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 async function main() {
   let nextTimer = 0, disconnected = 0, observerClosed = 0, apiCalls = [], ready = [], addresses = [];
-  const timers = new Map(), events = {}, sockets = [], root = {
+  const timers = new Map(), events = {}, docEvents = {}, sockets = [], root = {
     querySelector: () => null, querySelectorAll: () => [], innerHTML: '', style: {}
   };
   const parent = {postMessage: (...args) => ready.push(args)};
   const doc = {documentElement: {setAttribute() {}, style: {}, scrollHeight: 100},
     body: {}, getElementById: () => root, head: {appendChild: el => el.onload(), insertBefore() {}},
-    createElement: () => ({}), addEventListener() {}, removeEventListener() {}};
-  const context = {console, URL, URLSearchParams, Headers, Response, FormData, AbortController,
+    createElement: () => ({}), addEventListener(name, fn) {docEvents[name]=fn;}, removeEventListener(name) {delete docEvents[name];}};
+  const context = {console, URL, URLSearchParams, Headers, Response, FormData, AbortController, Event,
     document: doc, location: {search: '?hub=https://hub.test', href: 'https://compute.test/api/plugin-frame/', pathname: '/api/plugin-frame/'},
     history: {replaceState(state, title, url) {addresses.push(url);}}, parent, addEventListener: (name, fn) => events[name] = fn,
     ResizeObserver: class {observe() {} disconnect() {observerClosed++;}},
@@ -49,6 +49,17 @@ async function main() {
   events.message(init); await new Promise(setImmediate);
   const API = context.PLUGIN_API;
   assert.equal(API.protocol, 1); assert(!API.frameVersion.includes('__'));
+  let closes=0, guarded=false;
+  const dialog={tagName:'DIALOG',open:true,getAttribute:()=>null,
+    getBoundingClientRect:()=>({left:100,right:200,top:100,bottom:200}),
+    dispatchEvent:event=>{assert.equal(event.type,'cancel'); return !guarded;},close:()=>closes++};
+  const dim={target:dialog,clientX:20,clientY:20}, inside={target:dialog,clientX:150,clientY:150};
+  docEvents.pointerdown(inside);docEvents.click(dim);assert.equal(closes,0,'dragging out must not close');
+  docEvents.pointerdown(dim);docEvents.click(inside);assert.equal(closes,0);
+  guarded=true;docEvents.pointerdown(dim);docEvents.click(dim);assert.equal(closes,0,'cancel guard is respected');
+  guarded=false;docEvents.pointerdown(dim);docEvents.click(dim);assert.equal(closes,1);
+  dialog.getAttribute=()=> 'none';docEvents.pointerdown(dim);docEvents.click(dim);assert.equal(closes,1);
+
   assert.equal(typeof API.jobs.run, 'function');
   assert.throws(() => API.libs.io('https://evil.test/one'));
   let updates = 0, done = 0;
@@ -74,6 +85,7 @@ async function main() {
   await assert.rejects(API.http.request('/never', {signal:abort.signal}), error => error.code === 'aborted');
   assert.equal(apiCalls.length, before);
   const pending = API.http.request('/api/plugins/one/still-running');
+  assert([...timers.values()].some(timer => timer.ms === 125000), 'the frame allows the host its full plugin request budget');
   const rejected = assert.rejects(pending, error => error.code === 'closed');
   let disposed = 0; API.lifecycle.onDispose(() => disposed++);
   if (process.argv[3] === 'host-close') port.onmessage({data:{v:1,type:'event',name:'closed'}});

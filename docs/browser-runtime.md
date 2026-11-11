@@ -51,6 +51,12 @@ stays transparent, while component surfaces remain themed. Hub body classes and
 root inline styles are not forwarded. Use tokens and documented shared classes;
 use `flow` or `fill` for sizing rather than assuming the Hub's viewport layout.
 
+Native `<dialog>` popups dismiss when a pointer press and release both land on
+their backdrop. This follows the same `cancel` event as Escape; prevent that
+event when an edit needs confirmation or a save is in flight. A selection dragged
+out of a field does not dismiss the dialog. `closedby="none"` disables this path
+for a dialog that intentionally requires an explicit choice.
+
 ## Public API
 
 Capture `const API = window.PLUGIN_API` inside your fragment. Prefer these names:
@@ -71,6 +77,8 @@ Capture `const API = window.PLUGIN_API` inside your fragment. Prefer these names
 | `nav.href` | The Hub address of this page with a given query: the link to share |
 | `layout.mode` | `flow` (the frame grows with the page) or `fill` (`[ui] layout = "fill"`: the Hub sizes the frame, the page scrolls inside it) |
 | `identity.name` | Optional display name; requires `identity:name` capability |
+| `organization.directory` | Read-only people/team picker for the deployment’s verified organization; requires `organization:directory`. No bearer or membership-write API is exposed. |
+| `actions.register/unregister` | Offer the page's buttons to the Hub's action registry as `plugin.<id>.<action>`; the Hub runs them in the frame (protocol `run`/`done`). Present when the Hub has a registry: feature-detect |
 | `data` | Frame-local snapshot of the host's data catalog; load before synchronous getters |
 | `ui.toast`, `format.date`, `dashboardUrl` | Presentation helpers |
 | `libs` | Available shared libraries; check for null before using |
@@ -200,3 +208,19 @@ to the HTTP request or socket lifetime. See the author guide for Python examples
   renewal; recover the durable list. Do not restart the job as a reconnect strategy.
 - Missing helper: check the **host's** runtime version, not only the plugin venv.
 - Lost connection during start: inspect the job list before offering a retry.
+
+## Agent node selection
+
+Hub uses the administrator's deployment setting in Settings → AI/Assistant for a
+module declaring `runtime.node_workload = "agent"`. There is no module or project
+node selector. Keep project and storage-root context when opening another module;
+that context selects data, not the execution node. Agent must be explicitly enabled
+before these modules open. The generic Nodes menu cannot move an agent module or
+silently fall back to the main deployment when the configured node is unavailable.
+
+Infrastructure pages can pass `purpose: "agent"` and `reservation_label` in the
+request to `PLUGIN_API.createNode`. Compute 1.5 creates the reservation before
+provisioning and disables idle shutdown. Use `purpose: "compute"` for ordinary
+batch nodes. The shared node list displays reservations and applies the caller's
+management permissions. Use the returned server permissions for controls; never
+infer them from client-side role names.

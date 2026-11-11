@@ -411,6 +411,9 @@ class CreateNodeRequest:
     project_storage: ProjectStorage = field(default_factory=ProjectStorage)
     storage_id: str = ""
     workspace: WorkspaceRequest = field(default_factory=WorkspaceRequest)
+    # Additional, operator-selected requirements installed beside compute_spec. Providers
+    # opt in with capabilities.bootstrap_specs; never replace or weaken the host's pin.
+    bootstrap_specs: list[str] = field(default_factory=list, repr=False)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CreateNodeRequest:
@@ -427,6 +430,7 @@ class CreateNodeRequest:
             owner=_str(data.get("owner")),
             pricing=_str(data.get("pricing")),
             compute_spec=_stripped(data.get("compute_spec")),
+            bootstrap_specs=_str_list(data.get("bootstrap_specs")),
             project_storage=ProjectStorage.from_dict(data.get("project_storage")),
             storage_id=_str(data.get("storage_id")),
             workspace=WorkspaceRequest.from_dict(data.get("workspace")),
@@ -452,6 +456,8 @@ class CreateNodeRequest:
         }
         if self.pricing:
             d["pricing"] = self.pricing
+        if self.bootstrap_specs:
+            d["bootstrap_specs"] = list(self.bootstrap_specs)
         return d
 
 

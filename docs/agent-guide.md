@@ -15,6 +15,10 @@ build configuration before edits. Do not import host internals or copy a private
 3. Keep server-side data access in the 3lc Python SDK. Long operations use background
    jobs, durable progress/results and cooperative explicit cancellation. A UI or socket
    disconnect must not terminate the job. Never add cleanup that cancels remote work.
+   When a job creates a 3LC run, call `ctx.result(str(run.url))` immediately after creation,
+   before training, prediction or collection. This links queue progress and the actual run
+   name to the run row; it does not finish the job. Forward an `on_run(url)` callback from
+   trainer adapters rather than parsing log text or guessing a URL from the requested name.
 4. Capture `window.PLUGIN_API`. Use `http.request`, `jobs`, `pickers`, `credentials`,
    `nodes`, `run`, `nav`, `data` and `lifecycle`; consult the type declarations for exact
    signatures. No Hub globals, parent DOM access, browser secrets or custom auth flows.
@@ -51,3 +55,53 @@ Describe changed behavior, affected runtime/dependency versions, compatibility
 aliases retained, test results and remaining rollout gates. Keep artifact publication,
 fleet migration and real overnight soak distinct from completed local validation.
 Do not claim the isolation track is closed while those gates remain.
+
+## Host-mediated agent operations (0.7.1)
+
+`JobContext.request_host(operation, payload, timeout=120)` requests a deployment
+operation over the worker's authenticated control transport. It is synchronous
+and cancellation-aware; asynchronous plugin code can call it through
+`asyncio.to_thread`. Up to 16 requests may be pending per job, with an 8 MiB serialized
+payload/response limit and at most a one-hour deadline. A timeout means the
+operation's outcome is unknown: do not retry a side effect with a new request ID.
+The SDK preserves pending IDs during transport reconnect/recovery.
+
+This is an optional host capability, advertised as `host_requests` in worker
+health. Hosts decide which jobs and operations are authorized. The API is not a
+way to request a bearer, key or arbitrary host URL. Plugins must fail clearly
+when their required host service is absent. Agents should keep credentials,
+model calls and durable spending limits at the deployment while running their
+loop and bounded local computation on the selected worker.
+
+MCP knowledge declarations are relative to the installed plugin package. Include
+the files in the wheel. Only declared Markdown files within that package are
+served; symlink escapes, oversized files and excessive page counts are refused.
+Tool input schemas describe the actual native plugin operation. Advisory MCP
+annotations never grant authority or waive confirmation for mutations.
+
+## Weighted selections
+
+`tlc_plugin_sdk.shared.weights.weight_summary(table)` returns bounded counts for
+an exact revision; `sample_weights(table)` reads only the schema-declared weight
+column. Neither decodes images. Missing weights mean one; invalid weights fail.
+Sparse null cells use the column schema default, as the row view does.
+Physical rows, positive-weight rows and weight sum are distinct. For derived edits,
+publish an `EditedTable` referencing the original table, preserving lineage and
+bulk data. Keep existing zero weights zero when reducing a training selection.
+
+## Published MCP contracts
+
+SDK 0.7.6 adds `McpTool.output_schema` and `load_mcp_section(raw, directory)` for
+packaged `tools_file` JSON catalogs. Titles and boolean safety annotations survive
+normalization. Publish stable contracts, return changing values as data, and test
+result shapes. See [MCP tools](plugin-guide.md#mcp-tools-what-an-agent-may-ask-your-plugin-to-do)
+for the canonical contract, prepared jobs and resource-link results.
+
+
+### Table lineage in project reads
+
+`ProjectCatalog.table_info(url)` describes the exact requested revision. Its
+`parent_table_urls` contains absolute native input-table URLs, and `is_original`
+is true only when the table has no inputs. Use these facts for lineage-sensitive
+operations; do not infer originality from a table's name or replace the requested
+revision with `latest_revision_url`. These fields are available from SDK 0.7.14.

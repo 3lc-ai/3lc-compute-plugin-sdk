@@ -21,6 +21,17 @@ def test_packaged_runtime_has_version_and_helpers() -> None:
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_table_warnings_follow_current_frame_fields() -> None:
+    subprocess.run(
+        ["node", "--test", str(Path(__file__).with_name("table_input_notes.cjs"))],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 @pytest.mark.parametrize("close_mode", ["unload", "host-close"])
 def test_runtime_boundary_and_lifecycle(tmp_path: Path, close_mode: str) -> None:
     script = tmp_path / "frame.js"
@@ -67,6 +78,19 @@ def test_runtime_fill_layout_and_hub_links(tmp_path: Path) -> None:
     script.write_text(frame_runtime_script(), encoding="utf-8")
     subprocess.run(
         ["node", str(Path(__file__).with_name("frame_runtime_fill.cjs")), str(script)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_runtime_offers_the_pages_actions_to_a_hub_with_a_registry(tmp_path: Path) -> None:
+    script = tmp_path / "frame.js"
+    script.write_text(frame_runtime_script(), encoding="utf-8")
+    subprocess.run(
+        ["node", str(Path(__file__).with_name("frame_runtime_actions.cjs")), str(script)],
         check=True,
         capture_output=True,
         text=True,
