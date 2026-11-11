@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - Unreleased
 
+- Shared AI settings expose one enabled boolean instead of plugin-specific switches. Legacy policies retain their Assistant on/off choice; missing enablement defaults to disabled.
+
 - Linux/macOS workers support isolated job processes, with per-job cancellation and cleanup of
   child processes. The optional `prepare_job(ctx)` hook hands transient inputs from the serving
   worker to its job over private local IPC. Long-running services keep their shared runtime.

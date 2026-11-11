@@ -184,6 +184,51 @@ provision_extra = "my-plugin"       # your plugin's dependency group: host runs 
   passed through from the action launch), `quick_action_label` / `quick_action_description`
   (dashboard quick-action copy).
 
+### Stateful Agent nodes
+
+Compute 1.5 and Hub 1.3 support project/team reservations. A stateful agent module
+opts in with `[runtime] node_workload = "agent"` and `remote_capable = true`.
+Declare `min_service_version = "1.5.0"` and `min_frontend_version = "1.3.0"`.
+The default `"compute"` remains appropriate for training, imports and analysis jobs.
+This is independent of `requires_gpu`, UI grouping and MCP tool declarations.
+Installing a module is an operator trust decision: this declaration is scheduling
+metadata, not permission for arbitrary code to claim a node or elevate its user.
+
+The main deployment stays shared. Remote agent modules require an explicit,
+durable Agent reservation. An administrator chooses and enables one Agent node in
+Settings → AI/Assistant for the deployment. It starts unset and disabled; projects
+and module pages cannot override it. All agent modules show setup guidance until
+Agent is enabled. The global compute destination cannot change it. Reserved nodes reject batch work
+and idle shutdown. A team member can use a reservation; only its manager or a
+deployment admin can change its lifecycle. Administrative overrides require an
+audited reason. Reads, secrets and data access still use the caller's existing
+permissions. Unsupported node agents must be updated before acquisition.
+
+Host and node enforce reservation revisions and refuse stale queued work. A failed
+node is reported rather than silently rerouted. The reservation persists across
+browser/controller disconnects, but running jobs need not survive Compute shutdown.
+This reserves a machine; it does not provide memory isolation between agent modules
+or high availability for their state. Back up module storage separately.
+
+Chat providers additionally declare `runtime.agent_interfaces = ["hub_chat_v1"]`
+and `mcp.agent = true`. The administrator selects one installed, compatible provider
+in **Chat assistant**. A declaration alone grants no authority: the host records the
+selected plugin, entry point and distribution and checks them at dispatch. The Hub
+owns the sidebar, conversation persistence, approvals and project context. The v1
+provider accepts native `message`, `conversation_id`, `context` and `ui_session`
+inputs, uses the SDK host-request protocol for conversation state, tools, approvals
+and accounting, and returns `answer` and `conversation_id` with optional steps and
+artifacts. A plugin offering only an MCP `ask` tool does not implement this contract.
+Project roots and UI context are host-side references for these approved reasoning
+providers. Access them through MCP; do not assume the host's disk exists on the
+Agent node. Direct data-processing modules retain the usual storage checks.
+
+`flow_reasoning_v1` is a separate background reasoning interface: it accepts the
+host-bound Flow cycle context and returns the cycle's declared result schema through
+the host-request protocol. The deployment operator approves this runtime separately;
+changing the chat provider does not change Flow. An implementation can support both
+interfaces. Flow remains the built-in project orchestrator, with no additional chat UI.
+
 `runtime.provision_extra` names the **optional-dependency group** the host installs into your
 plugin's venv (`uv sync --extra <that-value>`, or folded into the pip spec for a distribution
 install). Keeping a plugin's dependencies behind an extra rather than in the base does two things:

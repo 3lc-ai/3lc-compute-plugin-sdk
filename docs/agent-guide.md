@@ -97,6 +97,24 @@ normalization. Publish stable contracts, return changing values as data, and tes
 result shapes. See [MCP tools](plugin-guide.md#mcp-tools-what-an-agent-may-ask-your-plugin-to-do)
 for the canonical contract, prepared jobs and resource-link results.
 
+## Stateful agent modules
+
+Use `runtime.node_workload = "agent"` for modules that share the deployment's reserved
+Agent node, chosen only by an administrator in Settings → AI/Assistant. Do not add
+module or project node selectors. Keep training and bulk processing as compute workloads with their own
+destination. See [Stateful Agent nodes](plugin-guide.md#stateful-agent-nodes) for
+minimum versions, role enforcement and restart behavior. Preserve project/root
+launch context; do not follow the global compute-node choice in a stateful module.
+
+### Asynchronous provider connection capacity
+
+`tlc_plugin_sdk.ai.http.ClientPool(max_connections=64, max_keepalive_connections=16)`
+accepts explicit per-job connection limits. Callers with high asynchronous model
+concurrency may increase them (maximum 4096), while retaining provider rate limits
+and budget admission. This does not require one CPU thread per connection. Keep
+CPU/image processing in a separate bounded executor. Bind the pool on one event
+loop and close it when the job ends. Request cookies and authorization remain
+isolated between calls; transport reuse does not share a client session.
 
 ### Table lineage in project reads
 
