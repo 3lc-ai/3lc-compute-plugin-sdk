@@ -213,3 +213,33 @@ def test_project_root_is_empty_only_when_nobody_can_say(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(builtins, "__import__", no_tlc)
     assert _ctx_with({}).project_root_url == ""
+
+
+def test_credential_renewal_is_same_connection_fail_closed_and_redacts_rotations(tmp_path):
+    token = SecretToken(provider="openai", secret="old-private-key", connection_id="c")
+    wire = {
+        "valid_for": 15,
+        "credentials": {"openai": {"provider": "openai", "connection_id": "c", "secret": "new-private-key"}},
+    }
+    calls = []
+
+    def renew(operation, payload, timeout):
+        calls.append((operation, payload))
+        return wire
+
+    ctx = JobContext(
+        "job",
+        {},
+        tmp_path,
+        sink=lambda event: None,
+        cancel_event=threading.Event(),
+        credentials={"openai": token},
+        host_request=renew,
+    )
+    assert ctx.refresh_credentials()["openai"].secret == "new-private-key"
+    assert calls == [("credentials", {})]
+    assert ctx._mask_secrets({"value": "old-private-key and new-private-key"}) == {"value": "*** and ***"}
+    wire["credentials"]["openai"]["connection_id"] = "foreign"
+    with pytest.raises(PermissionError, match="changed"):
+        ctx.refresh_credentials()
+    assert not ctx.credentials and ctx.credential is None

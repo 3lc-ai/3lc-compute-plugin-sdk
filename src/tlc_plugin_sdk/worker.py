@@ -59,6 +59,7 @@ import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.connection import wait as wait_connections
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -323,6 +324,7 @@ class _Job:
         plugin: ComputePlugin,
         on_end: Callable[[str], None] | None = None,
         event_sink: Callable[[dict[str, Any]], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self.job_id = job_id
         self._on_end = on_end
@@ -337,7 +339,12 @@ class _Job:
         self._revision = 0
         self._status_path = state_dir / "worker-status.json"
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
-        self._cancel = threading.Event()
+        self._cancel = cancel_event if cancel_event is not None else threading.Event()
+        from tlc_plugin_sdk.host_requests import HostRequests
+
+        self.host_requests = HostRequests(self._put_event, self._cancel)
+        mcp = params.pop("_mcp", None)
+        self._mcp_secret = str(mcp.get("capability") or "") if isinstance(mcp, dict) else ""
         # Host-owned keys: popped here so a plugin's ``ctx.params`` never carries them (a plugin
         # that persists its params must not persist who ran them, nor the token it was granted).
         identity = JobIdentity.from_wire(params.pop(IDENTITY_KEY, None))
@@ -370,6 +377,7 @@ class _Job:
             identity=identity,
             credential=credential,
             credentials=credentials,
+            host_request=self.host_requests.call,
         )
         self._plugin = plugin
         self._thread = threading.Thread(target=self._run, name=f"job-{job_id}", daemon=True)
@@ -386,6 +394,7 @@ class _Job:
         """Bounded current progress and final outcome; never includes input credentials."""
         with self._snapshot_lock:
             events = list(self._latest.values())
+            events.extend(self.host_requests.pending())
             terminal = next((e for e in events if e.get("event") in _TERMINAL), None)
             state = (
                 "running"
@@ -397,7 +406,13 @@ class _Job:
         tokens = list(self.ctx.credentials.values())
         if not tokens and self.ctx.credential is not None:
             tokens.append(self.ctx.credential)
-        secrets = sorted((token.secret for token in tokens if token.secret), key=len, reverse=True)
+        secrets = sorted(
+            list(self.ctx._redaction_secrets)
+            + [token.secret for token in tokens if token.secret]
+            + ([self._mcp_secret] if self._mcp_secret else []),
+            key=len,
+            reverse=True,
+        )
 
         def mask(value: Any) -> Any:
             if isinstance(value, str):
@@ -450,16 +465,19 @@ class _Job:
             pass
 
     def _put_event(self, event: dict[str, Any]) -> None:
+        event = cast("dict[str, Any]", self.ctx._mask_secrets(event))
         if self._event_sink is not None:
             with self._sink_lock:
                 self._event_sink(event)
             return
         kind = event.get("event")
-        if kind in {"progress", "log", "metric", "result", "done", "error"}:
-            key = str(kind) + (":" + str(event.get("label", "")) if kind == "metric" else "")
+        if kind in {"progress", "log", "metric", "result", "output", "done", "error"}:
+            # One slot per metric label and per output name; the other kinds keep their last value.
+            suffix = {"metric": event.get("label", ""), "output": event.get("name", "")}.get(str(kind))
+            key = str(kind) + (":" + str(suffix) if suffix is not None else "")
             with self._snapshot_lock:
                 # Keep the last value of each metric, not an unbounded stream of batches.
-                if kind != "metric" or key in self._latest or len(self._latest) < 250:
+                if kind not in ("metric", "output") or key in self._latest or len(self._latest) < 250:
                     self._latest.pop(key, None)
                     self._latest[key] = dict(event)
                 self._revision += 1
@@ -490,7 +508,7 @@ class _Job:
             terminal = {"event": "error", "message": str(exc), "job_id": self.job_id}
         except Exception as exc:  # any other exception: surfaced with its type prefix
             logger.exception("run_job failed for job %s", self.job_id)
-            terminal = {"event": "error", "message": f"{type(exc).__name__}: {exc}", "job_id": self.job_id}
+            terminal = {"event": "error", "message": describe_failure(exc), "job_id": self.job_id}
         # Reclaim *before* announcing the terminal state, not after: the host may dispatch
         # the next GPU job the moment it sees this event, and it would then be racing this
         # job's still-cached allocation. Runs for the error path too — see
@@ -515,7 +533,9 @@ def _kill_job_process(process: BaseProcess) -> None:
         except PermissionError:
             # Darwin reports EPERM for a group containing only the unreaped zombie.
             # A live child must never be mistaken for this case or lose its lease.
-            if sys.platform != "darwin" or not wait_connections([process.sentinel], timeout=0):
+            # The sentinel can lag the group disappearing while native/data-loader
+            # finalizers close inherited handles. Confirm exit without reaping the PID.
+            if sys.platform != "darwin" or not wait_connections([process.sentinel], timeout=5):
                 raise
     if process.is_alive():
         process.kill()
@@ -529,12 +549,16 @@ def _run_job_process(entry: str, plugin_id: str, job_id: str, state_dir: str, ch
     sys.argv = ["plugin-job"]  # the worker's command line may contain its control token
     params = channel.recv()
     cancel = threading.Event()
+    job: _Job | None = None
 
     def control() -> None:
         try:
             while True:
-                if channel.recv() == "cancel":
+                message = channel.recv()
+                if message == "cancel":
                     cancel.set()
+                elif isinstance(message, dict) and message.get("host_response") and job is not None:
+                    job.host_requests.answer(message["host_response"], message["data"])
         except (EOFError, OSError):
             # A dead worker must not leave untracked training consuming its GPU.
             if os.name == "posix":
@@ -546,9 +570,7 @@ def _run_job_process(entry: str, plugin_id: str, job_id: str, state_dir: str, ch
         plugin = _load_plugin(entry)
         plugin.id = plugin_id
         _initialise_runtime(plugin, plugin_id)
-        job = _Job(job_id, params, Path(state_dir), plugin, event_sink=channel.send)
-        job._cancel = cancel
-        job.ctx._cancel = cancel
+        job = _Job(job_id, params, Path(state_dir), plugin, event_sink=channel.send, cancel_event=cancel)
         job._run()
     except BaseException as exc:
         channel.send({"event": "error", "job_id": job_id, "message": f"{type(exc).__name__}: {exc}"})
@@ -585,6 +607,29 @@ class _ProcessJob(_Job):
         process: BaseProcess | None = None
         terminal: dict[str, Any] | None = None
         cancel_at: float | None = None
+        from tlc_plugin_sdk.host_requests import MAX_PENDING
+
+        # Keep the authenticated host channel in the serving worker. Only its
+        # request/result messages cross the private pipe into this job process.
+        replies = ThreadPoolExecutor(max_workers=MAX_PENDING, thread_name_prefix="job-host-reply")
+        send_lock = threading.Lock()
+
+        def send(message: Any) -> None:
+            with send_lock:
+                if parent is not None:
+                    parent.send(message)
+
+        def relay(event: dict[str, Any]) -> None:
+            try:
+                result = self.host_requests.call(event["operation"], event["payload"], event.get("timeout", 120))
+                response = {"result": result}
+            except Exception as exc:
+                response = {"error": str(exc)}
+            with contextlib.suppress(BrokenPipeError, EOFError, OSError):
+                if self.ctx.cancelled:
+                    send("cancel")
+                send({"host_response": event["request_id"], "data": response})
+
         try:
             context = multiprocessing.get_context("spawn")  # never fork an initialized CUDA/threaded runtime
             parent, child = context.Pipe()
@@ -601,13 +646,13 @@ class _ProcessJob(_Job):
             self._wire = prepared
             process.start()
             child.close()
-            parent.send(self._wire)
+            send(self._wire)
             self._wire.clear()
             while True:
                 if self.ctx.cancelled and cancel_at is None:
                     cancel_at = time.monotonic()
                     with contextlib.suppress(BrokenPipeError, EOFError, OSError):
-                        parent.send("cancel")
+                        send("cancel")
                 grace = _cancel_grace_seconds()
                 if cancel_at is not None and grace > 0 and time.monotonic() - cancel_at >= grace:
                     break  # cleanup below kills this job's process group, never siblings
@@ -619,6 +664,8 @@ class _ProcessJob(_Job):
                     if event.get("event") in _TERMINAL:
                         terminal = event
                         break
+                    elif event.get("event") == "host_request":
+                        replies.submit(relay, event)
                     else:
                         self._put_event(event)
                 elif wait_connections([process.sentinel], timeout=0):
@@ -627,11 +674,28 @@ class _ProcessJob(_Job):
             terminal = {"event": "error", "job_id": self.job_id, "message": f"{type(exc).__name__}: {exc}"}
         finally:
             self._wire.clear()
+            was_cancelled = self.ctx.cancelled
+            # Release outstanding host waits before closing their IPC endpoint.
+            self._cancel.set()
+            replies.shutdown(wait=True, cancel_futures=True)
             if process is not None and process.pid is not None:
                 # Do not reap yet: retaining the child PID prevents reuse before group
                 # cleanup. Descendants (e.g. data loaders) share this private group.
                 wait_connections([process.sentinel], timeout=2 if terminal is not None else 0)
-                _kill_job_process(process)
+                while True:
+                    try:
+                        _kill_job_process(process)
+                        break
+                    except PermissionError:
+                        # Keep the resource lease and make the blockage visible. An
+                        # exception here must not silently abandon a queued outcome.
+                        self._put_event({
+                            "event": "progress",
+                            "job_id": self.job_id,
+                            "percent": -1,
+                            "label": "Waiting for worker cleanup; restart Compute if it cannot exit",
+                        })
+                        wait_connections([process.sentinel], timeout=5)
                 process.join()  # retain the resource lease until exit is confirmed
             if parent is not None:
                 parent.close()
@@ -641,7 +705,7 @@ class _ProcessJob(_Job):
                 exit_code = process.exitcode if process is not None else None
                 terminal = (
                     {"event": "done", "job_id": self.job_id, "status": "cancelled"}
-                    if self.ctx.cancelled
+                    if was_cancelled
                     else {
                         "event": "error",
                         "job_id": self.job_id,
@@ -681,6 +745,18 @@ def _alias_overrides(ctx: JobContext) -> Iterator[None]:
     finally:
         if originals:
             restore_aliases(originals)
+
+
+def describe_failure(exc: BaseException) -> str:
+    """``Type: message`` for a job's exception.
+
+    An exception group (a task group's, as an MCP or HTTP client raises) says only how many
+    errors it holds; its leaf exceptions say what failed, so those are what the job reports.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        leaves = "; ".join(describe_failure(sub) for sub in exc.exceptions)
+        return leaves or f"{type(exc).__name__}: {exc}"
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _stream_keepalive_seconds() -> float | None:
@@ -753,6 +829,12 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
             raise HTTPException(status_code=404, detail="This worker has no record of that job.")
         return status
 
+    @post("/jobs/{job_id:str}/host-response/{request_id:str}", status_code=200)
+    async def host_response(job_id: str, request_id: str, data: dict[str, Any]) -> dict[str, bool]:
+        with worker._lock:
+            job = worker._jobs.get(job_id)
+        return {"accepted": bool(job is not None and job.host_requests.answer(request_id, data))}
+
     @post("/jobs/{job_id:str}/cancel")
     async def cancel_job(job_id: str) -> Response[dict[str, Any]]:
         ok = worker.cancel_job(job_id)
@@ -778,7 +860,7 @@ def _control_handlers(worker: _Worker) -> list[BaseRouteHandler]:
         released = await anyio.to_thread.run_sync(release_gpu_memory)
         return Response(content={"released": released, "plugin_id": worker.plugin_id}, status_code=200)
 
-    return [run_job, job_status, cancel_job, cancel_all, busy, reclaim]
+    return [run_job, job_status, host_response, cancel_job, cancel_all, busy, reclaim]
 
 
 def _initialise_runtime(plugin: object, plugin_id: str) -> None:

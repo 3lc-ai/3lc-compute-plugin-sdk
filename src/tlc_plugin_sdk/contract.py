@@ -85,6 +85,17 @@ class HubPlugin(ABC):
         no-op.
         """
 
+    def get_mcp_tools(self) -> list[dict[str, Any]]:
+        """Return the plugin's MCP tools that depend on runtime state, as plain dicts.
+
+        The manifest's ``[[mcp.tools]]`` are the host's to read without importing the plugin;
+        this adds the ones only the running plugin knows (a model list, a catalogue), in the
+        same shape (see :func:`tlc_plugin_sdk.mcp_tools.mcp_tools_as_wire`). The worker serves
+        the result at the reserved route ``GET /mcp/tools``. Published manifest contracts remain
+        authoritative. Runtime-only tools are scoped to the caller and node. Empty by default.
+        """
+        return []
+
     def get_route_handlers(self) -> list[Any]:
         """Return the plugin's custom routes as relative Litestar route handlers.
 

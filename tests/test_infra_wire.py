@@ -523,3 +523,18 @@ def test_structured_diagnostics_preserve_unavailable_source() -> None:
     })
     assert status.bootstrap_stage == "services"
     assert status.to_dict()["diagnostics"][0]["status"] == "unavailable"
+
+
+def test_bootstrap_artifacts_round_trip_without_exposing_them_in_repr():
+    from tlc_plugin_sdk.infrastructure import CreateNodeRequest
+
+    request = CreateNodeRequest.from_dict({
+        "node_id": "n",
+        "node_type": "cpu",
+        "token": "t",
+        "compute_spec": "3lc-compute==1.5.0",
+        "bootstrap_specs": ["3lc-compute @ https://example/a.whl?private-token"],
+    })
+    assert request.to_dict()["bootstrap_specs"] == request.bootstrap_specs
+    assert "private-token" not in repr(request)
+    assert "bootstrap_specs" not in CreateNodeRequest("n", "cpu", "t").to_dict()

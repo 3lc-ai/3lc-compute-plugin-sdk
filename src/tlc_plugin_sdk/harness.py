@@ -38,6 +38,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
+from tlc_plugin_sdk.mcp_tools import load_mcp_section, parse_mcp_section
+
 if TYPE_CHECKING:
     from litestar.testing import TestClient
 
@@ -194,6 +196,9 @@ class Manifest:
         credential_routes: The custom routes that receive it (``[runtime] credential_routes``).
         data_inputs: Dotted keys into the run body naming data the run reads (``[runtime] data_inputs``).
         data_outputs: Dotted keys naming places the run writes to (``[runtime] data_outputs``).
+        mcp: The ``[mcp]`` table, validated: ``tools`` (:class:`~tlc_plugin_sdk.mcp_tools.McpTool`), ``agent``
+            and ``knowledge`` (see :mod:`tlc_plugin_sdk.mcp_tools`).
+        node_workload: ``compute`` (default) or ``agent`` for reserved Agent nodes.
     """
 
     id: str
@@ -204,6 +209,8 @@ class Manifest:
     credential_routes: tuple[str, ...] = field(default=())
     data_inputs: tuple[str, ...] = field(default=())
     data_outputs: tuple[str, ...] = field(default=())
+    mcp: dict[str, Any] = field(default_factory=lambda: {"tools": (), "agent": False, "knowledge": []})
+    node_workload: str = "compute"
 
 
 def _toml_load(path: Path) -> dict[str, Any]:
@@ -226,8 +233,8 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
     Raises:
         FileNotFoundError: When neither file holds a manifest.
         ValueError: When the manifest lacks ``id`` or ``[runtime] entrypoint``, or declares
-            ``credentials`` / ``credential_routes`` / ``data_inputs`` / ``data_outputs`` of the wrong
-            shape, or ``credential_routes`` without ``credentials``.
+            ``credentials`` / ``credential_routes`` / ``data_inputs`` / ``data_outputs`` / ``[mcp]`` of the
+            wrong shape, or ``credential_routes`` without ``credentials``.
     """
     directory = Path(plugin_dir).resolve()
     for filename in ("plugin.toml", "pyproject.toml"):
@@ -248,11 +255,16 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
             msg = f"{path}: a manifest needs 'id' and '[runtime] entrypoint'"
             raise ValueError(msg)
         runtime_table = runtime if isinstance(runtime, dict) else {}
+        node_workload = runtime_table.get("node_workload", "compute")
+        if node_workload not in ("compute", "agent"):
+            msg = f"{path}: [runtime] node_workload must be 'compute' or 'agent'"
+            raise ValueError(msg)
         try:
             credentials = parse_credentials(runtime_table.get("credentials"))
             credential_routes = parse_credential_routes(runtime_table.get("credential_routes"))
             data_inputs = parse_data_keys(runtime_table.get("data_inputs"), "data_inputs")
             data_outputs = parse_data_keys(runtime_table.get("data_outputs"), "data_outputs")
+            mcp = parse_mcp_section(load_mcp_section(table.get("mcp"), directory))
         except ValueError as exc:
             msg = f"{path}: {exc}"
             raise ValueError(msg) from exc
@@ -264,10 +276,12 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
             entrypoint=str(entrypoint),
             kind=str(table.get("kind", "") or "compute"),
             source_dir=directory,
+            node_workload=node_workload,
             credentials=credentials,
             credential_routes=credential_routes,
             data_inputs=data_inputs,
             data_outputs=data_outputs,
+            mcp=mcp,
         )
     msg = f"No plugin manifest (plugin.toml or [tool.tlc-compute] in pyproject.toml) in {directory}"
     raise FileNotFoundError(msg)

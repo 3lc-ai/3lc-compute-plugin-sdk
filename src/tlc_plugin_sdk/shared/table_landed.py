@@ -21,6 +21,20 @@ have to go and find what you just made.
 from __future__ import annotations
 
 TABLE_LANDED_JS = r"""
+// Sandboxed plugin frames navigate through the Hub bridge, never their Compute origin.
+if (typeof document !== 'undefined') document.addEventListener('click', function (event) {
+  var link = event.target.closest && event.target.closest('a[data-tlc-project-path]');
+  var api = window.PLUGIN_API || {};
+  if (!link || event.defaultPrevented || event.button || event.metaKey || event.ctrlKey ||
+      event.shiftKey || event.altKey) return;
+  var go = api.nav && api.nav.go || api.navigate;
+  if (!go) return;
+  event.preventDefault();
+  Promise.resolve(go(link.getAttribute('data-tlc-project-path'))).catch(function (error) {
+    if (api.ui && api.ui.toast) api.ui.toast(error.message || 'Could not open project', 'error');
+  });
+});
+
 // _tlcTableLandedHtml(project, dataset, tableUrl, opts) -> HTML for the actions on a landed table.
 //
 // opts.primary  (default true)  render "Open in Project" as the primary button
@@ -39,15 +53,25 @@ function _tlcTableLandedHtml(project, dataset, tableUrl, opts) {
     });
   };
   if (!project) return '';
+  var api = window.PLUGIN_API || {};
+  var root = opts.root_url || '';
+  var marker = '/' + project + '/datasets/';
+  var boundary = String(tableUrl || '').lastIndexOf(marker);
+  if (!root && boundary > 0) root = String(tableUrl).slice(0, boundary);
   var view = '/projects/' + encodeURIComponent(project) +
     '?dataset=' + encodeURIComponent(dataset || '') +
-    (tableUrl ? '&table=' + encodeURIComponent(tableUrl) : '') + '#datasets';
+    (tableUrl ? '&table=' + encodeURIComponent(tableUrl) : '') +
+    (root ? '&root=' + encodeURIComponent(root) : '') + '#datasets';
+  var href = view;
+  if (api.nav && api.nav.href) {
+    try { href = new URL(view, api.nav.href({})).href; } catch (err) { /* older host */ }
+  }
   var cls = opts.primary === false ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm';
-  var html = '<a href="' + e(view) + '" class="' + cls + '">Open in Project</a>';
+  var html = '<a href="' + e(href) + '" data-tlc-project-path="' + e(view) +
+    '" class="' + cls + '">Open in Project</a>';
   // The Dashboard link is the host's to build: it carries object_service, so the Dashboard opens
   // against the workspace this browser is on rather than its own default. Concatenating
   // dashboard_url + '?table=' worked on a laptop and pointed somewhere else anywhere else.
-  var api = window.PLUGIN_API || {};
   var known = '';
   try { known = api.getConfig ? String(api.getConfig('dashboard_url') || '') : ''; } catch (err) { known = ''; }
   if (known && tableUrl) {

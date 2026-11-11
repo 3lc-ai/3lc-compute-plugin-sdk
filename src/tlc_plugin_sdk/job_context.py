@@ -14,7 +14,9 @@ Import-light: stdlib only. Must not pull in the server stack.
 
 from __future__ import annotations
 
+import math
 import threading
+import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -132,6 +134,7 @@ class JobContext:
         identity: JobIdentity | None = None,
         credential: SecretToken | None = None,
         credentials: Mapping[str, SecretToken] | None = None,
+        host_request: Callable[[str, dict[str, Any], float], Any] | None = None,
     ) -> None:
         self.job_id = job_id
         self.params = params or {}
@@ -158,9 +161,108 @@ class JobContext:
         if single is None and len(tokens) == 1:
             single = next(iter(tokens.values()))
         self._credential = single
+        self.credentials_valid_until = 0.0
+        self._credential_connections = {service: token.connection_id for service, token in tokens.items()}
+        self._secret_lock = threading.Lock()
+        self._redaction_secrets = {token.secret for token in tokens.values() if token.secret}
+        if single is not None and single.secret:
+            self._redaction_secrets.add(single.secret)
+        self._host_request = host_request
         self._sink = sink
         self._cancel = cancel_event
         self._project_root: str | None = None
+
+    def request_host(self, operation: str, payload: dict[str, Any], timeout: float = 120) -> Any:
+        """Call an operation explicitly offered by the host, using this job's control channel.
+
+        The host decides whether this plugin/job may use it. No host credentials
+        or network address are required on the node. An unknown outcome must not
+        be retried as a new mutating operation.
+        """
+        if self._host_request is None:
+            msg = "This worker has no host request channel"
+            raise RuntimeError(msg)
+        return self._host_request(operation, payload, timeout)
+
+    def protect_secret(self, value: str) -> None:
+        """Redact a runtime-acquired credential from this job's events and snapshots.
+
+        Call before using a renewed grant. Values stay only in the trusted worker's
+        memory, including prior rotated values until the job is discarded.
+        """
+        if not value:
+            return
+        with self._secret_lock:
+            if len(value) > 8192 or (value not in self._redaction_secrets and len(self._redaction_secrets) >= 256):
+                msg = "Job credential redaction limit reached"
+                raise ValueError(msg)
+            self._redaction_secrets.add(value)
+
+    def _mask_secrets(self, value: Any) -> Any:
+        with self._secret_lock:
+            secrets = sorted(self._redaction_secrets, key=len, reverse=True)
+
+        def mask(item: Any) -> Any:
+            if isinstance(item, str):
+                for secret in secrets:
+                    item = item.replace(secret, "***")
+            elif isinstance(item, dict):
+                return {mask(k): mask(v) for k, v in item.items()}
+            elif isinstance(item, list):
+                return [mask(v) for v in item]
+            return item
+
+        return mask(value)
+
+    def refresh_credentials(self) -> Mapping[str, SecretToken]:
+        """Renew only this job's already authorized Connections through host control.
+
+        This exchanges grant metadata/credentials, never a model request or dataset.
+        A refusal clears current credentials; previous values remain redacted.
+        """
+        from tlc_plugin_sdk.connections import SecretToken
+
+        self.credentials = MappingProxyType({})
+        self._credential = None
+        self.credentials_valid_until = 0.0
+        started = time.monotonic()
+        answer = self.request_host("credentials", {}, 30)
+        raw = answer.get("credentials") if isinstance(answer, dict) else None
+        if not isinstance(raw, dict):
+            msg = "Invalid credential renewal"
+            raise PermissionError(msg)
+        valid_for = answer.get("valid_for")
+        if (
+            isinstance(valid_for, bool)
+            or not isinstance(valid_for, (int, float))
+            or not math.isfinite(valid_for)
+            or not 0 < valid_for <= 15
+        ):
+            msg = "Invalid credential grant lifetime"
+            raise PermissionError(msg)
+        deadline = started + valid_for
+        tokens: dict[str, SecretToken] = {}
+        for service, wire in raw.items():
+            token = SecretToken.from_wire(wire)
+            if (
+                token is None
+                or token.provider != service
+                or self._credential_connections.get(service) != token.connection_id
+            ):
+                msg = "Credential renewal changed a job Connection"
+                raise PermissionError(msg)
+            self.protect_secret(token.secret)
+            tokens[service] = token
+        if set(tokens) != set(self._credential_connections):
+            msg = "Credential renewal omitted a job Connection"
+            raise PermissionError(msg)
+        if deadline <= time.monotonic():
+            msg = "Credential renewal expired in transit"
+            raise PermissionError(msg)
+        self.credentials_valid_until = deadline
+        self.credentials = MappingProxyType(tokens)
+        self._credential = next(iter(tokens.values())) if len(tokens) == 1 else None
+        return self.credentials
 
     @property
     def credential(self) -> SecretToken | None:
@@ -244,11 +346,34 @@ class JobContext:
         write wins). Pass the one canonical artifact the job produced — a run *or* a
         table URL. Richer per-plugin output still goes through :meth:`emit`.
 
+        When creating a run, call this as soon as the run exists, before training,
+        prediction, or collection starts. This associates live queue progress with
+        the actual run and its name. It does not complete the job: progress, metrics,
+        errors, and cancellation continue normally. Pass ``str(run.url)`` from the
+        created object, never construct a URL from the requested name (the library
+        may choose a unique name). Trainer adapters should forward an ``on_run(url)``
+        callback to this method instead of communicating identity through log text.
+
         Args:
             url: The URL the Open button opens (a run or a table URL).
 
         """
         self._emit({"event": "result", "run_url": url})
+
+    def output(self, name: str, value: Any) -> None:
+        """Record a named output of the job in its record, such as the URL of a table it wrote.
+
+        Outputs are what an MCP caller (or anything reading ``GET /api/plugins/jobs``) gets back
+        when the job is done, without listening to the job's events: a plugin that today
+        reports its result only in a custom ``emit`` event records it here as well. ``name`` is
+        a short identifier; ``value`` is JSON (a string, a number, a list or a dict). The last
+        value per name wins; ``ctx.result(url)`` is the Open link and is always the output
+        ``run_url``.
+        """
+        if not isinstance(name, str) or not name:
+            msg = "An output needs a name"
+            raise ValueError(msg)
+        self._emit({"event": "output", "name": name, "value": value})
 
     def fail(self, message: str) -> NoReturn:
         """Fail the job with a clean, user-facing message.

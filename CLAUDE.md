@@ -23,7 +23,8 @@ in a separate repository and is **not** a dependency of this SDK.
    use it; and the host-only SocketIO server must not be importable from here at all.
    `tests/test_import_light.py` enforces this (guards `litestar`/`socketio`/`uvicorn`/`tlc`) —
    keep it green. Import-light is about worker startup time, not about what is installed.
-3. **Dependencies stay minimal.** Base = `uvicorn` + `litestar` + `3lc[pandas]`, nothing else.
+3. **Dependencies stay minimal.** Base includes `uvicorn`, `litestar`, `3lc[pandas]`, the compatible `multidict` constraint,
+   and `jsonschema` for validating the shared native/MCP configuration contract.
    `3lc` is deliberately a base dep, not an extra: every real plugin uses the data plane, and making
    it optional only created a way to build a venv that imports fine and fails on first use. (The
    `[shared]` extra it used to live behind is an empty, deprecated alias — gone at 1.0.) Adding a

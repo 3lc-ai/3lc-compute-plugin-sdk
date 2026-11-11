@@ -75,6 +75,22 @@ A plugin's own routes, called in-process without a compute service.
    :members:
 ```
 
+## Run input lineage
+
+`tlc_plugin_sdk.shared.run_inputs.run_inputs(run, record=None)` resolves exact
+input table URLs. Explicit run inputs retain their original indices and recorded `name`, when present.
+Inputs in the project dataset layout also expose `dataset_name`, allowing orchestration to
+select the same dataset across input reordering and table revisions. Neither field implies
+that a dataset is for training or validation; choose it from verified project evidence. For older
+runs without explicit inputs, it resolves foreign references from each metrics
+table and deduplicates by absolute URL. Value-map keys belong to individual
+metrics tables and are never treated as global split identifiers. Each result
+contains `index`, `table_url`, `rows` (when recorded), and `source` (`run` or
+`metrics`). An optional current JSON record avoids stale mutable run metadata.
+
+New trainers should call `run.add_input_table` on their exact source tables and
+`run.set_parameters` with their resolved settings before collecting metrics.
+
 ## The UI lint
 
 A UI fragment checked against the Hub's styling conventions.
@@ -183,3 +199,77 @@ retention. Recoverability therefore lasts only while the worker's state storage 
 
 The host serves this assembled asset; plugins never bundle their own copy.
 See [browser runtime](browser-runtime.md) for protocol and release requirements.
+
+### `JobContext.request_host(operation, payload, timeout=120)`
+
+Request an authorized deployment operation over the existing worker channel.
+Returns the JSON result, raises on refusal/cancellation, and raises `TimeoutError`
+when the outcome is unknown. Up to 16 pending requests per job, at most 8 MiB each and
+3,600 seconds. The host validates the job and chooses the authority; no secret
+is implied by this API. See the agent guide for reconnect and retry semantics.
+
+
+### Credential-free Python data access
+
+`tlc_plugin_sdk.data_access.install(transport, bootstrap, workspace)` installs the
+real 3LC SDK's read adapters inside an OS-isolated Python process. The embedding
+host supplies a synchronous, bounded transport and a claims-only SDK identity
+handoff. It must authorize each request against the current job owner and its
+configured data roots. The adapter is not a sandbox or an authorization boundary.
+
+Supported operations are `read`, `exists`, `is_dir`, `stat`, and `list`. Reads use
+base64 chunks with a verified total size (64 MiB maximum); file, S3, GCS and Azure
+ADLS URLs pass through the host. Only workspace files can be written. Refresh the
+installation for each turn of a reused kernel; never put provider keys, storage
+credentials, or service tokens in the bootstrap. See the implementation's
+`Transport` type for the request/response contract.
+
+### Verified caller membership
+
+Plugins that enforce organization or team roles declare `caller_profile = true`
+in `[runtime]`. Inside a route, `tlc_plugin_sdk.caller.current_caller()` names the
+person and organization, and `current_profile()` returns their verified
+`org_role`, `team_ids`, and email. The host checks membership with Config Service;
+it may cache successful checks for at most 15 seconds. A failed or expired lookup
+fails closed. No user bearer is forwarded. Service-level `admin` access must not
+be interpreted as organization administrator membership.
+
+Missing caller context does not authorize acting as the worker's service account.
+Jobs use `ctx.identity` for attribution. Plugin routes remain behind the worker
+control boundary; neither identity nor profile headers are browser-controlled.
+
+### Deployment controller services (0.7.3)
+
+A plugin with a deployment-owned controller declares `host_services = ["controller"]`
+in `[runtime]`, `target_bound = false` in `[ui]`, and the implementing host's minimum
+service version. Its jobs receive no Connection values or storage binding. The host
+keeps their grants and routes `ctx.request_host("plugin.request", payload)` to the
+same plugin's private `POST /_host/job` endpoint on the deployment.
+
+The endpoint receives `{request, job_id, node_id, capability, credentials}`: only
+`request` is node-controlled. The host supplies every other field. The controller
+must authorize the run capability against the verified caller, constrain permitted
+operations, and overwrite job identity/target fields. It must never return grants,
+bearers or a general filesystem/network proxy. On job completion the host sends
+`{action: "close", job_id}`. Implement bounded leases as a cleanup fallback.
+
+The host blocks `/_host/*` in public plugin routing and ignores node-session hints
+for controller routes. Operations are reauthorized against the initiating sign-in;
+expired/revoked authority stops the job and requires a fresh authorized resume.
+Model Connection grants are refreshed at most every 15 seconds; an expired grant
+or failed refresh never falls back to a previously resolved secret.
+
+## Sample weights
+
+```{eval-rst}
+.. automodule:: tlc_plugin_sdk.shared.weights
+   :members:
+```
+
+## Published MCP contracts
+
+SDK 0.7.6 adds `McpTool.output_schema` and `load_mcp_section(raw, directory)` for
+packaged `tools_file` JSON catalogs. Titles and boolean safety annotations survive
+normalization. Publish stable contracts, return changing values as data, and test
+result shapes. See [MCP tools](plugin-guide.md#mcp-tools-what-an-agent-may-ask-your-plugin-to-do)
+for the canonical contract, prepared jobs and resource-link results.

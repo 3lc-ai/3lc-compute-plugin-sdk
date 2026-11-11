@@ -39,7 +39,8 @@ may give ``value(row)`` (sort key and default text), ``format(row)`` (display te
 ``priority`` (3 = hidden on narrow screens) and ``width`` (a fixed column width, so a header that
 changes with a mode switch does not move the other columns). A row click opens or closes its details
 (Enter/Space too). With ``onSelect`` the table gains a leading "Default" column of radio buttons
-(header via ``selectHeader``): choosing the default is one visible click, and looking at a type
+(header via ``selectHeader``, accessible label via ``selectLabel(row)``, tooltip via ``selectTitle``):
+choosing the default is one visible click, and looking at a type
 never changes a saved default. The
 selected row uses the hub's selection colours with readable text on top; open details sit on the
 page background, distinct from hover. Headers announce their sort.
@@ -316,8 +317,9 @@ CATALOG_TABLE_JS = (
         if (canPick) {
           var pick = el('td', 'tcl-pick');
           var radio = el('input'); radio.type = 'radio'; radio.name = pickName; radio.checked = id === state.selected;
-          radio.setAttribute('aria-label', 'Use ' + displayText(columns[0], row) + ' as the default for new nodes');
-          radio.title = radio.checked ? 'The default for new nodes' : 'Use as the default for new nodes';
+          radio.setAttribute('aria-label', typeof opts.selectLabel === 'function' ? opts.selectLabel(row) :
+            'Use ' + displayText(columns[0], row) + ' as the default for new nodes');
+          radio.title = opts.selectTitle || (radio.checked ? 'The default for new nodes' : 'Use as the default for new nodes');
           radio.addEventListener('click', function(ev) { ev.stopPropagation(); });
           radio.addEventListener('change', function() { if (!radio.checked) return; state.selected = id; opts.onSelect(row); render(); });
           pick.appendChild(radio); tr.appendChild(pick);
