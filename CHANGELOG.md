@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project, retain same-project settings, reset defaults across projects with Undo, and preserve
   explicit saved setups. Scope drafts to the current source project and ignore stale/failed reads.
 - Add `table_project_context` to obtain source identity from an opened 3LC table without row reads.
+- Shared AI settings expose one enabled boolean instead of plugin-specific switches. Legacy policies retain their Assistant on/off choice; missing enablement defaults to disabled.
 
 - Linux/macOS workers support isolated job processes, with per-job cancellation and cleanup of
   child processes. The optional `prepare_job(ctx)` hook hands transient inputs from the serving

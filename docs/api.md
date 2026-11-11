@@ -273,3 +273,13 @@ packaged `tools_file` JSON catalogs. Titles and boolean safety annotations survi
 normalization. Publish stable contracts, return changing values as data, and test
 result shapes. See [MCP tools](plugin-guide.md#mcp-tools-what-an-agent-may-ask-your-plugin-to-do)
 for the canonical contract, prepared jobs and resource-link results.
+
+### Asynchronous provider connection capacity
+
+`tlc_plugin_sdk.ai.http.ClientPool(max_connections=64, max_keepalive_connections=16)`
+accepts explicit per-job connection limits. Callers with high asynchronous model
+concurrency may increase them (maximum 4096), while retaining provider rate limits
+and budget admission. This does not require one CPU thread per connection. Keep
+CPU/image processing in a separate bounded executor. Bind the pool on one event
+loop and close it when the job ends. Request cookies and authorization remain
+isolated between calls; transport reuse does not share a client session.
