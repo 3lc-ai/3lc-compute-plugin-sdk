@@ -317,7 +317,9 @@ class JobContext:
         """Whether cancellation has been requested (poll this at checkpoints)."""
         return self._cancel.is_set()
 
-    def progress(self, *, percent: float, label: str = "", timing: dict[str, Any] | None = None) -> None:
+    def progress(
+        self, *, percent: float, label: str = "", timing: dict[str, Any] | None = None, title: str | None = None
+    ) -> None:
         """Report progress with an optional label and timing dict.
 
         Args:
@@ -326,9 +328,14 @@ class JobContext:
                 bar (use it when total work is unknown).
             label: Short status line for the generic progress view.
             timing: Optional ``{elapsed_s, eta_s, avg_step_s, step_label}`` dict.
+            title: Optional display name before an artifact exists. Omit to keep the
+                current title. Once a result URL exists its canonical name takes precedence.
 
         """
-        self._emit({"event": "progress", "percent": percent, "label": label, "timing": timing})
+        event: dict[str, Any] = {"event": "progress", "percent": percent, "label": label, "timing": timing}
+        if title is not None:
+            event["title"] = title
+        self._emit(event)
 
     def metric(self, label: str, value: str | float) -> None:
         """Report a scalar metric as a key/value card."""

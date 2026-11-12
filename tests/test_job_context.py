@@ -79,6 +79,13 @@ def test_progress_indeterminate_passes_minus_one() -> None:
     assert events == [{"event": "progress", "percent": -1, "label": "", "timing": None, "job_id": "job-1"}]
 
 
+def test_progress_can_announce_a_title_before_a_result_exists() -> None:
+    events: list[dict] = []
+    _ctx(events).progress(percent=0, label="Loading data", title="my-collection")
+    assert events[0]["title"] == "my-collection"
+    assert "run_url" not in events[0]
+
+
 def test_metric_wire_shape() -> None:
     events: list[dict] = []
     _ctx(events).metric("loss", 0.04)

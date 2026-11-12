@@ -1252,7 +1252,7 @@ class MyGpuPlugin(ComputePlugin):
 | `ctx.state_dir` | Writable per-plugin scratch dir (never write inside the package). |
 | `ctx.identity` | Who the job runs for: a `JobIdentity` with `user_id`, `org_id`, `project_id` (canonical id strings, or `None` when the host did not know). Read it for attribution; never set it. |
 | `ctx.project_root_url` | The project root this job writes to, without a trailing slash: the person's choice, else the host's configured root, resolved and stamped by the host at submit. A plugin that creates tables or runs passes it as `root_url` to the core library; a plugin that derives an object from its input places it beside the input and ignores it. Never empty on a current host; a body from an older host falls back to this worker's own `tlc` root. |
-| `ctx.progress(*, percent, label="", timing=None)` | Generic progress bar. `percent=-1` = indeterminate. `timing` = `{elapsed_s, eta_s, avg_step_s, step_label}`. |
+| `ctx.progress(*, percent, label="", timing=None, title=None)` | Generic progress bar. `percent=-1` = indeterminate. `timing` = `{elapsed_s, eta_s, avg_step_s, step_label}`. Since SDK 0.7.15, `title` can announce a display name before a result exists; omit it to retain the current title. The canonical result name takes precedence once published. |
 | `ctx.metric(label, value)` | Scalar metric card on the generic panel. |
 | `ctx.log(message)` | A log line for the job. |
 | `ctx.result(url)` | The canonical result link the Open button opens — a run *or* a table URL (last write wins). |
