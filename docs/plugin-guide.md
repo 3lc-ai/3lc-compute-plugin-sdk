@@ -1457,7 +1457,10 @@ PluginJobs.run('my-plugin', { table_url: url }, {
     // generic schema: job.status, job.progress.percent/label, job.metrics[]
     setProgress(job.progress.percent, job.progress.label);
   },
-  onDone: function (job) { showResult(job.run_url); },
+  onDone: function (job) {   // completed AND cancelled: read job.status
+    if (job.status === 'cancelled') { showCancelled(job.run_url); return; }
+    showResult(job.run_url);
+  },
   onError: function (job) { showError(job.error); },  // failure message on job.error
 }).then(function (resp) {
   // The start answer carries the job's id: keep it from here for Cancel.
@@ -1471,6 +1474,16 @@ cancelButton.onclick = function () {
   if (jobId) { PluginJobs.cancel(jobId); }   // else when the start answer brings the id
 };
 ```
+
+**`onDone` also ends a cancelled job.** It fires for `completed` and for `cancelled`; only
+`failed` reaches `onError`. Read `job.status` before saying the job finished, whether the
+Cancel was your page's or the Hub's (its Queue page can stop any job). A job stopped while it
+waits for a slot or for its worker has done nothing, and ends `cancelled` with no `run_url`. A
+cancel does not undo work already done: when `run_job` returns after a cancel was requested,
+the job ends `cancelled` even if it wrote its output, so a cancelled job can carry the
+`run_url` of what it wrote. Say that the output was written before the stop reached it. To let
+a stop prevent the output, check `ctx.cancelled` before the step that writes it
+([Long-Running Jobs](#long-running-jobs-run_jobctx)).
 
 `run()` pre-subscribes and buffers, so a job that finishes between the `/run` response and
 the client subscribing still delivers its terminal event. (`PluginJobs.start/track/cancel`

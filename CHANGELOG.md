@@ -43,6 +43,9 @@ written for inline hosts need migrating.
   on a file picks it, and "Select this folder" picks the folder shown. Since 0.6.0 a folder picker
   dims its files, so a field like COCO's annotations path (a JSON file, or a folder of them) could
   only pick a folder. An older SDK reads `'any'` as `'file'`.
+- The guide's `PluginJobs.run` example no longer shows a cancelled job as a result: `onDone` fires
+  for `cancelled` as well as `completed`, which the guide, the `onDone` declaration and the
+  `job_tracker` docstring now say, with what a cancelled job's `run_url` means.
 
 ## [Unreleased]
 

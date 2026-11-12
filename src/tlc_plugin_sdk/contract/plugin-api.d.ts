@@ -650,7 +650,10 @@ export interface PluginJobUpdate {
 export interface PluginJobHandlers {
   /** Fires on every `job_update`. */
   onUpdate?: (job: PluginJobUpdate) => void;
-  /** Fires on terminal `completed` / `cancelled`. */
+  /**
+   * Fires on terminal `completed` / `cancelled`: read `job.status` before saying the job finished.
+   * A `cancelled` job may still carry the `run_url` of output it wrote before the stop reached it.
+   */
   onDone?: (job: PluginJobUpdate) => void;
   /** Fires on terminal `failed`. */
   onError?: (job: PluginJobUpdate) => void;
