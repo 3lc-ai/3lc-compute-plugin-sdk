@@ -755,7 +755,7 @@
         mirrorAddress(data.value);
         listeners.nav.forEach(function (listener) { try { listener(data.value); } catch (e) { console.error(e); } });
       } else if (data.name === 'theme') {
-        document.documentElement.setAttribute('data-theme', String(data.value || ''));
+        switchTheme(String(data.value || ''));
       } else if (data.name === 'closed') {
         closePort('The Hub closed this page.');
       }
@@ -777,6 +777,17 @@
     var hubOlder = Number(hub[1]) < Number(own[1]) || (hub[1] === own[1] && Number(hub[2]) < Number(own[2]));
     return 'This Hub runs plugin contract ' + hub[0] + ' and this compute service ' + own[0] + '. Update the '
       + (hubOlder ? 'Hub' : 'compute service') + ' to open this plugin page.';
+  }
+
+  // A new theme reaches every surface of the page at once. The Hub's styles turn transitions off under
+  // .theme-switching, so no surface eases into the theme at its own pace; they are back on the frame after.
+  function switchTheme(name) {
+    var html = document.documentElement;
+    if (html.getAttribute('data-theme') === name) return;
+    html.classList.add('theme-switching');
+    html.setAttribute('data-theme', name);
+    void getComputedStyle(document.body || html).color;
+    requestAnimationFrame(function () { html.classList.remove('theme-switching'); });
   }
 
   function start(init) {

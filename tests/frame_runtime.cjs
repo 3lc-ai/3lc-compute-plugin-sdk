@@ -10,12 +10,16 @@ async function main() {
     querySelector: () => null, querySelectorAll: () => [], innerHTML: '', style: {}
   };
   const parent = {postMessage: (...args) => ready.push(args)};
-  const doc = {documentElement: {setAttribute() {}, style: {}, scrollHeight: 100},
+  const styleReads = [], frames = [], classes = new Set(), attrs = {};
+  const doc = {documentElement: {setAttribute(k, v) {attrs[k] = v;}, getAttribute: k => attrs[k] ?? null, style: {}, scrollHeight: 100,
+      classList: {add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c)}},
     body: {}, getElementById: () => root, head: {appendChild: el => el.onload(), insertBefore() {}},
     createElement: () => ({}), addEventListener() {}, removeEventListener() {}};
   const context = {console, URL, URLSearchParams, Headers, Response, FormData, AbortController,
     document: doc, location: {search: '?hub=https://hub.test', href: 'https://compute.test/api/plugin-frame/', pathname: '/api/plugin-frame/'},
     history: {replaceState(state, title, url) {addresses.push(url);}}, parent, addEventListener: (name, fn) => events[name] = fn,
+    getComputedStyle: () => {styleReads.push([attrs['data-theme'], classes.has('theme-switching')]); return {color: ''};},
+    requestAnimationFrame: fn => frames.push(fn),
     ResizeObserver: class {observe() {} disconnect() {observerClosed++;}},
     setTimeout: (fn, ms) => {timers.set(++nextTimer, {fn,ms}); return nextTimer;}, clearTimeout: id => timers.delete(id),
     io: () => {const listeners = {}; const socket = {
@@ -67,6 +71,11 @@ async function main() {
   assert.equal(API.nav.href({search:'?review=r1'}), 'https://hub.test/plugin/one?review=r1');
   assert.equal(API.nav.href(), 'https://hub.test/plugin/one');
   assert.equal(API.layout.mode, 'flow');
+  // A new theme resolves with transitions off, and they are back on the next frame.
+  port.onmessage({data:{v:1,type:'event',name:'theme',value:'3lc-neo-dark'}});
+  assert.equal(attrs['data-theme'], '3lc-neo-dark'); assert.deepEqual(styleReads.at(-1), ['3lc-neo-dark', true]);
+  frames.splice(0).forEach(fn => fn()); assert.equal(classes.has('theme-switching'), false);
+  port.onmessage({data:{v:1,type:'event',name:'theme',value:'3lc-neo-dark'}}); assert.equal(frames.length, 0, 'the same theme again changes nothing');
   const abort = new AbortController();
   const request = API.http.request('/api/plugins/one/slow', {signal:abort.signal});
   abort.abort(); await assert.rejects(request, error => error.code === 'aborted');
@@ -86,6 +95,6 @@ async function main() {
   assert.equal(disposed, 1); assert.equal(disconnected, 1);
   assert.throws(() => API.libs.io('https://compute.test/one'), error => error.code === 'closed');
   await assert.rejects(API.http.request('/closed'), error => error.code === 'closed');
-  console.log('handshake, early completion, trusted cancellation, abort, unsubscribe, disposal and job preservation passed');
+  console.log('handshake, theme switch, early completion, trusted cancellation, abort, unsubscribe, disposal and job preservation passed');
 }
 main().catch(error => {console.error(error); process.exitCode = 1;});
