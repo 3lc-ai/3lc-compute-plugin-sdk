@@ -119,3 +119,13 @@ def install(transport: Transport, bootstrap: dict[str, Any], workspace: str) -> 
             raise PermissionError(msg)
 
     UrlAdapterRegistry.register_url_adapter(ReadAdapter(), force=True)
+    # Preserve the library's normal project lookup. Table.from_url loads its
+    # project's aliases only when that root belongs to the configured scan set.
+    # The storage broker exposes only alias declarations from those config files.
+    project_roots = bootstrap.get("project_roots", [])
+    tlc.config.scan_urls = [{"url": value, "layout": "project"} for value in project_roots]
+    for value in project_roots:
+        for name in ("default_aliases.3lc.yaml", "config.3lc.yaml"):
+            config_url = tlc.Url(value) / name
+            if str(config_url) not in tlc.config.config_files and config_url.exists():
+                tlc.config.load_data_config(str(config_url))

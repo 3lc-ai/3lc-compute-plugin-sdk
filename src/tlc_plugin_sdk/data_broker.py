@@ -168,6 +168,7 @@ class DataBroker:
     ) -> None:
         self.allow_node_cloud_storage = allow_node_cloud_storage
         self.protected_roots = tuple(p.resolve() for p in protected_roots)
+        self.project_roots = [root for root in roots if _safe_root(root, self.protected_roots)]
         self.aliases = _trusted_aliases() if aliases is None else dict(aliases)
         self.roots = list(
             dict.fromkeys(v for v in [*roots, *self.aliases.values()] if _safe_root(v, self.protected_roots))
@@ -190,7 +191,19 @@ class DataBroker:
         if set(claims) != {"tenant_id", "user_id", "expires_at", "auth_mode", "authorization_context"}:
             msg = "Unsupported SDK identity handoff"
             raise PermissionError(msg)
-        return {"identity": identity, "aliases": self.aliases, "roots": self.roots}
+        return {"identity": identity, "aliases": self.aliases, "roots": self.roots, "project_roots": self.project_roots}
+
+    def _project_config(self, value: str) -> bool:
+        """Recognize the library's alias files at configured roots and their projects."""
+        scheme, authority, path = _canonical(value)
+        if posixpath.basename(path) not in {"default_aliases.3lc.yaml", "config.3lc.yaml"}:
+            return False
+        parent = posixpath.dirname(path)
+        for root in self.project_roots:
+            base = _canonical(root)
+            if (scheme, authority) == base[:2] and base[2] in {parent, posixpath.dirname(parent)}:
+                return True
+        return False
 
     def checked(self, value: str) -> str:
         from tlc import Url
@@ -203,7 +216,7 @@ class DataBroker:
         path = Path(wanted[2])
         if (
             any(p in _PRIVATE_PARTS or p.startswith((".env", ".3lc-stack")) for p in path.parts)
-            or path.name.lower().endswith(_CONFIG_SUFFIXES)
+            or (path.name.lower().endswith(_CONFIG_SUFFIXES) and not self._project_config(value))
             or (wanted[0] == "file" and any(path.is_relative_to(root) for root in self.protected_roots))
         ):
             msg = "Private files are not data sources"
@@ -303,6 +316,15 @@ class DataBroker:
                 if len(content) > MAX_FILE_BYTES:
                     msg = "Data file exceeds the 64 MiB read limit"
                     raise ValueError(msg)
+                if self._project_config(value):
+                    # Only alias declarations cross the boundary. The real 3LC
+                    # configuration loader interprets their paths and precedence;
+                    # unrelated settings and credentials never enter Python.
+                    import yaml
+
+                    document = yaml.safe_load(content)
+                    aliases = document.get("aliases", {}) if isinstance(document, dict) else {}
+                    content = yaml.safe_dump({"aliases": aliases if isinstance(aliases, dict) else {}}).encode()
                 self.cache[value] = content
                 while sum(map(len, self.cache.values())) > MAX_FILE_BYTES:
                     self.cache.popitem(last=False)

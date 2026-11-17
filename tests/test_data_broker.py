@@ -139,6 +139,25 @@ def test_listing_omits_private_files_and_broad_aliases_do_not_grant_home(broker)
     assert not storage._safe_root(str(storage.Path.home() / ".3lc-compute"))
 
 
+def test_project_alias_files_preserve_library_config_without_exposing_secrets(broker):
+    service, root = broker
+    project = root / "example"
+    project.mkdir()
+    config = project / "default_aliases.3lc.yaml"
+    config.write_text('aliases:\n  TEST_IMAGES: "$./images"\napi-key: secret\nconnections:\n  provider: private\n')
+    reply = service.request({"operation": "read", "url": str(config)})
+    text = base64.b64decode(reply["data"]).decode()
+    assert "TEST_IMAGES" in text and "$./images" in text
+    assert "secret" not in text and "private" not in text and "api-key" not in text
+    # A data-provided alias may resolve paths, but cannot grant a new local root.
+    with pytest.raises(PermissionError):
+        service.checked(str(root.parent / "private" / "image.png"))
+    with pytest.raises(PermissionError):
+        service.checked(str(project / "datasets" / "default_aliases.3lc.yaml"))
+    with pytest.raises(PermissionError):
+        service.checked(str(root.parent / "default_aliases.3lc.yaml"))
+
+
 def test_dataset_aliases_cannot_grant_new_host_roots(tmp_path, monkeypatch):
     values = {"<DATA>": str(tmp_path / "data"), "<EVIL>": str(tmp_path / "private")}
     origins = {
