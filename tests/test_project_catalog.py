@@ -86,3 +86,39 @@ def test_table_info_preserves_exact_revision_lineage(monkeypatch):
     assert catalog.table_info(str(table.url))["is_original"] is True
     table.input_table_url = SimpleNamespace(absolute_url=Url("/projects/P/datasets/D/tables/original"))
     assert catalog.table_info(str(table.url))["is_original"] is False
+
+
+def test_run_metric_summary_reads_record_once_and_omits_large_payload(monkeypatch):
+    import json
+
+    from tlcurl.url_adapters._registry import UrlAdapterRegistry
+
+    from tlc_plugin_sdk.project_catalog import _run_summary
+
+    calls = []
+    record = {
+        "status": 1.0,
+        "constants": {
+            "parameters": {"large": "x" * 40000},
+            "outputs": [
+                {"epoch": 3, "val_mAP50": 0.7, "loss": 0.2},
+                {"epoch": 1, "val_mAP50": 0.9, "loss": 0.7},
+                {"epoch": 2, "val_mAP50": 0.8, "loss": 0.3},
+            ],
+        },
+    }
+
+    def read(url):
+        calls.append(str(url))
+        return json.dumps(record)
+
+    monkeypatch.setattr(UrlAdapterRegistry, "read_string_content_from_url", read)
+    result = _run_summary({"url": "s3://bucket/project/run"}, "val_mAP50")
+    assert len(calls) == 1
+    score = result["metric_summary"]
+    assert score["maximum"] == {"value": 0.9, "epoch": 1}
+    assert score["last_recorded"] == {"value": 0.7, "epoch": 3}
+    assert len(json.dumps(result)) < 900
+    assert not _run_summary({"url": "s3://bucket/project/run"}, "missing")["metric_summary"]["available"]
+    record["constants"]["outputs"].append({"epoch": 1, "val_mAP50": 0.99})
+    assert not _run_summary({"url": "s3://bucket/project/run"}, "val_mAP50")["metric_summary"]["available"]

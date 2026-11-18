@@ -43,8 +43,9 @@ def list_datasets(project: str, root_url: str | None = None) -> dict[str, Any]:
     return _catalog().list_datasets(project, root_url)
 
 
-def list_runs(project: str, root_url: str | None = None) -> dict[str, Any]:
-    return _catalog().list_runs(project, root_url)
+def list_runs(project: str, root_url: str | None = None, metric: str | None = None) -> dict[str, Any]:
+    """List project runs with optional compact extrema/last-epoch scores for one metric."""
+    return _catalog().list_runs(project, root_url, metric)
 
 
 def run_info(url: str) -> dict[str, Any]:

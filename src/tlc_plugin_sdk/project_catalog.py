@@ -63,7 +63,7 @@ def _dated(name: str, url: str) -> dict[str, Any]:
     return entry
 
 
-def _run_summary(entry: dict[str, Any]) -> dict[str, Any]:
+def _run_summary(entry: dict[str, Any], metric: str | None = None) -> dict[str, Any]:
     """Small current run metadata; no metric tables, images or analysis jobs.
 
     Read stored fields rather than Run.created defaults (a legacy missing date
@@ -83,6 +83,7 @@ def _run_summary(entry: dict[str, Any]) -> dict[str, Any]:
             "status": record.get("status"),
             "producer": parameters.get("3LC/plugin_id"),
             "metadata_available": True,
+            **({"metric_summary": metric_summary(record, metric)} if metric else {}),
         }
     except Exception:
         return {**entry, "created": None, "last_modified": None, "status": None, "metadata_available": False}
@@ -190,6 +191,21 @@ def epoch_output_summary(outputs: object) -> dict[str, Any] | None:
             "last_recorded": {"value": final[1], "epoch": final[0]},
         }
     return {"source": "constants.outputs", "recorded_epochs": len(rows), "metrics": metrics} if metrics else None
+
+
+def metric_summary(record: dict[str, Any], metric: str) -> dict[str, Any]:
+    """One exact metric from recorded epochs, without parameters or per-sample tables."""
+    summary = epoch_output_summary((record.get("constants") or {}).get("outputs"))
+    values = summary["metrics"].get(metric) if summary else None
+    if summary is None or values is None:
+        return {"metric": metric, "available": False, "reason": "No unambiguous recorded epoch series for this metric"}
+    return {
+        "metric": metric,
+        "available": True,
+        "source": summary["source"],
+        "recorded_epochs": summary["recorded_epochs"],
+        **values,
+    }
 
 
 def _column_kind(schema: Any) -> str:
@@ -309,12 +325,21 @@ class ProjectCatalog:
             })
         return {"project": project, "root_url": root, "datasets": out}
 
-    def list_runs(self, project: str, root_url: str | None = None) -> dict[str, Any]:
+    def list_runs(self, project: str, root_url: str | None = None, metric: str | None = None) -> dict[str, Any]:
+        """List run metadata, optionally with compact scores for one exact metric.
+
+        Scores include extrema and the last recorded epoch. Missing or ambiguous
+        series are reported as unavailable; full parameter and output tables are
+        omitted. Metric extraction reuses each run's existing metadata read.
+        """
         from concurrent.futures import ThreadPoolExecutor
 
         from tlc.helpers.project_layout import ProjectLayout
 
         _project_name(project)
+        if metric is not None and (not isinstance(metric, str) or not 1 <= len(metric) <= 200):
+            msg = "Choose one exact metric name (1 to 200 characters)"
+            raise ValueError(msg)
         roots = [self.checked_url(root_url, exact=True)] if root_url else self._configured_roots()
         runs: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
@@ -335,7 +360,7 @@ class ProjectCatalog:
                 errors.append({"root_url": root, "error": "Could not list this project location"})
         if runs:
             with ThreadPoolExecutor(max_workers=min(8, len(runs))) as pool:
-                pending = [pool.submit(contextvars.copy_context().run, _run_summary, run) for run in runs]
+                pending = [pool.submit(contextvars.copy_context().run, _run_summary, run, metric) for run in runs]
                 runs = [task.result() for task in pending]
 
             def chronological(run: dict[str, Any]) -> tuple[float, str]:
