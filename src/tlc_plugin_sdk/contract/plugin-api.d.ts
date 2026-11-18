@@ -62,7 +62,8 @@ export interface TlcObjectService {
 /** Custom non-standard fetch options layered on top of the standard `RequestInit`. */
 export interface PluginFetchOptions extends RequestInit {
   /**
-   * Abort the request after this many milliseconds (default 10000). Custom,
+   * Abort the request after this many milliseconds (default 10000, or 120000 for
+   * a `/api/plugins/` or `/api/infra/` route). Custom,
    * non-standard option — deleted before the underlying `fetch()` call. Ignored
    * when the caller supplies its own `signal`.
    */
@@ -525,7 +526,8 @@ export interface PluginApi {
   /**
    * Host-mediated `fetch`; credentials stay in the Hub. Adds a default
    * `Accept: application/json`; sets `Content-Type: application/json` when the body
-   * is a string. Aborts after `options.timeout` ms (default 10000) and supports
+   * is a string. Aborts after `options.timeout` ms (default 10000, or 120000 for a
+   * `/api/plugins/` or `/api/infra/` route) and supports
    * caller abort through `signal`. Rejects non-ok responses with the parsed
    * detail/message. The most-used bridge member.
    */

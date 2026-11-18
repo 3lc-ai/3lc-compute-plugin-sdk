@@ -130,9 +130,17 @@
     return out;
   }
 
+  // The Hub's own defaults when a page names no timeout: a plugin route (/api/plugins/...) may wait on a cold
+  // worker, a first import or a run's planning, and an infrastructure route (/api/infra/...) on the cloud.
+  var SLOW_ROUTE = /\/api\/(plugins|infra)\//;
+  var SLOW_ROUTE_TIMEOUT_MS = 120000;
+  var REQUEST_TIMEOUT_MS = 10000;
+
   function computeRequest(url, options) {
     var sendable = sendableOptions(options);
-    var wait = Math.min((typeof sendable.timeout === 'number' ? sendable.timeout : 10000) + 5000, 125000);
+    var timeout = typeof sendable.timeout === 'number' ? sendable.timeout
+      : (SLOW_ROUTE.test(String(url)) ? SLOW_ROUTE_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+    var wait = Math.min(timeout + 5000, 125000);
     return call('compute.request', [String(url), sendable], wait, options && options.signal).then(function (reply) {
       var noBody = reply.status === 204 || reply.status === 205 || reply.status === 304;
       return new Response(noBody ? null : reply.body, { status: reply.status, statusText: reply.statusText, headers: reply.headers });

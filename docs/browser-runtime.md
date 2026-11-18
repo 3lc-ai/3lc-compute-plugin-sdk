@@ -108,7 +108,9 @@ try {
 }
 ```
 
-`timeout` is milliseconds. Ordinary requests default to a bounded wait; do not run
+`timeout` is milliseconds. Without one, a request waits 10 s, and a request to a
+`/api/plugins/` or `/api/infra/` route waits 120 s, as it does in the Hub: such a
+route may wait on a cold worker, a first import, a run's planning or the cloud. Do not run
 training inside a long HTTP request. Use background jobs. Errors have `code` and
 `message`, and HTTP failures may include `status`. Handle rejection and restore
 busy controls. `allowErrorStatus` lets callers inspect an HTTP error Response.
