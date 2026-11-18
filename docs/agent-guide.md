@@ -26,6 +26,11 @@ build configuration before edits. Do not import host internals or copy a private
    themed component surfaces. Include loading, success, refusal,
    dismissal and failure states. Handle rejected promises. Clean up local resources
    using `lifecycle.onDispose`, preserving remote jobs.
+7. For saved setups, use the [shared preset bar](plugin-guide.md#presets).
+   Save and explicitly restore the whole form, including tables, project and run name.
+   External table/folder launches start fresh from defaults plus those inputs, visibly modified;
+   they must never resume an old setup. Bare/project launches may resume their scoped draft.
+   Clear drafts only after a job is accepted. Saving a preset and submitting a job are separate actions.
 
 ## Verification required before delivery
 

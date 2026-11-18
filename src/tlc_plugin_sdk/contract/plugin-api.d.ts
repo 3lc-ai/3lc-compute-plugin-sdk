@@ -862,9 +862,9 @@ export interface TlcTableFieldElement extends HTMLElement {
 /**
  * What `_tlcPluginPresets(opts)` needs from a plugin. The bar renders into `mount`; the plugin's
  * config CRUD routes under `apiPath` (`GET`, `POST`, `GET /{id}`, `POST /{id}/delete`) store the
- * presets. `collect` and `apply` move the whole form, inputs included, in and out; `inputs` names
- * the keys that are inputs, which `contextInputs()` replaces for the page's life when the plugin
- * was opened from a table. See the plugin guide, "Presets".
+ * presets. `collect` and `apply` save and restore the whole form, including inputs and project.
+ * External input launches start a fresh modified default setup. Bare/project launches can resume
+ * their scoped draft. `contextInputs()` seeds a new setup only. See the plugin guide, "Presets".
  */
 export interface TlcPresetOptions {
   pluginId: string;
@@ -877,6 +877,7 @@ export interface TlcPresetOptions {
   /** Fill the form; return a promise when that takes a round trip. */
   apply(values: Record<string, any>): void | Promise<unknown>;
   defaults(): Record<string, any>;
+  /** Table/folder fields: a nonempty launch value starts a new setup instead of restoring a draft. */
   inputs?: string[];
   /** The launch context's inputs, or null when the page was opened bare. */
   contextInputs?(): Record<string, any> | null;
@@ -885,7 +886,7 @@ export interface TlcPresetOptions {
   /** A short hint shown after the name in the list, e.g. "yolo11n · detect". */
   /** Shown after the name; a list of parts is joined with " · ", leaving out the empty ones. */
   summary?(values: Record<string, any>): string | Array<string | null | undefined>;
-  /** The old config bar's localStorage key; its remembered config opens once, as the draft takes over. */
+  /** @deprecated Ignored. Old unscoped selections are not restored. */
   legacyKey?: string;
   /** Milliseconds before a change is written as the draft (default 300). */
   draftDelay?: number;
@@ -893,17 +894,23 @@ export interface TlcPresetOptions {
 
 /** The bar `_tlcPluginPresets()` returns. */
 export interface TlcPresetControl {
-  /** Render, load the list and open on the draft, the old key, or the defaults, plus the context's inputs. */
+  /** Render, load the list, restore this context's draft or seed defaults with the launch inputs. */
   init(): Promise<void>;
   /** The form changed in a way no DOM event reports (JS state): recompute and keep the draft. */
   changed(): void;
   refresh(): Promise<void>;
   /** Apply a preset by id, or Default settings with ''. */
   pick(id: string): Promise<void>;
+  /** Open the naming dialog without replacing the preset bar. */
   openSave(): void;
+  /** Dismiss the naming dialog and return focus to Save as. */
   closeSave(): void;
   /** Save under the name in the field; false when a taken name is still to be confirmed, or on an error. */
   save(): Promise<boolean>;
+  /** Save the complete setup into the selected preset; false if unchanged or on an error. */
+  update(): Promise<boolean>;
+  /** Clear this context's draft after submission is accepted; never call on failed submission. */
+  submitted(): void;
   /** Delete a preset, the selected one without an id. Asks nothing; false when it failed. */
   remove(id?: string): Promise<boolean>;
   origin(): { kind: 'defaults' | 'preset'; id: string; name: string };
