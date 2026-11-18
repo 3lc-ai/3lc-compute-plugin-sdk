@@ -513,8 +513,10 @@
         },
       },
       run: {
-        plan: function (body) { return call('run.plan', [body]); },
-        checkTable: function (url) { return call('run.checkTable', [String(url)]); },
+        // These helpers also make /api/infra/ requests. Let the Hub's 120 s request finish,
+        // with the same reply margin as computeRequest, rather than the generic 30 s call limit.
+        plan: function (body) { return call('run.plan', [body], SLOW_ROUTE_TIMEOUT_MS + 5000); },
+        checkTable: function (url) { return call('run.checkTable', [String(url)], SLOW_ROUTE_TIMEOUT_MS + 5000); },
       },
       nav: {
         go: navGo,

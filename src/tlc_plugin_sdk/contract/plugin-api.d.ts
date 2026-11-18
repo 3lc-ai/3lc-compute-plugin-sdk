@@ -566,6 +566,7 @@ export interface PluginApi {
    * strings (upcoming copies, copy-vs-stream choices) to render next to the
    * picker. Always `{ok: true, notes: []}` for the local target and on older
    * hosts. Call it from the data picker's change handler — before Train.
+   * In a frame, allows the Hub's 120 s infrastructure request window plus 5 s for its reply.
    */
   checkDataForRunTarget?(tableUrl: string): Promise<{ ok: boolean; notes: string[] }>;
 
@@ -588,6 +589,7 @@ export interface PluginApi {
    * when the Compute Service refuses or cannot plan the run (a missing plan route is an
    * error, never a null). What a run reads where is the host's to stamp at dispatch: the
    * browser never sends `_alias_overrides`. Absent on older frontends.
+   * In a frame, allows the Hub's 120 s infrastructure request window plus 5 s for its reply.
    */
   planRun?(body: Record<string, unknown>): Promise<PluginRunPlan>;
 

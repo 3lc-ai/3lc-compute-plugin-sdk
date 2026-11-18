@@ -25,7 +25,7 @@ async function main() {
   const sent = [];
   const port = {close() {}, postMessage(message) {
     if (message.type !== 'call') return;
-    if (message.method === 'compute.request') { sent.push(message); return; }
+    if (['compute.request', 'run.plan', 'run.checkTable'].includes(message.method)) { sent.push(message); return; }
     queueMicrotask(() => port.onmessage({data: {v: 1, type: 'reply', id: message.id, ok: true, value: {}}}));
   }};
   events.message({data: {v: 1, type: 'init', pluginId: 'yolo', html: '', config: {compute_service_url: 'https://compute.test'}},
@@ -47,6 +47,16 @@ async function main() {
   assert.match(sent.at(-1).args[0], /\/api\/plugins\/yolo\/run$/);
   assert.equal(waitFor(() => API.http.request('/api/plugins/yolo/tasks')), 125000);
   assert.equal(waitFor(() => API.authFetch('/api/infra/nodes', {method: 'POST', body: '{}'})), 125000);
+  // Named helpers make the same slow infrastructure requests; their legacy aliases must agree.
+  assert.equal(waitFor(() => API.run.plan({project_config: {}})), 125000);
+  assert.equal(waitFor(() => API.planRun({project_config: {}})), 125000);
+  assert.equal(waitFor(() => API.run.checkTable('s3://bucket/projects/P/datasets/D/tables/T')), 125000);
+  assert.equal(waitFor(() => API.checkDataForRunTarget('s3://bucket/projects/P/datasets/D/tables/T')), 125000);
+  // A successful helper reply reaches the page unchanged; it never goes through compute Response decoding.
+  const checked = API.run.checkTable('s3://bucket/projects/P/datasets/D/tables/validation');
+  const verdict = {ok: true, notes: ['The images will be copied to the node.']};
+  port.onmessage({data: {v: 1, type: 'reply', id: sent.at(-1).id, ok: true, value: verdict}});
+  assert.deepEqual(await checked, verdict);
   // Any other route keeps the short wait.
   assert.equal(waitFor(() => API.http.request('/health')), 15000);
   // A timeout the page names wins, on any route, and the bridge never waits past the Hub's longest.
@@ -58,6 +68,9 @@ async function main() {
   const late = API.http.request('/api/plugins/yolo/run', {method: 'POST', body: '{}'});
   timers.at(-1).fn();
   await assert.rejects(late, error => error.code === 'timeout' && /did not answer compute\.request/.test(error.message));
+  const latePlan = API.run.plan({});
+  timers.at(-1).fn();
+  await assert.rejects(latePlan, error => error.code === 'timeout' && /did not answer run\.plan/.test(error.message));
   console.log('request timeouts passed');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

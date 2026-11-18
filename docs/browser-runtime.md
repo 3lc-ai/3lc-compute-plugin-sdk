@@ -114,6 +114,10 @@ route may wait on a cold worker, a first import, a run's planning or the cloud. 
 training inside a long HTTP request. Use background jobs. Errors have `code` and
 `message`, and HTTP failures may include `status`. Handle rejection and restore
 busy controls. `allowErrorStatus` lets callers inspect an HTTP error Response.
+The `run.plan` and `run.checkTable` helpers (also named `planRun` and
+`checkDataForRunTarget`) use the same 120 s infrastructure request window, plus
+5 s for the bridge reply. They can inspect cloud tables before answering.
+
 An abort or timeout ends the request/bridge wait; it does not promise to roll back
 server work already accepted. Never automatically retry non-idempotent job starts
 or provisioning after an ambiguous response; reconcile status first.
