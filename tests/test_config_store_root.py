@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The config root is resolved when a store is built, never at import.
 
-A worker's environment may carry no home directory (3LC Compute's worker env allow-list drops
-``USERPROFILE``); on Windows ``Path.home()`` then raises. Importing the SDK must still succeed, and
+A filtered worker environment may carry no home directory. On Windows ``Path.home()`` then
+raises. Importing the SDK must still succeed, and
 only building a store without an override fails, with an error that says what to set."""
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ def test_every_sdk_module_imports_without_a_home_directory() -> None:
 
 def test_config_root_follows_the_home_directory_at_call_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config_store, "CONFIG_ROOT", None)
+    monkeypatch.delenv("TLC_PLUGIN_CONFIG_DIR", raising=False)
     monkeypatch.setattr(config_store.Path, "home", staticmethod(lambda: tmp_path))
     assert config_store.config_root() == tmp_path / ".3lc-plugin-configs"
     assert config_store.PluginConfigStore(_Cfg, "p").directory == tmp_path / ".3lc-plugin-configs" / "p"
@@ -56,16 +57,38 @@ def test_config_root_follows_the_home_directory_at_call_time(tmp_path: Path, mon
 
 def test_a_store_without_a_home_directory_names_what_to_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config_store, "CONFIG_ROOT", None)
+    monkeypatch.delenv("TLC_PLUGIN_CONFIG_DIR", raising=False)
     _no_home(monkeypatch)
-    with pytest.raises(config_store.ConfigRootUnavailable, match=r"USERPROFILE.*HOME") as info:
+    with pytest.raises(config_store.ConfigRootUnavailable, match=r"USERPROFILE.*HOME.*TLC_PLUGIN_CONFIG_DIR") as info:
         config_store.PluginConfigStore(_Cfg, "p")
     assert isinstance(info.value, RuntimeError)
 
 
 def test_the_override_needs_no_home_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TLC_PLUGIN_CONFIG_DIR", str(tmp_path / "from-environment"))
     monkeypatch.setattr(config_store, "CONFIG_ROOT", tmp_path)
     _no_home(monkeypatch)
     assert config_store.PluginConfigStore(_Cfg, "p").directory == tmp_path / "p"
+
+
+def test_environment_roots_keep_configs_separate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config_store, "CONFIG_ROOT", None)
+    _no_home(monkeypatch)
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "old.json").write_text("{}", encoding="utf-8")
+
+    first_root = tmp_path / "one"
+    monkeypatch.setenv("TLC_PLUGIN_CONFIG_DIR", str(first_root))
+    first = config_store.PluginConfigStore(_Cfg, "p", legacy_dir=legacy)
+    saved = first.save_config(_Cfg())
+    assert first.directory == first_root / "p"
+
+    monkeypatch.setenv("TLC_PLUGIN_CONFIG_DIR", str(tmp_path / "two"))
+    second = config_store.PluginConfigStore(_Cfg, "p", legacy_dir=legacy)
+    assert second.list_configs() == []
+    assert first.get_config(saved.id) == saved
+    assert (legacy / "old.json").is_file()
 
 
 def test_the_harness_redirects_stores_and_restores_no_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
