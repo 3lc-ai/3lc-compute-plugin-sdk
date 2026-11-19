@@ -33,6 +33,10 @@ Kinds:
     :func:`current_credential` (and ``ctx.credential``). A route the plugin's manifest lists under
     ``credential_routes`` receives the same value from the host in the host-owned
     :data:`BOUND_CREDENTIAL_HEADER`; :func:`credential_middleware` binds it for that one request.
+    An infrastructure plugin's call about a node that acts on a ``SECRET`` Connection carries
+    both: the binding in :data:`CONNECTION_HEADER` (so :func:`current_connection` and
+    :func:`current_use` answer as for any other kind) and the value in
+    :data:`BOUND_CREDENTIAL_HEADER`, which is what :func:`current_credential` returns.
     The SDK never writes the value into ``os.environ``: the environment is shared by every job and
     request in the worker, including ones acting for other people. Hand the value to the
     provider's client explicitly, or, for a tool that only reads its variables, to a subprocess's
@@ -135,9 +139,10 @@ class ConnectionBinding:
     Attributes:
         id: The Connection id.
         provider: The provider slug (``aws``, ``runpod``, …).
-        kind: ``AMBIENT`` or ``KEYLESS`` (more kinds later).
+        kind: ``AMBIENT``, ``KEYLESS`` or ``SECRET``.
         metadata: Kind-specific, non-secret binding data (for ``KEYLESS`` on AWS: ``role_arn``,
-            ``external_id``, optionally ``region`` and ``session_duration_s``).
+            ``external_id``, optionally ``region`` and ``session_duration_s``; for ``SECRET``:
+            optionally ``region`` and ``endpoint_url``). Never the value of a ``SECRET`` Connection.
         configuration: Trusted installed configuration from Config Service, or None before
             verification. Never pending editor state or caller-supplied metadata.
     """
@@ -386,8 +391,12 @@ def resolve(binding: ConnectionBinding) -> ResolvedCredential:
         :class:`Ambient` for ``AMBIENT``; whatever the registered resolver returns otherwise.
 
     Raises:
-        CredentialUnavailable: When no resolver handles the provider and kind.
+        CredentialUnavailable: When no resolver handles the provider and kind, and for a ``SECRET``
+            binding: its value is not derived from the binding, the host sends it beside it.
     """
+    if binding.kind == KIND_SECRET:
+        msg = f"A {KIND_SECRET} Connection's value arrives with the request, in {BOUND_CREDENTIAL_HEADER}"
+        raise CredentialUnavailable(msg)
     if binding.kind == KIND_AMBIENT:
         return Ambient(provider=binding.provider, region=str(binding.metadata.get("region", "") or ""))
     resolver = _RESOLVERS.get((binding.provider, binding.kind))
@@ -542,12 +551,39 @@ async def _reply(send: Any, status: int, detail: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+def _secret_refusal(binding: ConnectionBinding, scope: Any) -> str:
+    """Why a request's ``SECRET`` binding cannot be used with the value it carries; "" when it can.
+
+    The binding and the value are two host-owned headers about one Connection, so they must agree:
+    a value granted for another Connection or another service is never bound under this binding.
+    A value that is missing or malformed is left to :func:`credential_middleware`'s own answer.
+    """
+    header = BOUND_CREDENTIAL_HEADER.encode()
+    values = [value for name, value in scope.get("headers", []) if name == header]
+    if not values:
+        return f"This request names a {KIND_SECRET} Connection and carries no value for it"
+    if len(values) > 1:
+        return ""
+    try:
+        credential = SecretToken.from_wire(json.loads(values[0]))
+    except ValueError:
+        return ""
+    if credential is None:
+        return ""
+    if credential.connection_id != binding.id or credential.provider != binding.provider:
+        return "This request's Connection and the value it carries are for different Connections"
+    return ""
+
+
 def connection_middleware(app: Any) -> Any:
     """ASGI middleware: resolve the request's :data:`CONNECTION_HEADER` around the handler.
 
     No header: passes through untouched. A malformed or repeated header (either of
     :data:`CONNECTION_HEADER` and :data:`CONNECTION_USE_HEADER`) answers 400; a binding this
     process cannot resolve answers 424 (the request depends on a Connection it cannot use).
+    A ``SECRET`` binding is not resolved here: its value is the request's
+    :data:`BOUND_CREDENTIAL_HEADER`, which :func:`credential_middleware` binds. Such a binding
+    without that header, or with one granted for another Connection or service, answers 424.
     Resolution runs in a worker thread (a provider resolver may call its provider), with
     :func:`current_use` already set. The resolution is set in context variables for the handler —
     including ``def`` handlers run in a thread, which receive a copy of the context — and reset
@@ -591,6 +627,17 @@ def connection_middleware(app: Any) -> Any:
             return
         use_token = _USE.set(use)
         try:
+            if binding.kind == KIND_SECRET:
+                refusal = _secret_refusal(binding, scope)
+                if refusal:
+                    await _reply(send, 424, refusal)
+                    return
+                connection_token = _CONNECTION.set(binding)
+                try:
+                    await app(scope, receive, send)  # the value: credential_middleware, inside this one
+                finally:
+                    _CONNECTION.reset(connection_token)
+                return
             context = contextvars.copy_context()
             try:
                 credential = await anyio.to_thread.run_sync(context.run, resolve, binding)

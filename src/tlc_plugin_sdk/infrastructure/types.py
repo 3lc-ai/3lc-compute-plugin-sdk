@@ -145,6 +145,17 @@ def _str_list(value: Any) -> list[str]:
     return [str(v) for v in value if v is not None and str(v).strip()]
 
 
+def _str_map(value: Any) -> dict[str, str]:
+    """A ``{name: value}`` object's entries whose name and value are both non-blank strings."""
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        k.strip(): v.strip()
+        for k, v in value.items()
+        if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip()
+    }
+
+
 def _int_list(value: Any) -> list[int]:
     out: list[int] = []
     if isinstance(value, (list, tuple)):
@@ -878,6 +889,12 @@ class CapabilitiesResponse:
     identity. A host that takes its Connections from the Config Service refuses to create such a
     node without one. A provider that reaches machines by other means (ssh to a known host)
     leaves it ``False``.
+
+    ``node_type_connections`` names the Connection a node of a given type acts on
+    (``{node_type: connection_id}``), for a provider whose node types each have a credential of
+    their own (a machine and its ssh key). The host creates and preflights a node of that type on
+    the named Connection when the request names none, under a grant for the person asking: naming
+    a Connection lends nobody its use. A node type left out acts on the request's Connection.
     """
 
     provider: str
@@ -894,6 +911,7 @@ class CapabilitiesResponse:
     facets: list[str] = field(default_factory=list)
     lists_workspaces: bool = False
     requires_connection: bool = False
+    node_type_connections: dict[str, str] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     #: Whether the answer carried a ``facets`` key at all (``from_dict`` sets it): a host tells
     #: "no facets" from "a provider that predates facets" by this.
@@ -921,6 +939,7 @@ class CapabilitiesResponse:
             facets=[f for f in _str_list(data.get("facets")) if f in FACETS],
             lists_workspaces=_bool(data.get("lists_workspaces")),
             requires_connection=_bool(data.get("requires_connection")),
+            node_type_connections=_str_map(data.get("node_type_connections")),
             facets_reported="facets" in data,
         )
 
@@ -929,7 +948,8 @@ class CapabilitiesResponse:
 
         ``extra`` first, typed keys over it; ``facets`` always (``[]`` for none); ``pricing``,
         ``node_type_label``, ``region``, ``workspace_fields``, ``storage`` only when set;
-        ``lists_workspaces`` and ``requires_connection`` only when true.
+        ``lists_workspaces`` and ``requires_connection`` only when true; ``node_type_connections``
+        only when it names one.
         """
         d: dict[str, Any] = dict(self.extra)
         d.update({
@@ -956,6 +976,8 @@ class CapabilitiesResponse:
             d["lists_workspaces"] = True
         if self.requires_connection:
             d["requires_connection"] = True
+        if self.node_type_connections:
+            d["node_type_connections"] = dict(self.node_type_connections)
         return d
 
 

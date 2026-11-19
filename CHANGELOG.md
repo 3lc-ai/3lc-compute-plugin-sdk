@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - Unreleased
 
-- Guide: how an infrastructure plugin receives a stored credential. A node can act on a `SECRET`
-  Connection for a service the manifest declares; the host sends its value in
-  `x-tlc-bound-credential` on the calls about that node, and a provider can name each node type's
-  Connection in its capabilities (`node_type_connections`). Needs a Compute Service 1.3 or later;
-  nothing in the SDK changed.
+- An infrastructure plugin can act with a stored credential. A node can act on a `SECRET`
+  Connection for a service the manifest declares: on the calls about that node the worker binds the
+  Connection's binding (`current_connection()`), its use (`current_use()`) and its value
+  (`current_credential(service)`), with no resolver to register. A `SECRET` binding without its
+  value, or with a value granted for another Connection or service, answers 424.
+  `CapabilitiesResponse.node_type_connections` names the Connection each node type acts on. Needs a
+  Compute Service 1.3 or later.
 
 - Linux/macOS workers support isolated job processes, with per-job cancellation and cleanup of
   child processes. The optional `prepare_job(ctx)` hook hands transient inputs from the serving

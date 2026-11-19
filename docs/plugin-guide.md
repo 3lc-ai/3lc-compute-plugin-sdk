@@ -927,13 +927,18 @@ uses generic token wording. The harness validates that it is a string.
   `[runtime] credentials`, and sends the value with `POST /infra/nodes`, `GET` and `DELETE
   /infra/nodes/{id}` and `GET /infra/preflight`. It asks the Config Service for a grant each time, so
   the status polls and the teardown that run with nobody signed in receive it too, also after a
-  restart. No `x-3lc-connection` binding accompanies it, so there is nothing to resolve: read it in
-  your contract method with `connections.current_credential("<service>")`, and treat `None` as a
-  call that may not act with that Connection.
+  restart. The Connection's binding and its use travel beside it as for any other kind, so in your
+  contract method `connections.current_connection()` is the binding (its `metadata` holds what
+  the Connection records beside the value, such as `region` and `endpoint_url`),
+  `connections.current_use()` the node and the person, and
+  `connections.current_credential("<service>")` the value. There is no resolver to register. Treat
+  a `None` credential as a call that may not act with that Connection. The worker answers 424
+  itself when a `SECRET` binding arrives without its value, or with a value granted for another
+  Connection or service.
 
   A Connection is normally chosen when the node is created. A provider whose node types are things
-  that each have a credential of their own (a machine and its ssh key) can name them instead, in
-  `CapabilitiesResponse.extra`: `{"node_type_connections": {node_type: connection_id}}`. The host
+  that each have a credential of their own (a machine and its ssh key) can name them instead:
+  `CapabilitiesResponse(node_type_connections={node_type: connection_id})`. The host
   creates a node of that type on the named Connection when the request names none, under a grant
   for the person creating it; naming a Connection lends nobody its value. Let the person pick the
   Connection on your page with `PLUGIN_API.chooseCredential("<service>")`, store the id it resolves,

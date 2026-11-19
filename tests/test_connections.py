@@ -12,6 +12,7 @@ from litestar import get
 
 from tlc_plugin_sdk import connections
 from tlc_plugin_sdk.connections import (
+    BOUND_CREDENTIAL_HEADER,
     CONNECTION_HEADER,
     CONNECTION_USE_HEADER,
     Ambient,
@@ -21,6 +22,7 @@ from tlc_plugin_sdk.connections import (
     CredentialUnavailable,
     SecretToken,
     encode_binding,
+    encode_credential,
     encode_use,
     register_resolver,
 )
@@ -201,3 +203,60 @@ def test_binding_transports_installed_configuration_separately() -> None:
     assert old.configuration is None
     with pytest.raises(ValueError, match="configuration must be an object"):
         ConnectionBinding.from_json('{"id":"c","provider":"aws","kind":"KEYLESS","metadata":{},"configuration":[]}')
+
+
+# ── a SECRET Connection: the binding beside its value ────────────────────────
+
+
+def _secret_headers(*, value_for: str = "conn-1", service: str = "ssh", use: bool = True) -> dict[str, str]:
+    binding = ConnectionBinding("conn-1", "ssh", "SECRET", {"endpoint_url": "https://api.example"})
+    headers = {
+        CONNECTION_HEADER: encode_binding(binding),
+        BOUND_CREDENTIAL_HEADER: encode_credential(SecretToken(service, "the-value", value_for)),
+    }
+    if use:
+        headers[CONNECTION_USE_HEADER] = encode_use(ConnectionUse("node-1", "alice"))
+    return headers
+
+
+@pytest.mark.parametrize("route", ["/threaded", "/async"])
+def test_a_secret_connection_is_its_binding_its_use_and_its_value(harness: PluginHarness, route: str) -> None:
+    """Like any other kind in the handler: the Connection, what it is used for, and a credential."""
+    body = harness.get(route, headers=_secret_headers()).json()
+    assert body["connection"] == "conn-1"
+    assert body["use"] == ["node-1", "alice"]
+    assert body["credential"] == "SecretToken"
+    assert harness.get(route).json() == {
+        "connection": None,
+        "use": None,
+        "credential": None,
+        "region": None,
+        "session_token": None,
+    }, "nothing of it is left for the next request"
+
+
+def test_a_secret_binding_needs_no_resolver(harness: PluginHarness, clean_resolvers: None) -> None:
+    assert harness.get("/threaded", headers=_secret_headers()).status_code == 200
+    with pytest.raises(CredentialUnavailable, match="arrives with the request"):
+        connections.resolve(ConnectionBinding("conn-1", "ssh", "SECRET"))
+
+
+def test_a_secret_binding_without_its_value_is_424(harness: PluginHarness) -> None:
+    headers = _secret_headers()
+    del headers[BOUND_CREDENTIAL_HEADER]
+    response = harness.get("/threaded", headers=headers)
+    assert response.status_code == 424 and "carries no value" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("mismatch", [{"value_for": "conn-2"}, {"service": "huggingface"}])
+def test_a_value_granted_for_another_connection_or_service_is_never_bound_under_this_one(
+    harness: PluginHarness, mismatch: dict[str, str]
+) -> None:
+    response = harness.get("/threaded", headers=_secret_headers(**mismatch))
+    assert response.status_code == 424 and "different Connections" in response.json()["detail"]
+    assert "the-value" not in response.text
+
+
+def test_a_malformed_value_beside_a_secret_binding_is_the_value_middlewares_400(harness: PluginHarness) -> None:
+    headers = {**_secret_headers(), BOUND_CREDENTIAL_HEADER: "not json"}
+    assert harness.get("/threaded", headers=headers).status_code == 400
