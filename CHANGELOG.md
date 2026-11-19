@@ -46,6 +46,12 @@ written for inline hosts need migrating.
 - The guide's `PluginJobs.run` example no longer shows a cancelled job as a result: `onDone` fires
   for `cancelled` as well as `completed`, which the guide, the `onDone` declaration and the
   `job_tracker` docstring now say, with what a cancelled job's `run_url` means.
+- Keep preset drafts scoped to their deployment, storage, project and launch inputs. External
+  table/folder launches start a new modified default setup instead of restoring stale inputs.
+- Save and explicitly restore complete setups. Add `update()` for Save changes and `submitted()`
+  to clear an accepted job's draft without changing its saved preset.
+- Open Save as in a themed naming dialog while keeping the preset bar stable, with keyboard
+  dismissal, focus restoration and visible save errors.
 
 ## [Unreleased]
 

@@ -99,8 +99,12 @@ window.localStorage = {
   setItem: function (k, v) { LS[k] = String(v); },
   removeItem: function (k) { delete LS[k]; },
 };
-['m', 'm-bar', 'm-select', 'm-name', 'm-mode-pick', 'm-saveas', 'm-delete', 'm-note', 'm-mode-save', 'm-save-btn',
- 'm-cancel-btn', 'm-save-note', 'root'].forEach(addEl);
+['m', 'm-bar', 'm-select', 'm-name', 'm-mode-pick', 'm-saveas', 'm-update', 'm-delete', 'm-note', 'm-save-dialog',
+ 'm-save-btn', 'm-cancel-btn', 'm-close-btn', 'm-save-note', 'root'].forEach(addEl);
+window.innerWidth = 1440; window.innerHeight = 900;
+_els['m-bar'].getBoundingClientRect = function () { return {left: 24, bottom: 90}; };
+_els['m-save-dialog'].showModal = function () { this.open = true; };
+_els['m-save-dialog'].close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 function options() {
   var out = [];
   _els['m-select'].options.forEach(function (o) {
@@ -133,9 +137,10 @@ function state(p) {
   return {
     options: options(), value: _els['m-select'].value, origin: p.origin(), modified: p.modified(),
     presetId: p.presetId(), presetName: p.presetName(), form: collect(),
+    updateShown: _els['m-update'].style.display !== 'none',
     deleteShown: _els['m-delete'].style.display !== 'none', barShown: _els['m-mode-pick'].style.display !== 'none',
-    saveShown: _els['m-mode-save'].style.display === '',
-    selectShown: _els['m-select'].style.display !== 'none', nameShown: _els['m-name'].style.display === '',
+    saveShown: !!_els['m-save-dialog'].open,
+    selectShown: _els['m-select'].style.display !== 'none', nameShown: !!_els['m-save-dialog'].open,
     name: _els['m-name'].value, saveBtn: _els['m-save-btn'].textContent, saveNote: _els['m-save-note'].textContent,
     saveNoteError: _els['m-save-note'].classList.contains('is-error'),
     note: _els['m-note'].textContent, attrs: optionAttrs(),
@@ -194,12 +199,19 @@ def _pure(tmp_path: Path, expr: str) -> Any:
     return json.loads(done.stdout)
 
 
+DRAFT_KEY = 'tlc-preset-draft:v2:http://c:x:{"inputs":null,"objectService":"","project":"","projectRoot":""}'
+
+
 def _draft(origin: dict[str, Any], origin_values: dict[str, Any], values: dict[str, Any]) -> dict[str, str]:
-    return {"tlc-presets:http://c:x": json.dumps({"origin": origin, "originValues": origin_values, "values": values})}
+    return {DRAFT_KEY: json.dumps({"origin": origin, "originValues": origin_values, "values": values})}
 
 
 def _values(preset: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in preset.items() if k not in {"id", "name", "created", "last_run"}}
+
+
+def _picked(preset: dict[str, Any]) -> dict[str, Any]:
+    return {**DEFAULTS, **_values(preset)}
 
 
 @needs_node
@@ -264,26 +276,25 @@ def test_a_draft_whose_preset_is_gone_compares_with_the_defaults(tmp_path: Path)
     draft = _draft({"kind": "preset", "id": "gone", "name": "Gone"}, _values(P1), {**_values(P1)})
     out = _run(tmp_path, "var p = make(); await p.init(); await settle(); return state(p);", ls=draft)
     assert out["form"] == _values(P1)
-    assert out["origin"]["kind"] == "defaults" and out["value"] == ""
+    assert out["origin"]["kind"] == "defaults" and out["value"] == "__custom__"
     assert out["modified"] is True
-    assert out["options"][0] == ["", "Default settings · modified"]
+    assert out["options"][:2] == [["", "Default settings"], ["__custom__", "Default settings · modified"]]
 
 
 @needs_node
-def test_the_old_config_bar_key_is_honoured_once(tmp_path: Path) -> None:
+def test_old_unscoped_drafts_and_config_selection_are_not_restored(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         "var p = make({legacyKey: 'x_selected'}); await p.init(); await settle(); return state(p);",
-        ls={"x_selected": "p1"},
+        ls={"x_selected": "p1", "tlc-presets:http://c:x": json.dumps({"values": _values(P1)})},
     )
-    assert out["form"] == _values(P1)
-    assert out["origin"]["id"] == "p1" and out["modified"] is False
-    assert "x_selected" not in out["ls"]
-    assert "tlc-presets:http://c:x" in out["ls"]  # the draft takes over
+    assert out["form"] == DEFAULTS
+    assert out["origin"]["kind"] == "defaults" and out["modified"] is False
+    assert DRAFT_KEY in out["ls"]
 
 
 @needs_node
-def test_context_inputs_replace_the_input_set_and_stay(tmp_path: Path) -> None:
+def test_external_inputs_start_modified_defaults_and_explicit_pick_restores_saved_inputs(tmp_path: Path) -> None:
     draft = _draft({"kind": "preset", "id": "p1", "name": "Small objects 1280"}, _values(P1), _values(P1))
     out = _run(
         tmp_path,
@@ -303,11 +314,12 @@ def test_context_inputs_replace_the_input_set_and_stay(tmp_path: Path) -> None:
     opened = out["opened"]
     assert opened["form"]["train_table_url"] == "ctx-train"
     assert opened["form"]["val_table_url"] == ""  # not supplied by the context, so cleared
-    assert opened["form"]["epochs"] == 100
-    assert opened["modified"] is False and opened["origin"]["id"] == "p1"
-    assert opened["note"].startswith("Opened from a table")
+    assert opened["form"]["epochs"] == 10
+    assert opened["modified"] is True and opened["origin"]["kind"] == "defaults"
+    assert opened["options"][1] == ["__custom__", "Default settings · modified"]
+    assert not opened["note"]
     picked = out["picked"]
-    assert picked["form"]["train_table_url"] == "ctx-train" and picked["form"]["val_table_url"] == ""
+    assert picked["form"] == _picked(P2)
     assert picked["form"]["model"] == "yolo11s" and picked["origin"]["id"] == "p2"
     assert picked["modified"] is False and picked["presetName"] == "Baseline"
     assert out["edited"]["modified"] is True
@@ -329,13 +341,12 @@ def test_picking_applies_editing_marks_and_picking_again_reverts(tmp_path: Path)
         """,
     )
     picked = out["picked"]
-    assert picked["form"] == _values(P1) and picked["origin"]["id"] == "p1" and picked["value"] == "p1"
+    assert picked["form"] == _picked(P1) and picked["origin"]["id"] == "p1" and picked["value"] == "p1"
     assert picked["deleteShown"] is True and picked["presetId"] == "p1" and picked["presetName"] == "Small objects 1280"
     edited = out["edited"]
     assert edited["modified"] is True and edited["presetId"] == "" and edited["presetName"] == ""
     assert edited["options"][1][1].endswith(" · modified")
-    assert edited["ls"]["tlc-presets:http://c:x"]
-    assert json.loads(edited["ls"]["tlc-presets:http://c:x"])["values"]["epochs"] == 120
+    assert json.loads(edited["ls"][DRAFT_KEY])["values"]["epochs"] == 120
     reverted = out["reverted"]
     assert reverted["form"]["epochs"] == 100 and reverted["modified"] is False
     assert not reverted["options"][1][1].endswith(" · modified")
@@ -370,8 +381,8 @@ def test_save_as_prefills_a_free_name_and_enter_saves(tmp_path: Path) -> None:
         """,
     )
     opened = out["opened"]
-    assert opened["saveShown"] is True and opened["barShown"] is False
-    assert opened["nameShown"] is True and opened["selectShown"] is False  # the field takes the select's slot
+    assert opened["saveShown"] is True and opened["barShown"] is True
+    assert opened["nameShown"] is True and opened["selectShown"] is True  # the row stays in place behind the dialog
     assert opened["name"] == "yolo11n today" and opened["saveBtn"] == "Save"
     assert out["enter"] == {"prevented": True, "stopped": True}
     after = out["after"]
@@ -434,29 +445,31 @@ def test_a_taken_name_asks_before_replacing(tmp_path: Path) -> None:
     p2 = next(p for p in after["store"] if p["id"] == "p2")
     assert p2["epochs"] == 5 and p2["name"] == "Baseline" and p2["created"] == P2["created"]
     assert after["origin"] == {"kind": "preset", "id": "p2", "name": "Baseline"} and after["modified"] is False
-    assert after["toasts"][-1] == "success: Replaced preset “Baseline”"
+    assert after["toasts"][-1] == "success: Updated preset “Baseline”"
     assert len(after["store"]) == 2
 
 
 @needs_node
-def test_escape_and_cancel_close_the_name_field(tmp_path: Path) -> None:
+def test_escape_and_cancel_close_the_dialog_without_changing_the_setup(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         """
         var p = make(); await p.init(); await settle();
+        var before = collect();
         p.openSave(); var esc = key('Escape');
         var closed = state(p);
         p.openSave(); _els['m-cancel-btn'].click();
-        return {esc: esc, closed: closed, cancelled: state(p)};
+        return {before: before, esc: esc, closed: closed, cancelled: state(p)};
         """,
     )
     assert out["esc"] == {"prevented": True, "stopped": True}
     assert out["closed"]["saveShown"] is False and out["closed"]["barShown"] is True
     assert out["cancelled"]["saveShown"] is False and out["cancelled"]["barShown"] is True
+    assert out["cancelled"]["form"] == out["closed"]["form"] == out["before"]
 
 
 @needs_node
-def test_a_failed_save_says_so_in_the_bar(tmp_path: Path) -> None:
+def test_a_failed_save_keeps_the_dialog_open_and_explains_the_error(tmp_path: Path) -> None:
     out = _run(
         tmp_path,
         """
@@ -492,8 +505,8 @@ def test_on_an_older_hub_the_bars_trash_deletes_the_selected_preset_at_once(tmp_
     assert "data-removable" not in picked["attrs"]["p1"]
     after = out["after"]
     assert [p["id"] for p in after["store"]] == ["p2"], "deleted at once, nothing asked"
-    assert [o[0] for o in after["options"]] == ["", "p2"]
-    assert after["form"] == _values(P1), "the form is left as it was"
+    assert [o[0] for o in after["options"]] == ["", "__custom__", "p2"]
+    assert after["form"] == _picked(P1), "the form is left as it was"
     assert after["origin"]["kind"] == "defaults" and after["modified"] is True and after["deleteShown"] is False
     assert after["toasts"] == []
 
@@ -528,8 +541,8 @@ def test_with_the_hubs_list_presets_are_deleted_in_it_and_the_age_is_a_hint(tmp_
     assert other["origin"]["id"] == "p1" and other["modified"] is False, "deleting another preset changes nothing else"
     own = out["own"]
     assert own["store"] == []
-    assert own["origin"]["kind"] == "defaults" and own["modified"] is True and own["value"] == ""
-    assert own["form"] == _values(P1)
+    assert own["origin"]["kind"] == "defaults" and own["modified"] is True and own["value"] == "__custom__"
+    assert own["form"] == _picked(P1)
     assert own["toasts"] == [], "nothing is announced"
     assert out["failed"] == "Not found", "a failure reaches the list, which shows it"
 
@@ -560,7 +573,7 @@ def test_an_asynchronous_apply_is_awaited_before_the_form_is_compared(tmp_path: 
         return state(p);
         """,
     )
-    assert out["form"] == _values(P1) and out["modified"] is False and out["origin"]["id"] == "p1"
+    assert out["form"] == _picked(P1) and out["modified"] is False and out["origin"]["id"] == "p1"
 
 
 @needs_node
@@ -602,3 +615,163 @@ def test_the_time_is_the_last_use_else_the_save_and_replace_keeps_both(tmp_path:
     replaced = next(p for p in out["after"]["store"] if p["id"] == "p1")
     assert replaced["epochs"] == 7
     assert replaced["created"] == P1["created"] and replaced["last_run"] == used["last_run"]
+
+
+@needs_node
+def test_save_copy_and_update_roundtrip_complete_setup_without_mutating_original(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        var p = make();
+        await p.init(); await p.pick('p1'); await settle();
+        var original = JSON.parse(JSON.stringify(store));
+        edit({train_table_url: 'new-train', val_table_url: 'new-val', project_name: 'My project',
+              run_name: 'My run', use_latest: false, epochs: 7,
+              params: {project_root_url: 's3://new/projects', batch: 16}}); await settle();
+        var changed = state(p);
+        p.openSave(); _els['m-name'].value = 'New preset'; await p.save(); await settle();
+        var saved = state(p), id = p.presetId();
+        await p.pick('p2'); await p.pick(id); await settle();
+        var restored = state(p);
+        edit({val_table_url: 'revised-val', project_name: 'Renamed project'}); await settle();
+        var edited = state(p);
+        await p.update(); await settle();
+        await p.pick(''); await p.pick(id); await settle();
+        return {original: original, changed: changed, saved: saved, restored: restored,
+                edited: edited, updated: state(p)};
+    """,
+    )
+    for key in ("saved", "restored"):
+        form = out[key]["form"]
+        assert form["project_name"] == "My project" and form["run_name"] == "My run"
+        assert form["train_table_url"] == "new-train" and form["val_table_url"] == "new-val"
+        assert form["params"]["project_root_url"] == "s3://new/projects"
+    assert out["changed"]["updateShown"] and not out["updated"]["modified"]
+    assert out["changed"]["store"] == out["original"], "editing must never overwrite a saved setup"
+    assert out["saved"]["store"][1:] == out["original"], "Save as creates a copy"
+    saved = out["saved"]["store"][0]
+    assert _values(saved) == out["restored"]["form"]
+    assert saved["epochs"] == 7 and saved["params"] == {"batch": 16, "project_root_url": "s3://new/projects"}
+    assert out["edited"]["modified"] and out["edited"]["updateShown"]
+    assert out["updated"]["form"]["val_table_url"] == "revised-val"
+    assert out["updated"]["form"]["project_name"] == "Renamed project"
+
+
+@needs_node
+def test_drafts_are_scoped_and_preserve_a_manually_named_project(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        var ctx = {project_name: 'First project'};
+        var opts = {contextInputs: function () { return ctx; }};
+        var p = make(opts); await p.init(); await settle();
+        edit({train_table_url: 'first', project_name: 'Manual name', run_name: 'Unfinished run', epochs: 17});
+        await settle();
+        ctx = {project_name: 'Second project'};
+        p = make(opts); await p.init(); await settle(); var second = state(p);
+        ctx = {project_name: 'First project'};
+        p = make(opts); await p.init(); await settle(); var first = state(p);
+        p.submitted(); await settle();
+        p = make(opts); await p.init(); await settle();
+        return {second: second, first: first, fresh: state(p)};
+    """,
+    )
+    assert out["second"]["form"]["project_name"] == "Second project"
+    assert out["second"]["form"]["epochs"] == 10
+    assert not out["second"]["form"].get("run_name")
+    assert out["first"]["form"]["project_name"] == "Manual name"
+    assert out["first"]["form"]["run_name"] == "Unfinished run"
+    assert out["fresh"]["form"]["project_name"] == "First project"
+    assert not out["fresh"]["form"].get("run_name")
+    assert len(out["fresh"]["ls"]) == 2, "submitting one context must not erase another draft"
+
+
+@needs_node
+def test_external_launch_never_resumes_old_setup_even_for_the_same_tables(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        var opts = {contextInputs: function () { return {train_table_url: 'selected',
+                    val_table_url: 'selected-val', project_name: 'Selected project'}; }};
+        var p = make(opts); await p.init(); await p.pick('p1'); await settle();
+        edit({project_name: 'Old manual project', run_name: 'old-run', epochs: 99}); await settle();
+        var before = JSON.parse(JSON.stringify(store));
+        p = make(opts); await p.init(); await settle(); return {before: before, after: state(p)};
+        """,
+    )
+    after = out["after"]
+    assert after["form"] == {
+        **DEFAULTS,
+        "train_table_url": "selected",
+        "val_table_url": "selected-val",
+        "project_name": "Selected project",
+    }
+    assert after["origin"]["kind"] == "defaults" and after["modified"]
+    assert after["store"] == out["before"]
+    assert not any(call.startswith("POST ") for call in after["calls"])
+
+
+@needs_node
+def test_default_normalization_is_not_an_edit_on_reopen(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        var opts = {apply: function(v) { applyFn(v); form.auto_detected = 'detection'; }};
+        var p = make(opts); await p.init(); await settle();
+        p = make(opts); await p.init(); await settle(); return state(p);
+    """,
+    )
+    assert out["form"]["auto_detected"] == "detection"
+    assert not out["modified"] and out["value"] == ""
+
+
+@needs_node
+def test_reopened_draft_compares_to_preset_updated_elsewhere(tmp_path: Path) -> None:
+    draft = _draft({"kind": "preset", "id": "p1", "name": P1["name"]}, _values(P1), _values(P1))
+    out = _run(
+        tmp_path,
+        "var p = make(); await p.init(); await settle(); return state(p);",
+        ls=draft,
+        store=[{**P1, "epochs": 7}],
+    )
+    assert out["form"]["epochs"] == 100, "the unfinished draft is preserved"
+    assert out["modified"] and out["updateShown"], "it differs from the preset now saved on the server"
+
+
+@needs_node
+def test_async_picks_are_serialized_and_partial_form_events_are_not_saved(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        var p;
+        var opts = {apply: async function(v) {
+          form = {loading: true}; if (p) p.changed();
+          await settle(); applyFn(v);
+        }};
+        p = make(opts); await p.init(); await settle();
+        edit({train_table_url: 'manual'}); await settle();
+        await Promise.all([p.pick('p1'), p.pick('p2')]); await settle(); return state(p);
+    """,
+    )
+    assert out["form"] == _picked(P2)
+    assert out["origin"]["id"] == "p2" and not out["modified"]
+    assert json.loads(out["ls"][DRAFT_KEY])["values"] == out["form"]
+
+
+@needs_node
+def test_edits_during_save_remain_modified(tmp_path: Path) -> None:
+    out = _run(
+        tmp_path,
+        """
+        var p = make(); await p.init(); await p.pick('p1'); await settle();
+        var send = api.authFetch;
+        api.authFetch = async function(url, o) {
+          var result = await send(url, o);
+          if (o && o.method === 'POST') { edit({epochs: 23}); await settle(); }
+          return result;
+        };
+        edit({epochs: 7}); await p.update(); await settle(); return state(p);
+    """,
+    )
+    assert next(p for p in out["store"] if p["id"] == "p1")["epochs"] == 7
+    assert out["form"]["epochs"] == 23 and out["modified"] and out["updateShown"]

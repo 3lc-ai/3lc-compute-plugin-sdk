@@ -1693,10 +1693,16 @@ onFormatChange(() => chooser.refresh());
 A plugin whose form is worth keeping (a training setup, a metric selection) gets the Hub's preset bar from the SDK rather than a bar of its own. It is one line at the top of the form:
 
 ```
-Preset  [ Small objects 1280 — yolo11n · detect · modified   ⌄ ]  Save as…
+Preset  [ Small objects 1280 · modified   ⌄ ]  Save changes  Save as…
 ```
 
-A preset is a named template of the whole form, inputs included. Picking one copies its values into the form; only Save writes a preset, and a run never does. The select lists Default settings and then the saved presets, each with your summary and, as a muted hint, when it was last used for a run ("used 2 days ago"), else when it was saved. The selected entry gains "· modified" once the form differs from it, and picking it again reverts the form. Save as… turns the bar into a name field in the select's place, prefilled with a free name and selected: Enter saves, Escape cancels, and a taken name asks "Replace …?" first. Each saved preset has a trash button in the list, which deletes it at once and keeps the list open. On a Hub without `TlcPicker.onRemove` the trash sits beside the select instead and deletes the selected preset. The page opens as it was last left in this browser, else on Default settings.
+A preset contains the complete setup: tables, project, destination, run name, model and processing parameters. Explicitly choosing a preset restores that setup. Only explicit saves update a preset; editing the form or starting a run never does.
+
+The select shows Default settings, Default settings · modified for an unsaved setup, or the selected preset with "· modified". Save changes updates the selected preset; Save as… opens a compact naming dialog while the preset bar stays in place. The suggested name is selected for editing. Enter saves, Escape or Cancel dismisses without changing the setup, and a taken name asks before replacement. Failed saves keep the dialog open with the error and name intact. Saved presets retain their summary, last-use hint and delete action.
+
+Opening from external tables/folders always starts a fresh setup: defaults plus those inputs and their project, marked modified. It never restores an older draft, even for the same inputs. Opening without external inputs can resume an unfinished draft scoped to deployment, plugin, storage and project. Old unscoped drafts and config selections are ignored. Saved presets live in the plugin's server-side config store; drafts live in browser storage.
+
+Table URLs and revision-selection flags are saved as entered. A setup using fixed revision URLs reopens those revisions. A setup using "latest revision" deliberately follows new data; it is not a frozen record of a completed run. Keep the actual resolved inputs and parameters in the run's own record.
 
 Inject `preset_ui_script()` from `tlc_plugin_sdk.shared.preset_ui` with `inject_scripts()`, put an empty `<div id="my-presets"></div>` where the bar goes, and wire it:
 
@@ -1716,16 +1722,16 @@ var presets = _tlcPluginPresets({
   },
   autoName: function (v) { return 'resnet50 · ' + new Date().toISOString().slice(0, 10); },
   summary: function (v) { return [v.model, v.epochs && v.epochs + ' epochs']; },   // empty parts are left out
-  legacyKey: 'my_selected_config',              // the old config bar's key, honoured once
 });
 presets.init();
 ```
 
 - **Routes.** The config CRUD a `PluginConfigStore` plugin already serves: `GET /configs`, `POST /configs` (an empty `id` creates, an `id` replaces), `GET /configs/{id}`, `POST /configs/{id}/delete`. Saved configs appear as presets as they are.
 - **`collect` and `apply`** move the whole form, without `id` and `name`. Return a promise from `apply` when filling the form takes a round trip (a model's parameters fetched after the model is set): the bar compares the form only once it resolves.
-- **Inputs.** `inputs` names the keys that are inputs (tables, folders). When the plugin is opened from a table, `contextInputs()` returns them: they replace the whole input set, inputs it does not name are cleared, and they stay while the page is open, also when a preset is picked. They never count as a modification.
+- **Context.** `inputs` names tables and folders (dotted paths supported). A nonempty launch input means a new setup. `contextInputs()` supplies its initial tables and project; later explicit preset picks restore the saved form in full. All collected values participate in saving and modification checks.
 - **JS state.** Call `presets.changed()` after a change no DOM event reports, such as a card toggled in a JS object.
 - **The run body.** Send `project_config: Object.assign(collect(), { id: presets.presetId(), name: presets.presetName() })`. Both are set while the form is unchanged from a preset, so the job card can name it, and empty otherwise. A run never saves a preset.
+- **Accepted submission.** After receiving a valid job id, clear the form's run name and call `presets.submitted()` to remove that context's draft. Failed or cancelled submissions must leave it intact. The accepted job retains the full submitted configuration.
 - **Last use.** When a run sent with a preset's id finishes, stamp it: `config_store().update_last_run(config_id)`, best-effort, as the list shows it. A worker on another machine has its own store, so a run there leaves no stamp.
 
 `_tlcPluginConfig` (`shared.config_ui`), the earlier config bar whose Train saved into the selected config, is superseded by this; it stays for the plugins still on it. See `TlcPresetOptions` and `TlcPresetControl` in `plugin-api.d.ts`.

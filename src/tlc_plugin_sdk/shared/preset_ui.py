@@ -20,7 +20,6 @@ The module defines one factory::
       contextInputs: function () { ... },       // {key: value} when opened from a table, else null
       autoName: function (values) { ... },      // the suggested name for a new preset
       summary: function (values) { ... },       // optional: a short hint for the list, e.g. "yolo11n · detect"
-      legacyKey: "yolo_selected_project",       // optional: the config bar's old localStorage key
     });
     presets.init();
 
@@ -36,15 +35,19 @@ PRESET_UI_JS = r"""
  *
  * One bar at the top of the form:
  *
- *   Preset  [ Small objects 1280 · modified   ⌄ ]  Save as…  🗑
+ *   Preset  [ Small objects 1280 · modified   ⌄ ]  Save changes  Save as…
  *
- * A preset is a named template of the whole form, inputs included. Picking one copies its values
- * into the form; only Save writes a preset, a run never does. The select lists "Default settings"
+ * A preset contains the complete setup, including inputs, project, destination and run name.
+ * Explicitly picking one restores that setup. Opening from external inputs starts a fresh,
+ * unsaved setup based on defaults, never a previously selected preset or draft.
+ * Only Save writes a preset, a run never does. The select lists "Default settings"
  * and then the saved presets as the server lists them, each with a hint and its age. The selected
- * entry gains " · modified" once the form differs from it; picking it again reverts the form.
+ * entry gains " · modified" once any field differs; Save changes updates it. Edited defaults
+ * show "Default settings · modified". Picking again reverts the whole setup.
  *
- * Save as… turns the bar into a name field, prefilled with a free name (the preset the form came
- * from, else the plugin's auto name), text selected: Enter or Save saves, Escape or Cancel closes.
+ * Save as… opens a small naming dialog without replacing the preset bar. The name is prefilled
+ * with a free name (the preset the form came from, else the plugin's auto name), text selected:
+ * Enter or Save saves, Escape or Cancel closes and returns focus to Save as….
  * A taken name asks "Replace “name”?" first.
  *
  * Each saved preset says when it was last used for a run ("used 2 days ago", from the `last_run` the
@@ -54,15 +57,14 @@ PRESET_UI_JS = r"""
  * each saved preset has a trash button in the list, which keeps the list open, and the time is the
  * row's muted hint. On an older Hub the trash sits beside the select and deletes the selected
  * preset, and the time is part of the label. Deleting the preset the form came from leaves the form
- * as it is, now from Default settings, modified.
+ * as it is, now Default settings · modified if it differs from defaults.
  *
- * The page opens as it was last left in this browser: a draft (the form, and the preset it came
- * from) is kept in localStorage on every change. Without one it opens on Default settings, or
- * once on the preset the old config bar remembered under `legacyKey`.
+ * A draft (the whole form and its normalized baseline) lives in localStorage, scoped by deployment,
+ * plugin, storage and project. It restores only in the same context when opened without external
+ * inputs. Old unscoped drafts and legacy selections are ignored.
  *
- * Opened with inputs (`contextInputs()` returns an object): those replace the whole input set,
- * inputs it does not name are cleared, and they stay in force while the page is open, also when a
- * preset is picked. They never count as a modification.
+ * `contextInputs()` seeds a new setup; it never overrides later manual changes or explicit picks. After an accepted
+ * submission, clear the run name in the form and call submitted() to remove that context's draft.
  *
  * Options:
  *   pluginId      {string}    manifest id; keys the draft
@@ -77,21 +79,22 @@ PRESET_UI_JS = r"""
  *   autoName      {function}  (values) => string
  *   summary       {function}  (values) => string or [part, …], shown after the name; empty parts
  *                             are left out (optional)
- *   legacyKey     {string}    the old config bar's localStorage key (optional)
  *   draftDelay    {number}    ms before a change is written as the draft (default 300)
  *
  * Returns:
- *   init()         render, load the list, open on the draft/legacy/defaults and the context's inputs
+ *   init()         render, load the list, restore this context's draft or seed defaults with its inputs
  *   changed()      the form changed in a way no DOM event reports (JS state); recompute and save the draft
  *   refresh()      reload the list
  *   pick(id)       apply a preset ("" for Default settings), as the select does
- *   openSave()     show the name field; save() saves it; closeSave() hides it
+ *   openSave()     open the naming dialog; save() saves it; closeSave() dismisses it
+ *   update()       explicitly save the full setup into the selected preset
+ *   submitted()    clear this draft after a job is accepted (never on failed submission)
  *   remove(id)     delete a preset (the selected one without an id); asks nothing
  *   origin()       {kind: "defaults"|"preset", id, name}: where the form came from
  *   modified()     whether the form differs from its origin
  *   presetId()     the selected preset's id when the form is unchanged from it, else ""
  *   presetName()   its name likewise, for the run body's `project_config.name`
- *   contextInputs() the inputs in force, or null
+ *   contextInputs() the initial launch context, or null
  * ──────────────────────────────────────────────────────────────── */
 function _tlcPresetAge(iso, nowMs) {
   if (!iso) return "";
@@ -152,22 +155,28 @@ function _tlcPluginPresets(opts) {
   var contextInputs = opts.contextInputs || function () { return null; };
   var autoName = opts.autoName || function () { return pluginId + " preset"; };
   var summary = opts.summary || function () { return ""; };
-  var legacyKey = opts.legacyKey || "";
   var draftDelay = opts.draftDelay == null ? 300 : opts.draftDelay;
 
   var ID_FIELDS = { id: 1, name: 1, created: 1, last_run: 1 };
-  // The select and the name field share one slot, with the same basis, so Save as… swaps them in
-  // place and nothing moves sideways.
+  // Keep the bar stable. The native dialog supplies modal focus behavior; shared Hub classes
+  // supply its surfaces, header and buttons. Position near the bar in tall flow-layout frames.
   var CSS =
-    ".tlc-presets select, .tlc-presets input.form-control" +
-    " { flex: 0 1 640px; min-width: 0; max-width: 640px; height: 36px; box-sizing: border-box;" +
+    ".tlc-presets select" +
+    " { flex: 0 1 320px; min-width: 0; max-width: 320px; height: 36px; box-sizing: border-box;" +
     " font-size: 12px; font-weight: 500; }" +
     ".tlc-presets .tlc-presets-mode { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }" +
-    ".tlc-presets .tlc-presets-note { font-size: 11px; color: var(--text-muted); }" +
-    ".tlc-presets .tlc-presets-note.is-error { color: var(--danger); }" +
+    ".tlc-presets-note { font-size: 12px; color: var(--text-muted); }" +
+    ".tlc-presets-note.is-error { color: var(--danger); }" +
     ".tlc-presets .tlc-presets-icon { display: inline-flex; padding: 4px 6px; line-height: 0; }" +
     ".tlc-presets .tlc-presets-icon svg { width: 14px; height: 14px; }" +
-    ".tlc-presets .tlc-presets-text { font-size: 12px; color: var(--text); }";
+    ".tlc-presets-dialog { margin: 0; padding: 0; inset: auto; color: var(--text); }" +
+    ".tlc-presets-dialog:not([open]) { display: none; }" +
+    ".tlc-presets-dialog > .modal-header { margin: 0; padding: 14px 18px 12px; }" +
+    ".tlc-presets-dialog .modal-body { padding: 16px 18px 18px; }" +
+    ".tlc-presets-dialog label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 600; }" +
+    ".tlc-presets-dialog input { width: 100%; box-sizing: border-box; }" +
+    ".tlc-presets-dialog .tlc-presets-note { margin: 10px 0 0; }" +
+    ".tlc-presets-dialog .tlc-presets-note:empty { display: none; }";
   var TRASH =
     '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"' +
     ' stroke-linejoin="round" aria-hidden="true">' +
@@ -176,12 +185,17 @@ function _tlcPluginPresets(opts) {
   var list = [];                                       // the saved presets, as the server lists them
   var origin = { kind: "defaults", id: "", name: "" }; // where the form came from
   var originValues = null;                             // the form as it was at the origin
-  var ctx = null;                                      // the launch context's inputs, for the page's life
+  var ctx = null;                                      // initial launch values, never reapplied on preset picks
   var isModified = false;
   var draftTimer = null;
   var confirmReplaceId = "";                           // the preset a second Save will replace
   var inList = false;                                  // the Hub's list deletes presets (TlcPicker.onRemove)
   var els = {};
+  var applying = false;
+  var saving = false;
+  var initialized = false;
+  var applyChain = Promise.resolve();
+  var scopeKey = "";
 
   /* ── Host access ── */
   function api() { return (typeof window !== "undefined" && window.PLUGIN_API) || {}; }
@@ -205,7 +219,7 @@ function _tlcPluginPresets(opts) {
   function draftKey() {
     var a = api();
     var computeUrl = (a.getConfig && a.getConfig("compute_service_url")) || "";
-    return "tlc-presets:" + computeUrl + ":" + pluginId;
+    return "tlc-preset-draft:v2:" + computeUrl + ":" + pluginId + ":" + scopeKey;
   }
 
   /* ── Elements ── */
@@ -228,39 +242,65 @@ function _tlcPluginPresets(opts) {
       '<div class="plugin-config-bar tlc-presets" id="' + m + '-bar">' +
         '<span class="bar-label">Preset</span>' +
         '<select id="' + m + '-select" class="form-control" aria-label="Preset"></select>' +
-        '<input type="text" id="' + m + '-name" class="form-control" maxlength="120" autocomplete="off"' +
-          ' aria-label="Preset name" style="display:none">' +
         '<span class="tlc-presets-mode" id="' + m + '-mode-pick">' +
+          '<button type="button" class="btn btn-secondary btn-sm" id="' + m + '-update"' +
+            ' style="display:none">Save changes</button>' +
           '<button type="button" class="btn btn-secondary btn-sm" id="' + m + '-saveas">Save as…</button>' +
           '<button type="button" class="btn btn-ghost btn-sm tlc-presets-icon" id="' + m + '-delete"' +
             ' title="Delete this preset" aria-label="Delete this preset">' + TRASH + '</button>' +
           '<span class="tlc-presets-note" id="' + m + '-note"></span>' +
         '</span>' +
-        '<span class="tlc-presets-mode" id="' + m + '-mode-save" style="display:none">' +
-          '<button type="button" class="btn btn-primary btn-sm" id="' + m + '-save-btn">Save</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-cancel-btn">Cancel</button>' +
-          '<span class="tlc-presets-note" id="' + m + '-save-note"></span>' +
-        '</span>' +
-      '</div>';
-    ["bar", "select", "name", "mode-pick", "saveas", "delete", "note", "mode-save", "save-btn", "cancel-btn",
-     "save-note"].forEach(function (s) {
+      '</div>' +
+      '<dialog class="modal-box tlc-presets-dialog" id="' + m + '-save-dialog"' +
+        ' aria-labelledby="' + m + '-save-title">' +
+        '<div class="modal-header">' +
+          '<h2 class="modal-title" id="' + m + '-save-title">Save preset</h2>' +
+          '<button type="button" class="modal-close" id="' + m + '-close-btn" aria-label="Close">' +
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"' +
+              ' stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg>' +
+          '</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<label for="' + m + '-name">Preset name</label>' +
+          '<input type="text" id="' + m + '-name" class="form-control" maxlength="120" autocomplete="off"' +
+            ' aria-describedby="' + m + '-save-note">' +
+          '<p class="tlc-presets-note" id="' + m + '-save-note" role="status" aria-live="polite"></p>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button type="button" class="btn btn-secondary" id="' + m + '-cancel-btn">Cancel</button>' +
+          '<button type="button" class="btn btn-primary" id="' + m + '-save-btn">Save</button>' +
+        '</div>' +
+      '</dialog>';
+    ["bar", "select", "name", "mode-pick", "saveas", "update", "delete", "note", "save-dialog", "save-btn",
+     "cancel-btn", "close-btn", "save-note"].forEach(function (s) {
       els[s] = el(s);
     });
   }
 
-  /* One row, two modes: the select or the name field in the same slot, and that mode's buttons after it. */
-  function setMode(mode) {
-    if (mode === "save") { hide(els.select); show(els.name); } else { show(els.select); hide(els.name); }
-    if (mode === "save") { hide(els["mode-pick"]); show(els["mode-save"]); }
-    else { show(els["mode-pick"]); hide(els["mode-save"]); }
-  }
-
   function bind() {
-    if (els.select) els.select.addEventListener("change", function () { pick(els.select.value); });
+    if (els.select) els.select.addEventListener("change", function () {
+      pick(els.select.value).catch(function () {}); // pick reports the error
+    });
     if (els.saveas) els.saveas.addEventListener("click", openSave);
+    if (els.update) els.update.addEventListener("click", update);
     if (els["delete"]) els["delete"].addEventListener("click", function () { remove(); });
     if (els["save-btn"]) els["save-btn"].addEventListener("click", function () { save(); });
-    if (els["cancel-btn"]) els["cancel-btn"].addEventListener("click", closeSave);
+    function dismissSave() { if (!saving) closeSave(); }
+    if (els["cancel-btn"]) els["cancel-btn"].addEventListener("click", dismissSave);
+    if (els["close-btn"]) els["close-btn"].addEventListener("click", dismissSave);
+    if (els["save-dialog"]) {
+      els["save-dialog"].addEventListener("cancel", function (ev) { ev.preventDefault(); dismissSave(); });
+      els["save-dialog"].addEventListener("close", function () {
+        if (els.saveas && els.saveas.focus) els.saveas.focus({preventScroll: true});
+      });
+      els["save-dialog"].addEventListener("click", function (ev) {
+        if (ev.target !== els["save-dialog"]) return;
+        var rect = els["save-dialog"].getBoundingClientRect();
+        if (ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) {
+          dismissSave();
+        }
+      });
+    }
     if (els.name) {
       els.name.addEventListener("keydown", function (ev) {
         if (ev.key === "Enter") {
@@ -268,7 +308,7 @@ function _tlcPluginPresets(opts) {
           save();
         } else if (ev.key === "Escape") {
           ev.preventDefault(); ev.stopPropagation();
-          closeSave();
+          dismissSave();
         }
       });
       els.name.addEventListener("input", function () {
@@ -292,20 +332,20 @@ function _tlcPluginPresets(opts) {
     Object.keys(record || {}).forEach(function (k) { if (!ID_FIELDS[k]) out[k] = record[k]; });
     return out;
   }
-  function comparable(values) {
-    var out = {};
-    Object.keys(values || {}).forEach(function (k) {
-      if (ctx && inputs.indexOf(k) !== -1) return;
-      out[k] = values[k];
-    });
-    return _tlcPresetStable(out);
+  function clone(value) { return JSON.parse(JSON.stringify(value || {})); }
+  // Input paths may be nested. The shared helper does not know plugin field names.
+  function contextValue(values, path) {
+    var keys = path.split("."), value = values;
+    for (var i = 0; i < keys.length; i++) {
+      if (!value || !Object.prototype.hasOwnProperty.call(value, keys[i])) return undefined;
+      value = value[keys[i]];
+    }
+    return value;
   }
-  function withContext(values) {
-    var out = {};
-    Object.keys(values || {}).forEach(function (k) { out[k] = values[k]; });
-    if (ctx) inputs.forEach(function (k) { out[k] = ctx[k] == null ? "" : ctx[k]; });
-    return out;
+  function settings(values) {
+    return clone(valuesOf(values));
   }
+  function comparable(values) { return _tlcPresetStable(settings(values)); }
   function byId(id) {
     for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
     return null;
@@ -319,16 +359,14 @@ function _tlcPluginPresets(opts) {
   }
   function names() { return list.map(function (p) { return p.name || ""; }); }
 
-  /* The origin's values, in collect()'s shape, with the origin's own inputs. */
-  function originValuesFrom(ownValues) {
-    var out = collect() || {};
-    inputs.forEach(function (k) { out[k] = ownValues && ownValues[k] != null ? ownValues[k] : ""; });
-    return out;
+  /* Capture normalized settings after the plugin has finished applying them. */
+  function originValuesFrom() {
+    return settings(collect());
   }
   /* The defaults, in collect()'s shape: what a form compares with once its preset is gone. */
   function fromDefaults() {
     var d = defaults() || {};
-    var out = originValuesFrom(d);
+    var out = originValuesFrom();
     Object.keys(d).forEach(function (k) { out[k] = d[k]; });
     return out;
   }
@@ -369,7 +407,12 @@ function _tlcPluginPresets(opts) {
     sel.innerHTML = "";
     if (sel.options && sel.options.length) sel.options.length = 0;
     var mark = isModified ? " · modified" : "";
-    sel.appendChild(option("", "Default settings" + (origin.kind === "defaults" ? mark : "")));
+    sel.appendChild(option("", "Default settings"));
+    if (origin.kind === "defaults" && isModified) {
+      var custom = option("__custom__", "Default settings · modified");
+      custom.disabled = true;
+      sel.appendChild(custom);
+    }
     if (list.length) {
       var group = document.createElement("optgroup");
       group.label = "Saved presets";
@@ -384,8 +427,19 @@ function _tlcPluginPresets(opts) {
       });
       sel.appendChild(group);
     }
-    sel.value = origin.kind === "preset" ? origin.id : "";
+    sel.value = origin.kind === "preset" ? origin.id : (isModified ? "__custom__" : "");
     if (!inList && origin.kind === "preset") show(els["delete"]); else hide(els["delete"]);
+    if (origin.kind === "preset" && isModified) show(els.update); else hide(els.update);
+    busy();
+  }
+  function busy() {
+    ["select", "saveas", "update", "delete", "save-btn"].forEach(function (key) {
+      if (els[key]) els[key].disabled = applying || saving || !initialized;
+    });
+    ["name", "cancel-btn", "close-btn"].forEach(function (key) {
+      if (els[key]) els[key].disabled = saving;
+    });
+    setText(els["save-btn"], saving ? "Saving…" : (confirmReplaceId ? "Replace" : "Save"));
   }
   function loadList() {
     return fetchJson(base()).then(function (data) {
@@ -400,6 +454,7 @@ function _tlcPluginPresets(opts) {
 
   /* ── Modified state and the draft ── */
   function recompute() {
+    if (applying || !initialized) return;
     var was = isModified;
     var current;
     try { current = collect() || {}; } catch (e) { return; }
@@ -430,26 +485,19 @@ function _tlcPluginPresets(opts) {
       return draft && draft.values && typeof draft.values === "object" ? draft : null;
     } catch (e) { return null; }
   }
-  function readLegacy() {
-    var s = storage();
-    if (!s || !legacyKey) return "";
-    try { return s.getItem(legacyKey) || ""; } catch (e) { return ""; }
-  }
-  function dropLegacy() {
-    var s = storage();
-    if (!s || !legacyKey) return;
-    try { s.removeItem(legacyKey); } catch (e) { /* nothing to drop */ }
-  }
-
   /* ── Applying ── */
   function applyValues(values) {
-    var result;
-    try { result = apply(withContext(values)); } catch (e) { result = null; }
-    return Promise.resolve(result);
+    applying = true;
+    if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+    busy();
+    return Promise.resolve().then(function () { return apply(clone(values)); }).finally(function () {
+      applying = false;
+      busy();
+    });
   }
-  function settle(newOrigin, ownValues) {
+  function settle(newOrigin) {
     origin = newOrigin;
-    originValues = originValuesFrom(ownValues);
+    originValues = originValuesFrom();
     isModified = false;
     rebuildSelect();
     recompute();
@@ -459,11 +507,18 @@ function _tlcPluginPresets(opts) {
     var p = id ? byId(id) : null;
     var own = p ? valuesOf(p) : (defaults() || {});
     var newOrigin = p ? { kind: "preset", id: p.id, name: p.name || "" } : { kind: "defaults", id: "", name: "" };
-    return applyValues(own).then(function () { settle(newOrigin, own); });
+    applyChain = applyChain.catch(function () {}).then(function () {
+      return applyValues(Object.assign(clone(defaults()), settings(own))).then(function () { settle(newOrigin); });
+    });
+    return applyChain.catch(function (e) {
+      toast("Could not open preset: " + (e && e.message ? e.message : e), "error");
+      throw e;
+    });
   }
 
   /* ── Save as… ── */
   function openSave() {
+    if (saving || applying || !initialized || !els["save-dialog"]) return;
     confirmReplaceId = "";
     var suggested;
     try { suggested = origin.kind === "preset" ? origin.name : autoName(collect()); } catch (e) { suggested = ""; }
@@ -471,7 +526,13 @@ function _tlcPluginPresets(opts) {
     setText(els["save-btn"], "Save");
     setText(els["save-note"], "");
     if (els["save-note"]) els["save-note"].classList.remove("is-error");
-    setMode("save");
+    var dialog = els["save-dialog"];
+    // A flow-layout iframe can be much taller than the visible Hub page. Keep the dialog
+    // near the clicked bar instead of centering it far down the iframe and scrolling there.
+    var rect = els.bar.getBoundingClientRect();
+    dialog.style.top = Math.max(16, Math.min(rect.bottom + 8, window.innerHeight - 260)) + "px";
+    dialog.style.left = Math.max(16, Math.min(rect.left, window.innerWidth - 436)) + "px";
+    if (!dialog.open) dialog.showModal();
     if (els.name) {
       if (els.name.focus) els.name.focus();
       if (els.name.select) els.name.select();
@@ -479,9 +540,10 @@ function _tlcPluginPresets(opts) {
   }
   function closeSave() {
     confirmReplaceId = "";
-    setMode("pick");
+    if (els["save-dialog"] && els["save-dialog"].open) els["save-dialog"].close();
   }
   function save() {
+    if (saving || applying) return Promise.resolve(false);
     var name = els.name ? String(els.name.value || "").trim() : "";
     if (!name) {
       var auto;
@@ -496,13 +558,23 @@ function _tlcPluginPresets(opts) {
       setText(els["save-btn"], "Replace");
       return Promise.resolve(false);
     }
+    return saveRecord(name, existing);
+  }
+  function update() {
+    var existing = origin.kind === "preset" ? byId(origin.id) : null;
+    if (!existing || !isModified || saving || applying) return Promise.resolve(false);
+    return saveRecord(existing.name, existing);
+  }
+  function saveRecord(name, existing) {
     var body;
-    try { body = collect() || {}; } catch (e) { body = {}; }
+    try { body = settings(collect()); } catch (e) { return Promise.resolve(false); }
     body.id = existing ? existing.id : "";
     body.name = existing ? existing.name : name;
     // A replaced preset keeps when it was made and when it was last used.
     body.created = existing ? (existing.created || "") : "";
     body.last_run = existing ? (existing.last_run || null) : null;
+    saving = true;
+    busy();
     return fetchJson(base(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -510,13 +582,15 @@ function _tlcPluginPresets(opts) {
     }).then(function (resp) {
       if (!resp || resp.error) throw new Error((resp && resp.error) || "no answer");
       origin = { kind: "preset", id: resp.id || body.id, name: body.name };
-      originValues = originValuesFrom(body);
-      isModified = false;
+      // The form can still be edited while saving. Compare it with what was sent, not
+      // what happens to be in the form when the response arrives.
+      originValues = settings(body);
+      isModified = comparable(collect()) !== comparable(originValues);
       closeSave();
       return loadList();
     }).then(function () {
       recompute();
-      toast((existing ? "Replaced preset “" : "Saved preset “") + body.name + "”", "success");
+      toast((existing ? "Updated preset “" : "Saved preset “") + body.name + "”", "success");
       return true;
     }).catch(function (e) {
       var msg = e && e.message ? e.message : String(e);
@@ -524,7 +598,7 @@ function _tlcPluginPresets(opts) {
       if (els["save-note"]) els["save-note"].classList.add("is-error");
       toast("Could not save the preset: " + msg, "error");
       return false;
-    });
+    }).finally(function () { saving = false; busy(); });
   }
 
   /* ── Delete: asks nothing ── */
@@ -563,9 +637,17 @@ function _tlcPluginPresets(opts) {
     inList = !!(picker && typeof picker.onRemove === "function" && els.select);
     if (inList) picker.onRemove(els.select, function (option) { return deletePreset(option.value); });
     try { ctx = contextInputs() || null; } catch (e) { ctx = null; }
-    if (ctx) setText(els.note, "Opened from a table: presets change the settings, the table stays.");
+    scopeKey = _tlcPresetStable({
+      project: (api().context || {}).projectName || "",
+      inputs: ctx,
+      objectService: (api().getConfig && api().getConfig("object_service_url")) || "",
+      projectRoot: (api().getConfig && api().getConfig("project_root_url")) || "",
+    });
     return loadList().then(function () {
-      var draft = readDraft();
+      // An explicit table/folder launch always means a new setup, even if those same
+      // inputs were used earlier. Only a bare/project launch resumes an unfinished draft.
+      var externalInputs = inputs.some(function (path) { return !!contextValue(ctx, path); });
+      var draft = externalInputs ? null : readDraft();
       var start, newOrigin;
       if (draft) {
         start = draft.values;
@@ -573,20 +655,45 @@ function _tlcPluginPresets(opts) {
         newOrigin = p ? { kind: "preset", id: p.id, name: p.name || "" } : { kind: "defaults", id: "", name: "" };
         return applyValues(start).then(function () {
           origin = newOrigin;
-          // Compare with the preset as it was picked; with the defaults once the preset is gone.
-          originValues = p && draft.originValues && typeof draft.originValues === "object"
-            ? draft.originValues : fromDefaults();
+          // Keep the normalized baseline for defaults too: detection/model defaults are not edits.
+          // A preset may have been updated in another project/tab. Preserve this draft's
+          // values, but compare with the currently saved settings rather than an old copy.
+          originValues = p ? settings(p) : (
+            draft.origin && draft.origin.kind === "defaults" && draft.originValues
+              && typeof draft.originValues === "object" ? draft.originValues : fromDefaults());
+          initialized = true;
           isModified = false;
           rebuildSelect();
           recompute();
         });
       }
-      var legacy = readLegacy();
-      var lp = legacy ? byId(legacy) : null;
-      dropLegacy();
-      if (lp) return pick(lp.id);
-      return pick("");
+      start = Object.assign(clone(defaults()), clone(ctx));
+      return applyValues(start).then(function () {
+        origin = {kind: "defaults", id: "", name: ""};
+        originValues = originValuesFrom();
+        // Preserve model/task normalization in the baseline, but external input and project
+        // choices are changes from defaults and must be visibly unsaved.
+        var d = defaults() || {};
+        Object.keys(ctx || {}).forEach(function (key) {
+          if (Object.prototype.hasOwnProperty.call(d, key)) originValues[key] = clone(d)[key];
+          else delete originValues[key];
+        });
+        initialized = true;
+        rebuildSelect();
+        recompute();
+      });
     });
+  }
+
+  // The accepted job keeps its exact configuration. Reopening starts a fresh run; changing
+  // fields in the still-open form creates a new draft. Never delete a draft on a failed submit.
+  function submitted() {
+    // The plugin may have cleared its run name. Refresh the modified marker before
+    // removing the draft, without saving or changing the named preset.
+    recompute();
+    if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+    var s = storage();
+    if (s) { try { s.removeItem(draftKey()); } catch (e) {} }
   }
 
   return {
@@ -597,6 +704,8 @@ function _tlcPluginPresets(opts) {
     openSave: openSave,
     closeSave: closeSave,
     save: save,
+    update: update,
+    submitted: submitted,
     remove: remove,
     origin: function () { return { kind: origin.kind, id: origin.id, name: origin.name }; },
     modified: function () { return isModified; },
