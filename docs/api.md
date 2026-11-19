@@ -66,6 +66,13 @@ the error family, the legacy request-credential context, and the conformance kit
    :members:
 ```
 
+## Placement requirements
+
+```{eval-rst}
+.. automodule:: tlc_plugin_sdk.manifest
+   :members:
+```
+
 ## The harness
 
 A plugin's own routes, called in-process without a compute service.
