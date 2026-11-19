@@ -139,7 +139,6 @@ entrypoint = "tlc_plugin_my_plugin:MyPlugin"  # "pkg.module:ClassName"
 requires_gpu = false                # drives GPU vs CPU classification
 provision_extra = "my-plugin"       # your plugin's dependency group: host runs `uv sync --extra <this>`
 # remote_capable = true             # a run may target a remote node the Hub manages although requires_gpu is false
-# isolation = "venv"                # the one runtime there is; older manifests still say it, nothing reads it
 # Custom routes that must run where the model lives when a host with remote-node support
 # runs this plugin on a remote worker (inference, model warm-up/status). Path prefixes
 # relative to your route root. Everything NOT listed stays with the controller's worker —
