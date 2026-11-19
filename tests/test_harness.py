@@ -15,6 +15,7 @@ from litestar import get, post
 
 from tlc_plugin_sdk.contract import HubPlugin
 from tlc_plugin_sdk.harness import PluginHarness, main, read_manifest
+from tlc_plugin_sdk.manifest import PlacementRequirements
 from tlc_plugin_sdk.shared import config_store
 from tlc_plugin_sdk.shared.config_store import PluginConfigStore
 
@@ -114,6 +115,8 @@ def test_reads_a_standalone_plugin_toml(tmp_path: Path) -> None:
         "harness_probe_pkg:Plugin",
         "infrastructure",
     )
+    assert manifest.requirements == PlacementRequirements()
+    assert not manifest.requirements.requires_gpu
 
 
 def test_reads_a_pyproject_table_and_defaults_kind_to_compute(tmp_path: Path) -> None:
@@ -126,11 +129,18 @@ def test_reads_a_pyproject_table_and_defaults_kind_to_compute(tmp_path: Path) ->
         id = "probe-pkg"
         [tool.tlc-compute.runtime]
         entrypoint = "harness_probe_pkg:Plugin"
+        requires_gpu = false
+        [tool.tlc-compute.requirements]
+        memory_gb = 8
+        gpu_memory_gb = 16
+        browser_access = true
         """,
         filename="pyproject.toml",
     )
     manifest = read_manifest(package)
     assert (manifest.id, manifest.kind) == ("probe-pkg", "compute")
+    assert manifest.requirements == PlacementRequirements(memory_gb=8, gpu_memory_gb=16, browser_access=True)
+    assert manifest.requirements.requires_gpu
 
 
 def test_a_manifest_without_an_entrypoint_is_refused(tmp_path: Path) -> None:
@@ -165,21 +175,70 @@ def test_from_manifest_imports_an_uninstalled_source_checkout(
     assert "200 GET /health" in out.err.splitlines()
 
 
-def _data_manifest(tmp_path: Path, runtime: str) -> Path:
+def _write_manifest(tmp_path: Path, runtime: str) -> Path:
     (tmp_path / "plugin.toml").write_text('id = "probe"\n[runtime]\nentrypoint = "probe:Probe"\n' + runtime)
     return tmp_path
 
 
+@pytest.mark.parametrize(
+    ("requirements_table", "expected", "requires_gpu"),
+    [
+        ("", PlacementRequirements(gpu_memory_gb=None), True),
+        (
+            "[requirements]\nmemory_gb = 8\nfuture_constraint = true\n",
+            PlacementRequirements(memory_gb=8, gpu_memory_gb=None),
+            True,
+        ),
+        ("[requirements]\ngpu_memory_gb = 0\n", PlacementRequirements(), False),
+    ],
+    ids=["legacy-only", "legacy-gpu-with-new-ram-minimum", "explicit-zero-overrides-legacy"],
+)
+def test_placement_requirements_fall_back_to_the_legacy_gpu_flag(
+    tmp_path: Path, requirements_table: str, expected: PlacementRequirements, requires_gpu: bool
+) -> None:
+    package = _write_manifest(tmp_path, "requires_gpu = true\n" + requirements_table)
+    requirements = read_manifest(package).requirements
+
+    assert requirements == expected
+    assert requirements.requires_gpu is requires_gpu
+
+
+def test_remote_capable_alone_imposes_no_placement_requirement(tmp_path: Path) -> None:
+    manifest = read_manifest(_write_manifest(tmp_path, "remote_capable = true\n"))
+    assert manifest.requirements == PlacementRequirements()
+
+
+def test_the_legacy_gpu_flag_requires_a_boolean(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="requires_gpu must be true or false"):
+        read_manifest(_write_manifest(tmp_path, 'requires_gpu = "true"\n'))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ('requirements = "anything"\n', r"\[requirements\] must be a table"),
+        ("[requirements]\nmemory_gb = -1\n", "memory_gb must be a non-negative integer"),
+        ("[requirements]\ngpu_memory_gb = true\n", "gpu_memory_gb must be a non-negative integer"),
+        ("[requirements]\ngpu_memory_gb = 0.5\n", "gpu_memory_gb must be a non-negative integer"),
+        ('[requirements]\nbrowser_access = "true"\n', "browser_access must be true or false"),
+    ],
+)
+def test_a_wrong_placement_requirement_is_named(tmp_path: Path, declaration: str, message: str) -> None:
+    (tmp_path / "plugin.toml").write_text('id = "probe"\n' + declaration + '\n[runtime]\nentrypoint = "probe:Probe"\n')
+    with pytest.raises(ValueError, match=message):
+        read_manifest(tmp_path)
+
+
 def test_the_manifest_declares_its_data_keys(tmp_path: Path) -> None:
     manifest = read_manifest(
-        _data_manifest(
+        _write_manifest(
             tmp_path,
             'data_inputs = ["folder", "source.table_url", "folder"]\ndata_outputs = ["output_path"]\n',
         )
     )
     assert manifest.data_inputs == ("folder", "source.table_url")  # duplicates collapse
     assert manifest.data_outputs == ("output_path",)
-    bare = read_manifest(_data_manifest(tmp_path, ""))
+    bare = read_manifest(_write_manifest(tmp_path, ""))
     assert bare.data_inputs == () and bare.data_outputs == ()
 
 
@@ -198,4 +257,4 @@ def test_the_manifest_declares_its_data_keys(tmp_path: Path) -> None:
 )
 def test_a_wrong_data_key_is_named(tmp_path: Path, runtime: str, match: str) -> None:
     with pytest.raises(ValueError, match=match):
-        read_manifest(_data_manifest(tmp_path, runtime))
+        read_manifest(_write_manifest(tmp_path, runtime))

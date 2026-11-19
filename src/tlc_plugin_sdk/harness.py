@@ -38,6 +38,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
+from tlc_plugin_sdk.manifest import PlacementRequirements, parse_placement_requirements
+
 if TYPE_CHECKING:
     from litestar.testing import TestClient
 
@@ -194,6 +196,7 @@ class Manifest:
         credential_routes: The custom routes that receive it (``[runtime] credential_routes``).
         data_inputs: Dotted keys into the run body naming data the run reads (``[runtime] data_inputs``).
         data_outputs: Dotted keys naming places the run writes to (``[runtime] data_outputs``).
+        requirements: Placement requirements declared by the plugin.
     """
 
     id: str
@@ -204,6 +207,7 @@ class Manifest:
     credential_routes: tuple[str, ...] = field(default=())
     data_inputs: tuple[str, ...] = field(default=())
     data_outputs: tuple[str, ...] = field(default=())
+    requirements: PlacementRequirements = field(default_factory=PlacementRequirements)
 
 
 def _toml_load(path: Path) -> dict[str, Any]:
@@ -221,13 +225,13 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
         plugin_dir: The directory holding the manifest (e.g. ``src/tlc_plugin_aws``).
 
     Returns:
-        The manifest's id, entrypoint, kind, credential declarations and data keys.
+        The manifest's id, entrypoint, kind, credential declarations, data keys and placement requirements.
 
     Raises:
         FileNotFoundError: When neither file holds a manifest.
         ValueError: When the manifest lacks ``id`` or ``[runtime] entrypoint``, or declares
             ``credentials`` / ``credential_routes`` / ``data_inputs`` / ``data_outputs`` of the wrong
-            shape, or ``credential_routes`` without ``credentials``.
+            shape, ``credential_routes`` without ``credentials``, or invalid placement requirements.
     """
     directory = Path(plugin_dir).resolve()
     for filename in ("plugin.toml", "pyproject.toml"):
@@ -253,6 +257,7 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
             credential_routes = parse_credential_routes(runtime_table.get("credential_routes"))
             data_inputs = parse_data_keys(runtime_table.get("data_inputs"), "data_inputs")
             data_outputs = parse_data_keys(runtime_table.get("data_outputs"), "data_outputs")
+            requirements = parse_placement_requirements(table)
         except ValueError as exc:
             msg = f"{path}: {exc}"
             raise ValueError(msg) from exc
@@ -268,6 +273,7 @@ def read_manifest(plugin_dir: str | Path) -> Manifest:
             credential_routes=credential_routes,
             data_inputs=data_inputs,
             data_outputs=data_outputs,
+            requirements=requirements,
         )
     msg = f"No plugin manifest (plugin.toml or [tool.tlc-compute] in pyproject.toml) in {directory}"
     raise FileNotFoundError(msg)
