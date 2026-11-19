@@ -198,6 +198,30 @@ on the CPU queue. Both are host-owned; the plugin never picks a queue or names a
 `remote_capable = true` lets a plugin that needs no GPU also run on a remote node (see
 [Run-body conventions for remote workers](#run-body-conventions-for-remote-workers)).
 
+#### Placement requirements
+
+SDK 0.7.0 parses the optional `[requirements]` table. In a `pyproject.toml` manifest,
+write it as `[tool.tlc-compute.requirements]`.
+
+```toml
+[requirements]
+memory_gb = 8
+gpu_memory_gb = 0
+browser_access = true
+```
+
+`memory_gb` is the minimum total RAM in whole GiB. `gpu_memory_gb` is the minimum
+in whole GiB on a single GPU. Both default to zero, which imposes no constraint.
+If `gpu_memory_gb` is omitted and `[runtime] requires_gpu = true`, the parser records
+a GPU requirement with no memory minimum. An explicit `gpu_memory_gb` takes precedence,
+including zero. `browser_access` defaults to false. Set it when the user's browser
+must reach an app served by the job.
+
+Compute 1.2 and earlier do their placement checks using the runtime flags they support.
+Keep those flags and any plugin-side checks needed on those hosts. If a plugin relies
+on host enforcement of `[requirements]`, set `min_service_version` to a release that
+enforces it.
+
 ### 3. Implement the plugin object
 
 A plugin is a **subclass of `ComputePlugin`** (imported from `tlc_plugin_sdk`) —
