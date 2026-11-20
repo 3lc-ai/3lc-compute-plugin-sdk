@@ -5,14 +5,12 @@ All notable changes to `3lc-compute-plugin-sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.1] - Unreleased
+## [0.7.0] - Unreleased
 
 - Add primary-table project transitions to the shared preset controller: derive the output
   project, retain same-project settings, reset defaults across projects with Undo, and preserve
   explicit saved setups. Scope drafts to the current source project and ignore stale/failed reads.
 - Add `table_project_context` to obtain source identity from an opened 3LC table without row reads.
-
-## [0.7.0] - Unreleased
 
 - Linux/macOS workers support isolated job processes, with per-job cancellation and cleanup of
   child processes. The optional `prepare_job(ctx)` hook hands transient inputs from the serving
