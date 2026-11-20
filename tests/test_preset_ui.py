@@ -43,6 +43,13 @@ P2 = {
 DEFAULTS = {"model": "yolo11n", "epochs": 10, "train_table_url": "", "val_table_url": ""}
 
 _HARNESS = r"""
+// Long-lived UI notices must not hold the standalone Node test process open.
+var realSetTimeout = setTimeout;
+setTimeout = function(fn, delay) {
+  var timer = realSetTimeout(fn, delay);
+  if (delay >= 15000) timer.unref();
+  return timer;
+};
 var form = {};
 var DEFAULTS = %(defaults)s;
 function collect() { return JSON.parse(JSON.stringify(form)); }
@@ -100,7 +107,7 @@ window.localStorage = {
   removeItem: function (k) { delete LS[k]; },
 };
 ['m', 'm-bar', 'm-select', 'm-name', 'm-mode-pick', 'm-saveas', 'm-update', 'm-delete', 'm-note', 'm-save-dialog',
- 'm-save-btn', 'm-cancel-btn', 'm-close-btn', 'm-save-note', 'root'].forEach(addEl);
+ 'm-undo-table', 'm-save-btn', 'm-cancel-btn', 'm-close-btn', 'm-save-note', 'root'].forEach(addEl);
 window.innerWidth = 1440; window.innerHeight = 900;
 _els['m-bar'].getBoundingClientRect = function () { return {left: 24, bottom: 90}; };
 _els['m-save-dialog'].showModal = function () { this.open = true; };
@@ -775,3 +782,208 @@ def test_edits_during_save_remain_modified(tmp_path: Path) -> None:
     )
     assert next(p for p in out["store"] if p["id"] == "p1")["epochs"] == 7
     assert out["form"]["epochs"] == 23 and out["modified"] and out["updateShown"]
+
+
+_TABLE_HARNESS = r"""
+Object.assign(DEFAULTS, {project_name: '', run_name: '', mode: 'train', params: {epochs: 10}});
+var reads = [];
+var meta = {
+  a: {project_name: 'A', project_url: 's3://one/A', project_root_url: 's3://one'},
+  a2: {project_name: 'A', project_url: 's3://one/A', project_root_url: 's3://one'},
+  b: {project_name: 'B', project_url: 's3://one/B', project_root_url: 's3://one'},
+  other: {project_name: 'A', project_url: 's3://two/A', project_root_url: 's3://two'},
+};
+var p;
+applyFn = async function(values, resolved) {
+  form = JSON.parse(JSON.stringify(values)); applied.push(collect());
+  var url = form.train_table_url;
+  if (url && meta[url]) {
+    if (!resolved) reads.push(url);
+    await p.tableResolved(url, resolved ? resolved.info : meta[url]);
+    if (!form.project_name) form.project_name = meta[url].project_name;
+  }
+};
+function makeTable(extra) {
+  return make(Object.assign({
+    tableContext: {input: 'train_table_url', project: 'project_name', preserve: ['mode']},
+    contextInputs: function() { return {train_table_url: 'a', project_name: 'A'}; },
+  }, extra || {}));
+}
+async function changeTable(url) {
+  edit({train_table_url: url});
+  return p.tableResolved(url, meta[url]);
+}
+"""
+
+
+@needs_node
+def test_table_same_project_preserves_settings_and_derives_project(tmp_path):
+    out = _run(
+        tmp_path,
+        _TABLE_HARNESS
+        + """
+      p = makeTable(); await p.init();
+      edit({project_name: 'custom output', run_name: 'experiment', val_table_url: 'validation', params: {epochs: 80}});
+      await changeTable('a2');
+      return state(p);
+    """,
+    )
+    assert out["form"]["project_name"] == "A"
+    assert out["form"]["params"] == {"epochs": 80}
+    assert out["form"]["val_table_url"] == "validation"
+    assert out["form"]["run_name"] == "experiment"
+    assert out["modified"]
+    assert out["note"] == ""
+
+
+@needs_node
+@pytest.mark.parametrize("new_table,project", [("b", "B"), ("other", "A")])
+def test_table_other_project_resets_and_undo_restores_complete_setup(tmp_path, new_table, project):
+    out = _run(
+        tmp_path,
+        _TABLE_HARNESS
+        + f"""
+      store.push({{id: 'saved', name: 'My setup', train_table_url: 'a', project_name: 'custom output',
+        model: 'big', mode: 'collect', val_table_url: 'validation', run_name: 'experiment',
+        params: {{checkpoint: 'old.pt', epochs: 80}}}});
+      p = makeTable(); await p.init(); await p.pick('saved');
+      var before = state(p);
+      await changeTable('{new_table}'); await settle();
+      var reset = state(p);
+      await p.undoTableChange(); await settle();
+      return {{before: before, reset: reset, undo: state(p), reads: reads}};
+    """,
+    )
+    reset = out["reset"]
+    assert reset["form"]["project_name"] == project
+    assert reset["form"]["train_table_url"] == new_table
+    assert reset["form"]["val_table_url"] == ""
+    assert reset["form"]["run_name"] == ""
+    assert reset["form"]["params"] == {"epochs": 10}
+    assert reset["form"]["model"] == DEFAULTS["model"]
+    assert reset["form"]["mode"] == "collect"
+    assert reset["origin"]["kind"] == "defaults"
+    assert reset["modified"]
+    assert "Settings reset" in reset["note"]
+    assert out["undo"]["form"] == out["before"]["form"]
+    assert out["undo"]["origin"] == out["before"]["origin"]
+    assert not out["undo"]["modified"]
+    assert out["reads"] == ["a", "a"], "reset and Undo reuse already-read metadata"
+    assert not any(call.startswith("POST") for call in reset["calls"]), "no automatic named presets"
+
+
+@needs_node
+def test_explicit_preset_restores_custom_destination_and_validation_does_not_reset(tmp_path):
+    out = _run(
+        tmp_path,
+        _TABLE_HARNESS
+        + """
+      store.push({id: 'saved', name: 'My setup', train_table_url: 'b', project_name: 'custom output',
+        model: 'big', params: {epochs: 80}});
+      p = makeTable(); await p.init(); await p.pick('saved');
+      var restored = state(p);
+      edit({val_table_url: 'a'}); await p.tableResolved('b', meta.b);
+      return {restored: restored, changed: state(p)};
+    """,
+    )
+    assert out["restored"]["form"]["project_name"] == "custom output"
+    assert not out["restored"]["modified"]
+    assert out["changed"]["form"]["project_name"] == "custom output"
+    assert out["changed"]["form"]["params"] == {"epochs": 80}
+    assert out["changed"]["modified"]
+
+
+@needs_node
+def test_invalid_and_stale_table_reads_leave_previous_draft_intact(tmp_path):
+    out = _run(
+        tmp_path,
+        _TABLE_HARNESS
+        + """
+      p = makeTable(); await p.init(); edit({params: {epochs: 80}}); await settle();
+      var oldDraft = JSON.stringify(LS);
+      edit({train_table_url: 'partial'}); await settle();
+      await p.tableResolved('partial', {error: 'invalid URL'});
+      var invalidDraft = JSON.stringify(LS);
+      edit({train_table_url: 'b'});
+      var oldRead = p.tableResolved('b', meta.b);
+      edit({train_table_url: 'a2'});
+      await oldRead;
+      await p.tableResolved('a2', meta.a2);
+      return {oldDraft: oldDraft, invalidDraft: invalidDraft, state: state(p)};
+    """,
+    )
+    assert out["invalidDraft"] == out["oldDraft"]
+    assert out["state"]["form"]["train_table_url"] == "a2"
+    assert out["state"]["form"]["params"] == {"epochs": 80}
+    assert out["state"]["note"] == ""
+
+
+@needs_node
+def test_project_drafts_follow_source_project_not_saved_output_override(tmp_path):
+    out = _run(
+        tmp_path,
+        _TABLE_HARNESS
+        + """
+      p = makeTable(); await p.init(); edit({params: {epochs: 80}}); await settle();
+      await changeTable('b'); edit({project_name: 'custom output', params: {epochs: 40}}); await settle();
+      api.context = {projectName: 'A'};
+      api.getConfig = function(k) {
+        return k === 'project_root_url' ? 's3://one' : k === 'compute_service_url' ? 'http://c' : '';
+      };
+      p = makeTable({contextInputs: function(){ return null; }}); await p.init();
+      var a = state(p);
+      api.context.projectName = 'B';
+      p = makeTable({contextInputs: function(){ return null; }}); await p.init();
+      return {a: a, b: state(p)};
+    """,
+    )
+    assert out["a"]["form"]["train_table_url"] == "a"
+    assert out["a"]["form"]["params"] == {"epochs": 80}
+    assert out["b"]["form"]["train_table_url"] == "b"
+    assert out["b"]["form"]["params"] == {"epochs": 40}
+    assert out["b"]["form"]["project_name"] == "custom output"
+
+
+@needs_node
+def test_legacy_scoped_draft_survives_table_aware_controller_upgrade(tmp_path):
+    out = _run(
+        tmp_path,
+        _TABLE_HARNESS
+        + """
+      p = makeTable({contextInputs: function(){ return null; }}); await p.init();
+      return state(p);
+    """,
+        ls=_draft({"kind": "defaults"}, DEFAULTS, dict(DEFAULTS, train_table_url="a", epochs=70)),
+    )
+    assert out["form"]["train_table_url"] == "a"
+    assert out["form"]["epochs"] == 70
+
+
+@needs_node
+def test_new_table_during_model_loading_is_processed_after_current_apply(tmp_path):
+    out = _run(
+        tmp_path,
+        _TABLE_HARNESS
+        + """
+      p = makeTable(); await p.init(); edit({params: {epochs: 80}});
+      var normalApply = applyFn, release, entered;
+      var started = new Promise(r => entered = r);
+      // The controller captured applyFn at construction; use a second controller with this hook.
+      p = makeTable({apply: async function(values, resolved) {
+        await normalApply(values, resolved);
+        if (values.train_table_url === 'b') { entered(); await new Promise(r => release = r); }
+      }});
+      await p.init(); edit({params: {epochs: 80}});
+      var b = changeTable('b'); await started;
+      edit({train_table_url: 'other'});
+      var other = p.tableResolved('other', meta.other);
+      release(); await Promise.all([b, other]);
+      var finalState = state(p); await p.undoTableChange();
+      return {finalState: finalState, undone: state(p)};
+    """,
+    )
+    assert out["finalState"]["form"]["train_table_url"] == "other"
+    assert out["finalState"]["form"]["project_name"] == "A"
+    assert out["finalState"]["form"]["params"] == {"epochs": 10}
+    assert out["undone"]["form"]["train_table_url"] == "a"
+    assert out["undone"]["form"]["params"] == {"epochs": 80}
