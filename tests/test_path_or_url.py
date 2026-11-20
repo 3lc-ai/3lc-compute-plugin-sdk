@@ -4,20 +4,34 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
 from tlc_plugin_sdk.shared import url_utils as pu
 
+# An absolute local path on this platform: on Windows a rooted path without a drive ("/x") is relative to the
+# current drive, so it is not absolute.
+ABSOLUTE = "C:\\x" if sys.platform == "win32" else "/x"
+
 
 def test_is_url_and_normalize() -> None:
     assert pu.is_url("s3://b/x") and pu.is_url(" abfs://c/x ") and not pu.is_url("/data/x") and not pu.is_url("C:\\x")
     assert pu.normalize_path_or_url(" s3://b/data/fire/ ") == "s3://b/data/fire"
     assert pu.normalize_path_or_url("s3://bucket") == "s3://bucket"
-    assert pu.normalize_path_or_url("~/x").startswith("/") and pu.normalize_path_or_url("/x") == "/x"
+    home_x = pu.normalize_path_or_url("~/x")
+    assert Path(home_x) == Path.home() / "x" and Path(home_x).is_absolute()
+    assert pu.normalize_path_or_url(ABSOLUTE) == ABSOLUTE
     with pytest.raises(ValueError, match="absolute"):
         pu.normalize_path_or_url("relative/path")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a rooted path without a drive exists only on Windows")
+def test_a_rooted_path_without_a_drive_is_not_absolute_on_windows() -> None:
+    assert not pu.is_absolute("/x")
+    with pytest.raises(ValueError, match="absolute"):
+        pu.normalize_path_or_url("/x")
 
 
 def test_url_segments() -> None:
@@ -28,7 +42,7 @@ def test_url_segments() -> None:
         pu.name_of("s3://b/data/images/") == "images" and pu.stem_of("s3://b/a/instances_val.json") == "instances_val"
     )
     assert pu.suffix_of("s3://b/a/X.JSON") == ".json" and pu.suffix_of("/a/b.yaml") == ".yaml"
-    assert pu.is_absolute("s3://b/x") and pu.is_absolute("/x") and not pu.is_absolute("x/y")
+    assert pu.is_absolute("s3://b/x") and pu.is_absolute(ABSOLUTE) and not pu.is_absolute("x/y")
 
 
 def test_local_listing_and_reading(tmp_path: Path) -> None:

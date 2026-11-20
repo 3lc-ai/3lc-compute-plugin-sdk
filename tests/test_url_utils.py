@@ -3,12 +3,15 @@
 """Tests for shared.url_utils path normalization (no `tlc` required)."""
 
 import os
+import sys
 
 import pytest
 
 from tlc_plugin_sdk.shared.url_utils import get_url_column_names, normalize_local_path, normalize_url
 
 HOME = os.path.expanduser("~")
+# An absolute local file path on this platform: on Windows "/data/out.csv" has no drive, so it is not absolute.
+OUT_CSV = "C:\\data\\out.csv" if sys.platform == "win32" else "/data/out.csv"
 
 
 class TestNormalizeUrl:
@@ -31,10 +34,10 @@ class TestNormalizeLocalPath:
         assert normalize_local_path("~/pyro.csv") == f"{HOME}/pyro.csv"
 
     def test_strips_whitespace(self) -> None:
-        assert normalize_local_path("  /data/out.csv ") == "/data/out.csv"
+        assert normalize_local_path(f"  {OUT_CSV} ") == OUT_CSV
 
     def test_absolute_unchanged(self) -> None:
-        assert normalize_local_path("/data/out.csv") == "/data/out.csv"
+        assert normalize_local_path(OUT_CSV) == OUT_CSV
 
     def test_bare_relative_rejected(self) -> None:
         with pytest.raises(ValueError, match="absolute"):

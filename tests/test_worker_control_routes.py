@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -83,7 +84,10 @@ def test_run_rejects_job_ids_that_are_not_safe_directory_names(tmp_path: Path, b
     with TestClient(app=app) as client:
         resp = client.post(f"/jobs/{bad}/run", json={})
         assert resp.status_code in (400, 404), (bad, resp.status_code)  # 404 when the router rejects the path
-    assert not (tmp_path / "state" / bad).exists()
+    # Nothing was created under the state folder. (Checking ``state / bad`` would not do: Windows collapses
+    # ``state/..`` lexically, so it names tmp_path, which exists.)
+    state = tmp_path / "state"
+    assert not state.exists() or not any(state.iterdir())
 
 
 def test_run_for_a_live_job_id_answers_409_and_keeps_the_first_job(
@@ -183,6 +187,11 @@ def test_plugin_handlers_on_reserved_paths_are_not_mounted(tmp_path: Path) -> No
         assert client.get("/jobs/cancel-all").status_code == 405  # only the worker's POST exists
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits: on Windows os.chmod sets only the read-only flag, so the store's chmod is a no-op "
+    "and access is governed by the folder's ACL",
+)
 def test_config_store_writes_owner_only_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from tlc_plugin_sdk.shared import config_store as cs
 
