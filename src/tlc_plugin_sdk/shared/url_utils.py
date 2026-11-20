@@ -79,7 +79,9 @@ def normalize_local_path(path: str) -> str:
     if not expanded:
         msg = "Path is empty."
         raise ValueError(msg)
-    if not os.path.isabs(expanded):
+    # pathlib, not os.path.isabs: before Python 3.13, os.path.isabs on Windows accepts a rooted path without a
+    # drive ("/data"), which resolves against the current drive.
+    if not Path(expanded).is_absolute():
         msg = (
             f"Path must be absolute (got {expanded!r}). "
             "Relative paths would resolve against the plugin's working directory, not yours."
