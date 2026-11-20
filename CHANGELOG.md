@@ -26,6 +26,8 @@ written for inline hosts need migrating.
   `PLUGIN_API.compute` cannot pass on an inline host).
 - `jobs.cancel` cancels at once and resolves the compute's `{cancelled}`; `jobs.confirmCancel`
   opens the Hub's stop dialog. Legacy `PluginJobs.cancel` cancels; `CancelJob` confirms.
+- `ui.confirm(title, body, {okLabel, danger})` asks the Hub's yes/no question over the whole
+  window and resolves true when confirmed.
 - `[ui] layout = "fill"`, `nav.href`, a frame address that follows the Hub's, and
   `storage.choose/remembered`.
 - The Hub's stylesheets and libraries may arrive as text (`{css}`, `{js}`): the frame's `ready`
