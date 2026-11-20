@@ -283,7 +283,7 @@ def test_main_exits_0_when_clean_1_on_findings_and_2_without_a_plugin(
     assert main([str(clean)]) == 0
     assert main([str(tmp_path)]) == 1
     out = capsys.readouterr().out
-    assert "tlc_plugin_dirty/ui.html:1:13: surface-inline-style" in out and "tlc_plugin_clean" not in out
+    assert f"{Path('tlc_plugin_dirty', 'ui.html')}:1:13: surface-inline-style" in out and "tlc_plugin_clean" not in out
     assert main([str(dirty / "ui.html")]) == 1
     assert main([str(dirty / "ui.html"), "--plugin-id", "dirty"]) == 1
     (tmp_path / "loose.html").write_text("<p></p>", encoding="utf-8")
