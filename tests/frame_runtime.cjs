@@ -68,6 +68,9 @@ async function main() {
   assert.equal(await API.ui.confirm('Remove it?', 'Gone for good.', {okLabel: 'Remove', danger: true}), true);
   assert.equal(lastConfirm(), JSON.stringify(['Remove it?', 'Gone for good.', {okLabel: 'Remove', danger: true}]));
   assert(API.has('ui.confirm'));
+  API.nodes.mount({});
+  assert.equal(await context.nodeListOptions.confirm('Terminate gpu-1?', 'A running job fails.', 'Terminate', true), true);
+  assert.equal(lastConfirm(), JSON.stringify(['Terminate gpu-1?', 'A running job fails.', {okLabel: 'Terminate', danger: true}]));
   let nav = 0; const off = API.nav.onChange(() => nav++);
   port.onmessage({data:{v:1,type:'event',name:'nav',value:{}}}); off();
   port.onmessage({data:{v:1,type:'event',name:'nav',value:{}}}); assert.equal(nav, 1);

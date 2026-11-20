@@ -512,8 +512,10 @@
         create: function (providerId, request) { return call('nodes.create', [String(providerId), request || {}], 600000); },
         mount: function (element, options) {
           if (!nodeList) throw failure('unavailable', 'The node list is not available in this Hub.');
+          // The node list's Terminate asks through the Hub: the frame has no dialog of the Hub's own.
           var widget = nodeList.mount(element, { pluginId: init.pluginId, openNodes: !(options && options.openNodes === false),
-            openHistory: !!(options && options.openHistory) });
+            openHistory: !!(options && options.openHistory),
+            confirm: function (title, body, okLabel, danger) { return confirm(title, body, { okLabel: okLabel, danger: danger }); } });
           var unregister = onDispose(function () { widget.destroy(); });
           return { refresh: function () { return widget.refresh(); }, destroy: function () { unregister(); widget.destroy(); } };
         },
