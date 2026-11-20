@@ -920,6 +920,33 @@ uses generic token wording. The harness validates that it is a string.
   `SecretToken` (a route carries one token, so no-argument `current_credential()` finds it too),
   restored when the handler returns. The host strips any copy a caller sent, and sends it on no other
   route.
+- **On an infrastructure plugin's calls about a node** the same header carries the value of the
+  node's Connection, when that Connection is a `SECRET` one: the account is reached with a stored
+  value (an API key, an ssh private key) instead of an assumed role. The host accepts such a
+  Connection for a node only when its `provider` is a service your manifest declares under
+  `[runtime] credentials`, and sends the value with `POST /infra/nodes`, `GET` and `DELETE
+  /infra/nodes/{id}` and `GET /infra/preflight`. It asks the Config Service for a grant each time, so
+  the status polls and the teardown that run with nobody signed in receive it too, also after a
+  restart. The Connection's binding and its use travel beside it as for any other kind, so in your
+  contract method `connections.current_connection()` is the binding (its `metadata` holds what
+  the Connection records beside the value, such as `region` and `endpoint_url`),
+  `connections.current_use()` the node and the person, and
+  `connections.current_credential("<service>")` the value. There is no resolver to register. Treat
+  a `None` credential as a call that may not act with that Connection. The worker answers 424
+  itself when a `SECRET` binding arrives without its value, or with a value granted for another
+  Connection or service.
+
+  A Connection is normally chosen when the node is created. A provider whose node types are things
+  that each have a credential of their own (a machine and its ssh key) can name them instead:
+  `CapabilitiesResponse(node_type_connections={node_type: connection_id})`. The host
+  creates a node of that type on the named Connection when the request names none, under a grant
+  for the person creating it; naming a Connection lends nobody its value. Let the person pick the
+  Connection on your page with `PLUGIN_API.chooseCredential("<service>")`, store the id it resolves,
+  and never the value.
+
+  Keep the value in memory and out of anything shared: not a command line, not a file, not
+  `os.environ`, not a log line or an error message. The host redacts it from a failed create's
+  error, and from nothing else.
 
 Environment variables per service, for a tool that reads only its variables:
 `connections.credential_environment(token)` returns them — `huggingface` → `HF_TOKEN`, `wandb` →

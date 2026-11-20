@@ -279,6 +279,21 @@ class TestRequiresConnection:
         assert CapabilitiesResponse.from_dict(wire).requires_connection is True
         assert CapabilitiesResponse.from_dict({"provider": "p"}).requires_connection is False
 
+    def test_node_type_connections_round_trips_and_is_omitted_when_empty(self) -> None:
+        assert "node_type_connections" not in CapabilitiesResponse(provider="p").to_dict()
+        wire = CapabilitiesResponse(provider="p", node_type_connections={"box": "conn-1"}).to_dict()
+        assert wire["node_type_connections"] == {"box": "conn-1"}
+        assert CapabilitiesResponse.from_dict(wire).node_type_connections == {"box": "conn-1"}
+        tolerant = CapabilitiesResponse.from_dict({
+            "provider": "p",
+            "node_type_connections": {"a": 1, "": "x", "b": " c "},
+        })
+        assert tolerant.node_type_connections == {"b": "c"}
+        assert (
+            CapabilitiesResponse.from_dict({"provider": "p", "node_type_connections": ["x"]}).node_type_connections
+            == {}
+        )
+
 
 class TestConnectionCheck:
     def test_default_reports_that_the_binding_resolved(self) -> None:
