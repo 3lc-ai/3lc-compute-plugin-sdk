@@ -17,8 +17,8 @@ dataclass must carry the common envelope fields the store manages:
 
 (``name: str`` is conventional for the UI but not required by the store.)
 
-Configs live under ``~/.3lc-plugin-configs/<plugin-id>/``. Pass ``legacy_dir``
-to lazily migrate a pre-standardization location on first construction.
+Configs live under a per-plugin directory within :func:`config_root`. Pass
+``legacy_dir`` to lazily migrate a pre-standardization location in the default store.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ from typing import Generic, TypeVar
 
 logger = logging.getLogger(__name__)
 
-#: Override for the root of all plugins' saved job configs; ``None`` means ``~/.3lc-plugin-configs``
-#: (see :func:`config_root`). A harness sets it for its lifetime.
+#: In-process override for :func:`config_root`. A harness sets it for its lifetime.
 CONFIG_ROOT: Path | None = None
+_CONFIG_DIR_ENV = "TLC_PLUGIN_CONFIG_DIR"
 
 
 class ConfigRootUnavailable(RuntimeError):
@@ -45,7 +45,11 @@ class ConfigRootUnavailable(RuntimeError):
 
 
 def config_root() -> Path:
-    """The root of all plugins' saved job configs: ``CONFIG_ROOT``, else ``~/.3lc-plugin-configs``.
+    """The root of all plugins' saved configs: ``CONFIG_ROOT``, ``TLC_PLUGIN_CONFIG_DIR``, ``~/.3lc-plugin-configs``.
+
+    The first that is set wins. ``TLC_PLUGIN_CONFIG_DIR`` is the environment variable a host sets so
+    that it and its workers keep their configs apart from other instances on the machine; a relative
+    value is resolved against the current directory.
 
     Resolved per call, not at import: a worker whose environment carries no home directory still
     imports and serves, and only a store it actually builds fails.
@@ -54,16 +58,18 @@ def config_root() -> Path:
         The config root.
 
     Raises:
-        ConfigRootUnavailable: When there is no override and the home directory cannot be resolved.
+        ConfigRootUnavailable: When neither override is set and the home directory cannot be resolved.
     """
     if CONFIG_ROOT is not None:
         return CONFIG_ROOT
+    if configured := os.environ.get(_CONFIG_DIR_ENV):
+        return Path(configured).expanduser().resolve()
     try:
         home = Path.home()
     except RuntimeError as exc:
         msg = (
             "Cannot place plugin configs: no home directory (set USERPROFILE on Windows, HOME elsewhere, "
-            "or point tlc_plugin_sdk.shared.config_store.CONFIG_ROOT at a directory)"
+            "or set TLC_PLUGIN_CONFIG_DIR to an absolute directory)"
         )
         raise ConfigRootUnavailable(msg) from exc
     return home / ".3lc-plugin-configs"
@@ -79,11 +85,11 @@ class PluginConfigStore(Generic[T]):
         config_cls: The plugin's config ``@dataclass`` (must have ``id`` /
             ``created`` / ``last_run`` fields). Instances are (de)serialized via
             :func:`dataclasses.asdict` and ``config_cls(**known_fields)``.
-        plugin_id: The plugin's manifest id; configs live under
-            ``~/.3lc-plugin-configs/<plugin_id>/`` (:func:`config_root`).
+        plugin_id: The plugin's manifest id, appended to :func:`config_root`.
         legacy_dir: Optional back-compat directory. If the standardized
             directory has no configs yet and ``legacy_dir`` holds some, they are
-            moved on construction (one-time, idempotent).
+            moved on construction (one-time, idempotent). An environment-selected
+            store skips this migration so existing configs stay in place.
 
     Raises:
         ConfigRootUnavailable: When the config root cannot be resolved (see :func:`config_root`).
@@ -99,7 +105,7 @@ class PluginConfigStore(Generic[T]):
         # Configs hold provider keys and tokens: owner-only directory and files.
         self._dir.mkdir(parents=True, exist_ok=True)
         _restrict(self._dir, 0o700)
-        if legacy_dir is not None:
+        if legacy_dir is not None and (CONFIG_ROOT is not None or not os.environ.get(_CONFIG_DIR_ENV)):
             self._migrate_legacy(Path(legacy_dir))
 
     # ── CRUD ─────────────────────────────────────────────────────────────

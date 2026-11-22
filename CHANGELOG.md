@@ -52,6 +52,9 @@ written for inline hosts need migrating.
   to clear an accepted job's draft without changing its saved preset.
 - Open Save as in a themed naming dialog while keeping the preset bar stable, with keyboard
   dismissal, focus restoration and visible save errors.
+- `config_store.config_root()` reads the `TLC_PLUGIN_CONFIG_DIR` environment variable, per call, after
+  the in-process `CONFIG_ROOT` override and before `~/.3lc-plugin-configs`, so a host can give its
+  workers their own saved-config root. A store under that root does not migrate a `legacy_dir`.
 
 ## [Unreleased]
 
