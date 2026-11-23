@@ -466,7 +466,8 @@
       return page + (query.toString() ? '?' + query.toString() : '') + (hash ? '#' + hash : '');
     }
     function toast(message, kind) { call('ui.toast', [String(message), kind || 'info']).catch(function () {}); }
-    // The Hub's yes/no, over the whole window: true when confirmed. Waits on the person, so no call deadline.
+    // The Hub's yes/no, over the whole window: true when confirmed. It waits on a person, so its deadline is
+    // long (10 minutes); past it the call rejects with `timeout` and the Hub closes the dialog.
     function confirm(title, body, options) {
       var opts = options || {};
       return call('ui.confirm', [String(title || ''), String(body || ''), { okLabel: String(opts.okLabel || ''), danger: opts.danger === true }], 600000)

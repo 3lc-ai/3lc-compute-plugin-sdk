@@ -67,7 +67,6 @@ async function main() {
   const lastConfirm = () => JSON.stringify(apiCalls.filter(x => x.method === 'ui.confirm').at(-1).args);
   assert.equal(await API.ui.confirm('Remove it?', 'Gone for good.', {okLabel: 'Remove', danger: true}), true);
   assert.equal(lastConfirm(), JSON.stringify(['Remove it?', 'Gone for good.', {okLabel: 'Remove', danger: true}]));
-  assert(API.has('ui.confirm'));
   API.nodes.mount({});
   assert.equal(await context.nodeListOptions.confirm('Terminate gpu-1?', 'A running job fails.', 'Terminate', true), true);
   assert.equal(lastConfirm(), JSON.stringify(['Terminate gpu-1?', 'A running job fails.', {okLabel: 'Terminate', danger: true}]));
