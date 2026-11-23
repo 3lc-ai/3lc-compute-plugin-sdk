@@ -283,3 +283,18 @@ and budget admission. This does not require one CPU thread per connection. Keep
 CPU/image processing in a separate bounded executor. Bind the pool on one event
 loop and close it when the job ends. Request cookies and authorization remain
 isolated between calls; transport reuse does not share a client session.
+
+## Generated Python isolation
+
+`tlc_plugin_sdk.agent_sandbox` (SDK 0.7.17) supplies the shared OS boundary for
+Assistant/Flow and Refine. `Policy.for_workspace(path)` limits access to runtime
+files and a task workspace. `wrap(argv, policy)` returns the command and mechanism
+(`bubblewrap`, `seatbelt`, or `none`). Callers must refuse `none`, use the
+credential-free `environment()`, set HOME/TMPDIR inside the workspace, and enforce
+timeouts and process-group cleanup. Never run generated code directly on failure.
+
+Use `read_private(workspace, relative_path, maximum_bytes)` for bounded regular-file
+results; it rejects symlinks (including directory components) and hardlinks.
+Keep all credentials and network transport in trusted parent code. The existing
+`data_broker`/`data_access` modules provide read-only native 3LC access through a
+bounded parent-side RPC channel; do not pass broker credentials into generated code.
