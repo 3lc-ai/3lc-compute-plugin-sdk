@@ -19,7 +19,7 @@
   // The calls every page may make, by their PLUGIN_API names (`has('http.request')`) and by the names
   // they travel under ('compute.request').
   var DEFAULT_CAPABILITIES = ['http.request', 'compute.request', 'jobs.cancel', 'jobs.confirmCancel', 'ui.toast',
-    'pickers.table', 'credentials.choose', 'storage.choose', 'nodes.create', 'run.plan', 'run.checkTable',
+    'ui.confirm', 'pickers.table', 'credentials.choose', 'storage.choose', 'nodes.create', 'run.plan', 'run.checkTable',
     'data.snapshot', 'nav.go', 'nav.open', 'sockets.ticket'];
   var TERMINAL = ['completed', 'failed', 'cancelled'];
 
@@ -466,6 +466,13 @@
       return page + (query.toString() ? '?' + query.toString() : '') + (hash ? '#' + hash : '');
     }
     function toast(message, kind) { call('ui.toast', [String(message), kind || 'info']).catch(function () {}); }
+    // The Hub's yes/no, over the whole window: true when confirmed. It waits on a person, so its deadline is
+    // long (10 minutes); past it the call rejects with `timeout` and the Hub closes the dialog.
+    function confirm(title, body, options) {
+      var opts = options || {};
+      return call('ui.confirm', [String(title || ''), String(body || ''), { okLabel: String(opts.okLabel || ''), danger: opts.danger === true }], 600000)
+        .then(function (answer) { return answer === true; });
+    }
 
     var api = {
       lifecycle: { onDispose: onDispose },
@@ -506,8 +513,10 @@
         create: function (providerId, request) { return call('nodes.create', [String(providerId), request || {}], 600000); },
         mount: function (element, options) {
           if (!nodeList) throw failure('unavailable', 'The node list is not available in this Hub.');
+          // The node list's Terminate asks through the Hub: the frame has no dialog of the Hub's own.
           var widget = nodeList.mount(element, { pluginId: init.pluginId, openNodes: !(options && options.openNodes === false),
-            openHistory: !!(options && options.openHistory) });
+            openHistory: !!(options && options.openHistory),
+            confirm: function (title, body, okLabel, danger) { return confirm(title, body, { okLabel: okLabel, danger: danger }); } });
           var unregister = onDispose(function () { widget.destroy(); });
           return { refresh: function () { return widget.refresh(); }, destroy: function () { unregister(); widget.destroy(); } };
         },
@@ -526,7 +535,7 @@
       },
       layout: { mode: init.layout === 'fill' ? 'fill' : 'flow' },
       format: { date: formatLocalDate },
-      ui: { toast: toast },
+      ui: { toast: toast, confirm: confirm },
       data: data,
       location: null,
       guide: null,
