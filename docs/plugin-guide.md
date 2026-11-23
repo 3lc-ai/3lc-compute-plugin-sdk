@@ -1735,6 +1735,7 @@ presets.init();
 - **The run body.** Send `project_config: Object.assign(collect(), { id: presets.presetId(), name: presets.presetName() })`. Both are set while the form is unchanged from a preset, so the job card can name it, and empty otherwise. A run never saves a preset.
 - **Accepted submission.** After receiving a valid job id, clear the form's run name and call `presets.submitted()` to remove that context's draft. Failed or cancelled submissions must leave it intact. The accepted job retains the full submitted configuration.
 - **Last use.** When a run sent with a preset's id finishes, stamp it: `config_store().update_last_run(config_id)`, best-effort, as the list shows it. A worker on another machine has its own store, so a run there leaves no stamp.
+- **Where saved configs live.** A `PluginConfigStore` keeps a plugin's configs in `<root>/<plugin-id>/`, where the root is `config_store.config_root()`: the `TLC_PLUGIN_CONFIG_DIR` environment variable when the host sets it, so several instances on one machine keep separate configs, else `~/.3lc-plugin-configs`. The host passes the variable to its workers; build stores through `PluginConfigStore` and never hard-code the path.
 
 `_tlcPluginConfig` (`shared.config_ui`), the earlier config bar whose Train saved into the selected config, is superseded by this; it stays for the plugins still on it. See `TlcPresetOptions` and `TlcPresetControl` in `plugin-api.d.ts`.
 
