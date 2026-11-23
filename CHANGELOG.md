@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - Unreleased
 
+- Parse plugin placement requirements for RAM, per-GPU memory and browser access.
+  Manifests with the legacy GPU flag still declare a GPU requirement when they omit the memory floor.
 - Add primary-table project transitions to the shared preset controller: derive the output
   project, retain same-project settings, reset defaults across projects with Undo, and preserve
   explicit saved setups. Scope drafts to the current source project and ignore stale/failed reads.
