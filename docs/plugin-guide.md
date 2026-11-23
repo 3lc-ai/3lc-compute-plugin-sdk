@@ -940,13 +940,16 @@ uses generic token wording. The harness validates that it is a string.
   that each have a credential of their own (a machine and its ssh key) can name them instead:
   `CapabilitiesResponse(node_type_connections={node_type: connection_id})`. The host
   creates a node of that type on the named Connection when the request names none, under a grant
-  for the person creating it; naming a Connection lends nobody its value. Let the person pick the
+  for the person creating it. The plugin chooses the Connection here, not the person creating the
+  node: they must be allowed to use it and the grant is recorded in their name, but they are not
+  asked which one. What lets your plugin have the value at all is the Connection's owner listing
+  the plugin on it, so naming a Connection your plugin is not listed on gets a refusal. Let the person pick the
   Connection on your page with `PLUGIN_API.chooseCredential("<service>")`, store the id it resolves,
   and never the value.
 
   Keep the value in memory and out of anything shared: not a command line, not a file, not
-  `os.environ`, not a log line or an error message. The host redacts it from a failed create's
-  error, and from nothing else.
+  `os.environ`, not a log line or an error message. The host masks it in the error body of a call
+  that carried it, and in nothing else your plugin writes.
 
 Environment variables per service, for a tool that reads only its variables:
 `connections.credential_environment(token)` returns them — `huggingface` → `HF_TOKEN`, `wandb` →
