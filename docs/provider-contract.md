@@ -1210,7 +1210,9 @@ ledger cannot be a local file there.
 
 **Recommended: both, each for what it is good at.** The owner `TXT` record is the claim and the
 source of truth for whether a name is this launcher's: its value is
-`3lc-owner:v1:<launcher id>:<deployment id>`. It is written alone at allocation, so the claim
+`3lc-owner:v1:<launcher id>:<deployment id>`, each part written as a truncated SHA-256 digest
+(of the launcher id; of the launcher id with the deployment id), so the launcher recognises its
+own claims and which deployment each is for while the zone shows neither id. It is written alone at allocation, so the claim
 holds through a long prepare, and deleted last, with the names. The deployment record holds the
 list of records written, so a delete does not need to search the zone. A launcher without a
 Config Service keeps the list on its own node record (`compute:infra/manager.py:3800-3801`).
