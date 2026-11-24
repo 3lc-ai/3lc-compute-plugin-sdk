@@ -273,6 +273,11 @@ def _ambient_only(path: str) -> bool:
 # ── The report ─────────────────────────────────────────────────────────────────
 
 
+#: The bootstrap token the deployment checks send: shaped like one the Config Service mints, so a provider
+#: that refuses anything else as a token still launches.
+_CONFORMANCE_BOOT_TOKEN = "tlc_boot_conformance_bootstrap_token"
+
+
 @dataclass
 class Check:
     """One conformance check."""
@@ -948,7 +953,7 @@ class _Run:
             bootstrap=DeploymentBootstrap(
                 record_id="conformance-record",
                 config_service_url="https://config.invalid",
-                token="conformance-bootstrap-token",
+                token=_CONFORMANCE_BOOT_TOKEN,
             ),
             ingress_key="",
             placement=placement,
@@ -976,7 +981,7 @@ class _Run:
             "deployments: a deployment named by address needs deployments.sslip",
             self.caps.deployments is not None and self.caps.deployments.sslip,
         )
-        self.check("deployments: the bootstrap token is in no answer", "conformance-bootstrap-token" not in r.text)
+        self.check("deployments: the bootstrap token is in no answer", _CONFORMANCE_BOOT_TOKEN not in r.text)
         r = self.call("POST", "/infra/deployments", json_body=request_c.to_dict())
         again = DeploymentResponse.from_dict(self.body(r))
         self.check(
