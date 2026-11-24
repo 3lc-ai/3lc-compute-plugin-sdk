@@ -2003,6 +2003,32 @@ issues tokens, I uses a test issuer: a signing key and a discovery document serv
 storage container in the sandbox, the token minted by a test helper. Until C lands, J reads back
 `addresses` and names the VM under `sslip`.
 
+**AWS deployments as built.** The AWS plugin lists every deployment operation and `dns`, and none
+of the transitional ones, so a launcher drives it through the typed path.
+
+- In a launcher's zone a deployment is always behind the shared ingress:
+  `deployments = {certificate: "provider", shared_ingress: true, sslip: true}`. `check_deployment`
+  answers `ingress_key`, the 20 hexadecimal characters of a digest over the account, region, VPC,
+  launcher principal, zone id and zone name; the launcher's namespace `i-<ingress_key>.<zone>` and
+  the names `os-<label>` and `compute-<label>` under it are the ones existing deployments have. A
+  create with `hostnames` outside that namespace is refused. Without a zone the deployment is named
+  by its public IPv4 address under sslip.io and obtains its certificates on the machine.
+- `prepare_deployment` reads or creates the CloudFormation stack `ThreeLC-ingress-<ingress_key>`,
+  one step per call, and answers `pending` with the certificate's `CNAME` validation records until
+  the stack is complete. The prepare and create requests carry the namespace and the key but not
+  the zone, so the provider does not recompute the key: it requires the namespace to be the key's,
+  and refuses a stack whose tags name another launcher principal or another namespace.
+- `create_deployment` answers the load balancer's DNS name as a `hostname` address, which the
+  launcher writes as `CNAME` records, or the instance's public address as `ipv4`.
+- The instance carries `3lc-id` = `deployment_id`, and `3lc` = `workspace` rather than
+  `deployment`: the IAM policies of existing Connections scope what the Connection may stop and
+  terminate by that value.
+- `seed_provider_configs` and `public` are accepted and not acted on by the provider.
+- A deployment created while the plugin wrote its own records carries them in its instance tags
+  and its routing stack; `delete_deployment` removes those records with the host's own identity
+  before the routing stack and the instance, and `sweep_deployments` releases an Elastic IP whose
+  instance is gone after removing the `A` records its tags name. Neither reads the launcher's ledger.
+
 ### 6.4 Interfaces between packages
 
 - **A to everyone: the wire.** A publishes, with its first staged build, one JSON fixture per
