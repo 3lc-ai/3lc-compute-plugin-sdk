@@ -7,6 +7,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from tlc_plugin_sdk.infrastructure import (
     DeploymentHostnames,
     DeploymentRequest,
     DeploymentStorage,
+    deployment_boot,
 )
 from tlc_plugin_sdk.infrastructure.deployment_boot import (
     BOOT_STATUS_FILE,
@@ -263,11 +265,56 @@ def test_wheels_are_downloaded_with_the_providers_command_and_fall_back_to_the_s
         _render(wheel_urls=["s3://bucket/c.whl"])
 
 
-def test_the_health_wait_is_opt_in_and_never_fails_the_boot() -> None:
+def test_the_health_wait_is_opt_in() -> None:
     script = _render(wait_for_health=True)
     assert 'stage="waiting for the services to answer"' in script
     assert "for port in 5015 5020; do" in script
-    assert f'health=slow: nothing answered on port $port in 300s" >> {BOOT_STATUS_FILE}' in script
     assert script.index("waiting for the services to answer") < script.index('report "boot finished"')
     assert "waiting for the services to answer" not in _render()
     _assert_bash(script)
+
+
+def _run_health_block(tmp_path: Path, *, curl_exit: int) -> tuple[int, str, str]:
+    """Run the health wait with ``curl``, ``sleep`` and ``journalctl`` stubbed; return (exit, console, status)."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash")
+    console, status = tmp_path / "console", tmp_path / "status"
+    block = (
+        deployment_boot
+        ._health_block(True)
+        .replace("> /dev/console", f">> {console}")  # a device: a file stands in, appended to
+        .replace(BOOT_STATUS_FILE, str(status))
+    )
+    prelude = f"""set -e
+report() {{ printf '3LC_BOOT %s\\n' "$1" >> {console}; }}
+curl() {{ return {curl_exit}; }}
+sleep() {{ :; }}
+journalctl() {{ echo "2026-11-24T10:00:00+0000 vm 3lc[7]: boom TLC_API_KEY=tlc_svc_secret"; }}
+"""
+    script = prelude + block + 'report "boot finished"\n'
+    result = subprocess.run([bash], input=script, text=True, capture_output=True, check=False)
+
+    def read(path: Path) -> str:
+        return path.read_text() if path.exists() else ""
+
+    return result.returncode, read(console), read(status)
+
+
+def test_services_that_never_answer_fail_the_boot_with_their_journals(tmp_path: Path) -> None:
+    code, console, status = _run_health_block(tmp_path, curl_exit=7)
+    assert code == 1
+    assert "3LC_BOOT failed: waiting for the services to answer (exit 1)" in console
+    assert "boot finished" not in console
+    assert "3LC_JOURNAL_BEGIN 3lc-object-service unanswered" in console
+    assert "3LC_JOURNAL_END 3lc-compute" in console
+    assert "3LC_JOURNAL 3lc-compute 2026-11-24T10:00:00+0000 vm 3lc[7]: boom" in console
+    assert "tlc_svc_secret" not in console
+    assert "port(s) 5015 5020" in status
+
+
+def test_services_that_answer_finish_the_boot(tmp_path: Path) -> None:
+    code, console, _ = _run_health_block(tmp_path, curl_exit=0)
+    assert code == 0
+    assert console.endswith("3LC_BOOT boot finished\n")
+    assert "3LC_JOURNAL" not in console

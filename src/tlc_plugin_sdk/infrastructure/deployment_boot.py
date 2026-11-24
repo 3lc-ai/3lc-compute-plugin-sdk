@@ -340,6 +340,13 @@ SERVICE_UNITS = ("3lc-object-service", "3lc-compute")
 JOURNAL_WATCH_PATH = "/usr/local/bin/3lc-journal-watch"
 JOURNAL_WATCH_UNIT = "3lc-journal-watch"
 _WATCH_EOF = "__3LC_WATCH__"
+#: Shell function that masks secrets in journal lines before they reach the console.
+_REDACT_FN = r"""redact() {
+  sed -E -e 's/tlc_svc_[A-Za-z0-9_-]+/tlc_svc_REDACTED/g' \
+    -e 's/([A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*=)[^[:space:]]*/\1REDACTED/gI' \
+    -e 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1REDACTED/gI'
+}
+"""
 # Plain text (not an f-string): the shell's ``$`` and braces stay as written. Bounds, so a restart
 # loop cannot flood the console (which keeps only its last 64 KB anyway): at most MAX_DUMPS
 # dumps per unit of TAIL_LINES lines each, a unit's next dump only after RESTARTS_BETWEEN further
@@ -353,12 +360,7 @@ RESTARTS_BETWEEN=20
 READY_SECONDS=300
 WATCH_SECONDS=3600
 # Journal lines only (never an environment file), secrets masked before they reach the console.
-redact() {
-  sed -E -e 's/tlc_svc_[A-Za-z0-9_-]+/tlc_svc_REDACTED/g' \
-    -e 's/([A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*=)[^[:space:]]*/\1REDACTED/gI' \
-    -e 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1REDACTED/gI'
-}
-declare -A dumps next failed_seen slow_seen
+@REDACT@declare -A dumps next failed_seen slow_seen
 for u in $UNITS; do dumps[$u]=0; next[$u]=$FIRST_DUMP_AT; done
 dump() {
   local u=$1 reason=$2
@@ -394,7 +396,7 @@ while [ $((SECONDS - start)) -lt $WATCH_SECONDS ]; do
   [ "$active" = 1 ] || break
   sleep 10
 done
-""".replace("@UNITS@", " ".join(SERVICE_UNITS))
+""".replace("@UNITS@", " ".join(SERVICE_UNITS)).replace("@REDACT@", _REDACT_FN)
 
 _JOURNAL_WATCH_UNIT = """[Unit]
 Description=3LC service journal watcher (boot console diagnostics)
@@ -509,8 +511,9 @@ def render_deployment_script(
         wait_for_dns: With ``machine`` and names in a zone, wait up to five minutes for each name to
             resolve to the machine's public address before Caddy asks for certificates, so the first
             attempt is not spent on a name that does not exist yet. Caddy retries by itself afterwards.
-        wait_for_health: Wait up to five minutes for both services to answer on the machine before the
-            script reports the boot finished; a service that does not is recorded in the boot status file.
+        wait_for_health: Wait up to five minutes per service for both to answer on the machine before the
+            script reports the boot finished; one that never answers fails the boot, with each service's
+            journal tail on the console.
 
     Returns:
         The script, starting with ``#!/bin/bash``.
@@ -697,19 +700,39 @@ stage="installing the services"
 
 
 def _health_block(enabled: bool) -> str:
-    """Shell that waits for both services to answer HTTP on the machine; it never fails the boot."""
+    """Shell that waits up to five minutes per service for both to answer HTTP on the machine.
+
+    A service that never answers fails the boot: the tail of each service's journal goes to the console
+    between ``3LC_JOURNAL_BEGIN <unit> unanswered`` / ``3LC_JOURNAL_END`` markers, then
+    ``3LC_BOOT failed: waiting for the services to answer (exit 1)``, and the script stops before
+    ``boot finished``.
+    """
     if not enabled:
         return ""
+    units = " ".join(SERVICE_UNITS)
     return f"""stage="waiting for the services to answer"
 report "$stage"
+unanswered=""
 for port in {OBJECT_SERVICE_PORT} {COMPUTE_SERVICE_PORT}; do
   answered=0
   for attempt in $(seq 1 60); do
     if curl -s -o /dev/null --max-time 5 "http://127.0.0.1:$port/"; then answered=1; break; fi
     sleep 5
   done
-  [ "$answered" = 1 ] || echo "health=slow: nothing answered on port $port in 300s" >> {BOOT_STATUS_FILE}
+  [ "$answered" = 1 ] || unanswered="$unanswered $port"
 done
+if [ -n "$unanswered" ]; then
+  echo "health=failed: nothing answered on port(s)$unanswered in 300s" >> {BOOT_STATUS_FILE}
+{_REDACT_FN}  for u in {units}; do
+    {{
+      printf '3LC_JOURNAL_BEGIN %s unanswered\\n' "$u"
+      journalctl -u "$u" -n 40 --no-pager -o short-iso 2>&1 | redact | cut -c1-200 | sed "s/^/3LC_JOURNAL $u /"
+      printf '3LC_JOURNAL_END %s\\n' "$u"
+    }} > /dev/console 2>/dev/null || true
+  done
+  report "failed: $stage (exit 1)"
+  exit 1
+fi
 """
 
 
