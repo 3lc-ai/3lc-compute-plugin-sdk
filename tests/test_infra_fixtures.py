@@ -122,7 +122,29 @@ def test_the_declared_capabilities_are_valid_and_say_what_their_provider_is(stem
         )
         assert caps.host is not None and caps.host.matches == {}
         assert caps.permissions.storage is not None and caps.permissions.storage.access_modes == ["read", "read_write"]
-        assert [m.available for m in caps.access_methods] == [True, False]
+        assert [m.available for m in caps.access_methods] == [True, True]
+        keyless = caps.access_methods[1]
+        assert keyless.grants and [f.key for f in keyless.fields] == ["name_prefix"]
+        assert keyless.identity_token is not None and keyless.identity_token.audience == "api://AzureADTokenExchange"
+        assert [f.key for f in keyless.paste_back] == [
+            "location",
+            "control_client_id",
+            "deployment_identity_id",
+            "node_identity_id",
+            "node_identity_client_id",
+            "storage_account",
+            "container",
+            "subnet_id",
+            "issuer",
+            "subject",
+        ]
+        assert caps.deployments is not None
+        assert (caps.deployments.certificate, caps.deployments.shared_ingress, caps.deployments.sslip) == (
+            "machine",
+            False,
+            True,
+        )
+        assert {"deployment.options", "deployment.check", "deployment.list", "deployment.sweep"} <= set(caps.operations)
     if caps.provider == "runpod":
         assert caps.account is not None and caps.account.fields == []
         assert kinds == ["SECRET"] and all(f.secret for f in caps.access_methods[0].fields)

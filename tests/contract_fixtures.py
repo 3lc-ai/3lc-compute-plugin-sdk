@@ -64,6 +64,7 @@ from tlc_plugin_sdk.infrastructure import (
     GrantRequest,
     GrantUpdateRequest,
     HostIdentity,
+    IdentityTokenSpec,
     InfrastructurePlugin,
     Locations,
     NodeAccessRequest,
@@ -602,7 +603,7 @@ class _AwsDeployments(_StorageDeclared, NodeProvider, DeploymentProvider, Catalo
     caps = _aws(DeploymentCapabilities(certificate="provider", shared_ingress=True, sslip=True))
 
 
-class _Azure(_StorageDeclared, NodeProvider, CatalogFacet):
+class _Azure(_StorageDeclared, NodeProvider, DeploymentProvider, CatalogFacet):
     flags = StorageCapabilities(kind="container", label="Azure storage container", bundle=False)
     caps = CapabilitiesResponse(
         provider="azure",
@@ -631,17 +632,42 @@ class _Azure(_StorageDeclared, NodeProvider, CatalogFacet):
                 kind="AMBIENT",
                 label="Uses this machine's own sign-in",
                 summary="An az login session on this machine, or the managed identity of the VM it runs on.",
-                purposes=["nodes", "storage"],
+                purposes=["deployments", "nodes", "storage"],
                 preferred=True,
             ),
             AccessMethod(
                 kind="KEYLESS",
                 label="Uses access you grant to 3LC",
-                summary="You create a managed identity that trusts this Compute Service. No key is stored.",
-                available=False,
-                unavailable_reason="This Compute Service cannot yet prove its identity to Azure.",
+                summary=(
+                    "You deploy a template that creates managed identities trusting tokens 3LC signs for this "
+                    "Connection. No key is stored."
+                ),
+                purposes=["deployments", "nodes", "storage"],
+                grants=True,
                 fields=[
-                    FormField(key="identity_name", label="Identity name", example="3lc-connection", max_length=128)
+                    FormField(
+                        key="name_prefix",
+                        label="Name prefix",
+                        help="What the template's identities, network and storage are named after.",
+                        example="tlc",
+                        default="tlc",
+                        required=False,
+                        pattern=r"^[a-z][a-z0-9-]{1,19}$",
+                        max_length=20,
+                    )
+                ],
+                identity_token=IdentityTokenSpec(audience="api://AzureADTokenExchange"),
+                paste_back=[
+                    FormField(key="location", label="Location", example="eastus", max_length=64),
+                    FormField(key="control_client_id", label="Control identity client ID", max_length=36),
+                    FormField(key="deployment_identity_id", label="Deployment identity", max_length=512),
+                    FormField(key="node_identity_id", label="Node identity", max_length=512),
+                    FormField(key="node_identity_client_id", label="Node identity client ID", max_length=36),
+                    FormField(key="storage_account", label="Storage account", example="tlcabc123", max_length=24),
+                    FormField(key="container", label="Container", example="tlc", max_length=63),
+                    FormField(key="subnet_id", label="Subnet", max_length=512),
+                    FormField(key="issuer", label="Issuer", example="https://issuer.3lc.ai", max_length=600),
+                    FormField(key="subject", label="Subject", example="connection:<id>", max_length=600),
                 ],
             ),
         ],
@@ -662,6 +688,7 @@ class _Azure(_StorageDeclared, NodeProvider, CatalogFacet):
             pricing=["on_demand", "spot"],
             storage_access=["identity"],
         ),
+        deployments=DeploymentCapabilities(certificate="machine", shared_ingress=False, sslip=True),
     )
 
 
@@ -689,7 +716,18 @@ _connect(
     "list_deployments",
     "sweep_deployments",
 )
-_connect(_Azure, "node_diagnostics", "verify_connection", "connection_node_access", "storage_candidates")
+_connect(
+    _Azure,
+    "node_diagnostics",
+    "describe_grant",
+    "verify_connection",
+    "connection_node_access",
+    "storage_candidates",
+    "deployment_options",
+    "check_deployment",
+    "list_deployments",
+    "sweep_deployments",
+)
 
 
 class _RunPod(_StorageDeclared, NodeProvider, CatalogFacet):

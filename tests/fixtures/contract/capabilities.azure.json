@@ -75,6 +75,7 @@
         "label": "Uses this machine's own sign-in",
         "summary": "An az login session on this machine, or the managed identity of the VM it runs on.",
         "purposes": [
+          "deployments",
           "nodes",
           "storage"
         ],
@@ -88,32 +89,166 @@
       {
         "kind": "KEYLESS",
         "label": "Uses access you grant to 3LC",
-        "summary": "You create a managed identity that trusts this Compute Service. No key is stored.",
+        "summary": "You deploy a template that creates managed identities trusting tokens 3LC signs for this Connection. No key is stored.",
         "purposes": [
           "deployments",
           "nodes",
           "storage"
         ],
-        "available": false,
-        "unavailable_reason": "This Compute Service cannot yet prove its identity to Azure.",
+        "available": true,
+        "unavailable_reason": "",
         "preferred": false,
         "fields": [
           {
-            "key": "identity_name",
-            "label": "Identity name",
+            "key": "name_prefix",
+            "label": "Name prefix",
+            "kind": "text",
+            "required": false,
+            "secret": false,
+            "help": "What the template's identities, network and storage are named after.",
+            "example": "tlc",
+            "pattern": "^[a-z][a-z0-9-]{1,19}$",
+            "max_length": 20,
+            "choices": [],
+            "default": "tlc"
+          }
+        ],
+        "grants": true,
+        "identity_token": {
+          "audience": "api://AzureADTokenExchange"
+        },
+        "paste_back": [
+          {
+            "key": "location",
+            "label": "Location",
             "kind": "text",
             "required": true,
             "secret": false,
             "help": "",
-            "example": "3lc-connection",
+            "example": "eastus",
             "pattern": "",
-            "max_length": 128,
+            "max_length": 64,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "control_client_id",
+            "label": "Control identity client ID",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "",
+            "pattern": "",
+            "max_length": 36,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "deployment_identity_id",
+            "label": "Deployment identity",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "",
+            "pattern": "",
+            "max_length": 512,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "node_identity_id",
+            "label": "Node identity",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "",
+            "pattern": "",
+            "max_length": 512,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "node_identity_client_id",
+            "label": "Node identity client ID",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "",
+            "pattern": "",
+            "max_length": 36,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "storage_account",
+            "label": "Storage account",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "tlcabc123",
+            "pattern": "",
+            "max_length": 24,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "container",
+            "label": "Container",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "tlc",
+            "pattern": "",
+            "max_length": 63,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "subnet_id",
+            "label": "Subnet",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "",
+            "pattern": "",
+            "max_length": 512,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "issuer",
+            "label": "Issuer",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "https://issuer.3lc.ai",
+            "pattern": "",
+            "max_length": 600,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "subject",
+            "label": "Subject",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "connection:<id>",
+            "pattern": "",
+            "max_length": 600,
             "choices": [],
             "default": ""
           }
-        ],
-        "grants": false,
-        "paste_back": []
+        ]
       }
     ],
     "host": {
@@ -154,6 +289,11 @@
       ],
       "type_connections": {}
     },
+    "deployments": {
+      "certificate": "machine",
+      "shared_ingress": false,
+      "sslip": true
+    },
     "storage": {
       "kind": "container",
       "label": "Azure storage container",
@@ -167,6 +307,7 @@
       "rename": true
     },
     "operations": [
+      "connection.grant",
       "connection.verify",
       "connection.node_access",
       "storage.candidates",
@@ -177,6 +318,13 @@
       "node.diagnostics",
       "catalog",
       "catalog.locations",
+      "deployment.options",
+      "deployment.check",
+      "deployment.create",
+      "deployment.state",
+      "deployment.delete",
+      "deployment.list",
+      "deployment.sweep",
       "storage"
     ]
   }

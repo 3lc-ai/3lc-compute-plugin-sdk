@@ -1841,8 +1841,8 @@ holds the launcher's record ledger (2.6).
 | Operation | Azure |
 |---|---|
 | `capabilities.account` | `fields`: `tenant_id`, `subscription_id`, `resource_group`. `defaults`: `location` |
-| `AMBIENT` method | Available when the Azure credential chain finds a sign-in (an `az login` session, or a managed identity). `purposes`: nodes, storage. The plugin opts its own client and the 3LC core into the CLI sign-in. With the host's built-in own-identity Connection the account comes from the plugin's settings. |
-| `KEYLESS` method | `fields`: `name_prefix`. `identity_token.audience` `api://AzureADTokenExchange`. `paste_back`: the template's `connection` output less the account fields (`location`, `control_client_id`, `deployment_identity_id`, `node_identity_id`, `node_identity_client_id`, `storage_account`, `container`, `subnet_id`, `issuer`, `subject`). Offered by the host only when its Config Service mints tokens. |
+| `AMBIENT` method | Available when the Azure credential chain finds a sign-in (an `az login` session, or a managed identity). `purposes`: deployments, nodes, storage. The plugin opts its own client and the 3LC core into the CLI sign-in. With the host's built-in own-identity Connection the account comes from the plugin's settings. |
+| `KEYLESS` method | `grants = true`. `fields`: `name_prefix`. `identity_token.audience` `api://AzureADTokenExchange`. `paste_back`: the template's `connection` output less the account fields (`location`, `control_client_id`, `deployment_identity_id`, `node_identity_id`, `node_identity_client_id`, `storage_account`, `container`, `subnet_id`, `issuer`, `subject`). Offered by the host only when its Config Service mints tokens. |
 | `host` | `matches = {}`: no host principal; the Config Service decides which host may use a Connection. `deployment_of` on a deployment VM |
 | `describe_grant` | `files`: a per-Connection template (issuer and subject as parameter defaults) that creates the control, deployment and node identities, the federated credential, the network (subnet with its security group, the deployment's public IP), a storage account without shared-key access and its container, and the role assignments: Virtual Machine Contributor on the group (control, deployment), Managed Identity Operator on the identities each may attach, Storage Blob Data Contributor on the container; no Network Contributor. `command`: `az deployment group create ...`. A "Deploy to Azure" link only when the host serves the template at a URL (the plugin's `grant_template_url` setting). |
 | `prepare_grant_update` | Not implemented. An update is `describe_grant(action="update")`: the same template redeployed. |
@@ -1853,10 +1853,13 @@ holds the launcher's record ledger (2.6).
 | Resolver | Registered with `token_audience="api://AzureADTokenExchange"`. Exchange of the pushed identity token for an ARM token (a storage token on demand); returns the plugin's own credential class, an Azure `TokenCredential`. The exchanged token lives up to 24 hours and cannot be revoked; the exchange is retried only on `AADSTS700213` (right after a grant) and `AADSTS7000272` (right after a key rotation) |
 | `create_node` | VM with the node identity attached at create, the agent installed by cloud-init, `AZURE_CLIENT_ID` set on the machine so workers pick that identity; `storage_access = "identity"`; tags as in 2.4 |
 | `catalog`, `locations` | VM sizes with retail prices and per-family quota; `unavailable_reason` names a zero quota; locations where the size is offered |
+| `capabilities.deployments` | `certificate = "machine"`, `shared_ingress = false`, `sslip = true`; operations `deployment.options`, `check`, `create`, `state`, `delete`, `list`, `sweep` |
 | `deployment_options` | `location`, then `virtual_network`, then `subnet` |
 | `check_deployment` | Quota and placement; `ingress_key = ""` |
 | `prepare_deployment` | Not implemented |
 | `create_deployment` | A public IP and a VM with the deployment identity; `addresses` is the public IPv4; `certificate = "machine"`; `sslip = true` |
+| `deployment_state` | The VM's state; with `diagnostics`, the boot script's stages from the serial console, and a failed boot's stage with each service's journal tail |
+| `list_deployments` | VMs carrying the `3lc-id` tag, by owner |
 | `delete_deployment`, `sweep_deployments` | Delete the VM, disk, NIC and public IP by the `3lc-id` tag; sweep releases untracked ones |
 | `StorageFacet` | Containers under storage accounts in the resource group |
 | `DnsFacet` | Not implemented; a launcher with an Azure DNS zone would need it |
