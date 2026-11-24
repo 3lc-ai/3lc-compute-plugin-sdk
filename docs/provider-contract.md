@@ -1,7 +1,3 @@
----
-orphan: true
----
-
 # Infrastructure provider contract
 
 **Status: the SDK part is built; the rest is a proposal.** This specifies contract generation 2
@@ -16,6 +12,9 @@ The contract serves three goals a person has on any cloud: connect to cloud stor
 node, start a managed deployment. A fourth group, connect an account, is what the other three
 stand on. Everything above the plugin (host, Hub, Config Service) handles provider values as data
 it stores and shows and never interprets.
+
+A provider author starts from the plugin guide, [Which methods to write](plugin-guide.md#which-methods-to-write):
+the methods for nodes only, for nodes and connect, and for deployments, with the test to run.
 
 Section 2 is the minimal 0.8: what the first SDK package builds. Section 2.9 specifies what is
 added later, each piece with the package that needs it.

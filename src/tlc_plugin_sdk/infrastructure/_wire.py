@@ -82,17 +82,6 @@ def _str_list(value: Any) -> list[str]:
     return [str(v) for v in value if v is not None and str(v).strip()]
 
 
-def _str_map(value: Any) -> dict[str, str]:
-    """A ``{name: value}`` object's entries whose name and value are both non-blank strings."""
-    if not isinstance(value, Mapping):
-        return {}
-    return {
-        k.strip(): v.strip()
-        for k, v in value.items()
-        if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip()
-    }
-
-
 def _int_list(value: Any) -> list[int]:
     out: list[int] = []
     if isinstance(value, (list, tuple)):
@@ -117,10 +106,6 @@ def _str_dict(value: Any) -> dict[str, str]:
 
 def _any_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _opt_dict(value: Any) -> dict[str, Any] | None:
-    return dict(value) if isinstance(value, Mapping) else None
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

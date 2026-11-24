@@ -30,8 +30,9 @@ them; until then it is published only to the 3LC staging index, so a plain `pip 
     `get_ui_fragment` (and `compute` if you expose a synchronous endpoint) and `run_job` for
     long-running work; lifecycle hooks ship as safe defaults.
   - **`InfrastructurePlugin`** (`tlc_plugin_sdk.infrastructure`, manifest `kind =
-    "infrastructure"`) for providers that create remote nodes and workspaces: a typed
-    create / state / delete contract plus opt-in facets for storage, catalogs and workspaces.
+    "infrastructure"`) for providers that let 3LC into a cloud account: typed capabilities plus
+    opt-in groups for nodes, deployments, storage, catalogs and DNS, specified in
+    `docs/provider-contract.md`.
 
   There is no `register()` to call — a plugin's metadata lives in its `plugin.toml` manifest (or
   a `[tool.tlc-compute]` table in `pyproject.toml`), and the Hub discovers it from there.

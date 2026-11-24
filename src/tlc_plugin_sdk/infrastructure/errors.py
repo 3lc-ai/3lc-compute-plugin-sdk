@@ -11,20 +11,18 @@ can do about it. Any other exception answers 502 with ``code = "provider_error"`
 :meth:`~tlc_plugin_sdk.infrastructure.InfrastructurePlugin.describe_error` makes of it, never an
 opaque 500: the host writes the sentence on the node record.
 
-==========================  ======  =========================  ==========================================
-Class                       Status  ``code``                   What a host does
-==========================  ======  =========================  ==========================================
-:class:`InvalidRequest`     400     ``invalid_request``        reports
-:class:`PermissionDenied`   403     ``permission_denied``      reports; permanent until granted
-:class:`NotFound`           404     ``not_found``              reports
-:class:`NotConfigured`      409     ``not_configured``         reports
-:class:`Conflict`           409     ``conflict``               reports
-``CredentialUnavailable``   424     ``credential_unavailable`` reports
-:class:`CredentialExpired`  424     ``credential_expired``     asks for a fresh grant, repeats the call once
-:class:`RateLimited`        429     ``rate_limited``           repeats after ``retry_after_s``, at most 3 times
-:class:`NotSupported`       501     ``not_supported``          reports
-:class:`ProviderError`      502     ``provider_error``         reports
-==========================  ======  =========================  ==========================================
+- :class:`InvalidRequest`: 400, ``invalid_request``. The host reports it.
+- :class:`PermissionDenied`: 403, ``permission_denied``. The host reports it; permanent until granted.
+- :class:`NotFound`: 404, ``not_found``. The host reports it.
+- :class:`NotConfigured`: 409, ``not_configured``. The host reports it.
+- :class:`Conflict`: 409, ``conflict``. The host reports it.
+- ``CredentialUnavailable``: 424, ``credential_unavailable``. The host reports it.
+- :class:`CredentialExpired`: 424, ``credential_expired``. The host asks for a fresh grant and
+  repeats the call once.
+- :class:`RateLimited`: 429, ``rate_limited``. The host repeats the call after ``retry_after_s``,
+  at most three times.
+- :class:`NotSupported`: 501, ``not_supported``. The host reports it.
+- :class:`ProviderError`: 502, ``provider_error``. The host reports it.
 
 ``CredentialUnavailable`` lives in :mod:`tlc_plugin_sdk.connections`, where a resolver raises it.
 """
