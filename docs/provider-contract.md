@@ -1076,6 +1076,17 @@ The launch, as the launcher runs it:
    writes its records (2.6) and records them against the deployment. With
    `certificate == "machine"` the machine requests its certificates itself once its names
    resolve to it, so its startup must wait for that rather than fail on the first attempt.
+   What the machine runs at first boot is the SDK's
+   `infrastructure.deployment_boot.render_deployment_script(request, ...)`, one script for every
+   provider: `3LC_BOOT <stage>` lines on the console, `uv` and the virtualenv, the service packages
+   from `compute_spec` and the index settings in `env`, the token redeemed for the two service keys
+   (nothing redeemed when `record_id` and `token` are empty), the two service units with their
+   environment, and Caddy for the hostnames. A provider supplies what its cloud decides: the
+   identity environment, its storage schemes, the command that prints the machine's public
+   address, the command that downloads a storage URL with the machine's identity, lines of its
+   own before the install and after the services start, and whether TLS ends on the machine
+   (waiting for its names to resolve to it before the first certificate request) or at a load
+   balancer in front of it.
    `failure` set means resources exist and the launch did not complete: the launcher saves its
    report, removes the records and deletes (`compute:infra/manager.py:3821-3823`).
 6. **Readiness** is the launcher's: both `endpoints` answer

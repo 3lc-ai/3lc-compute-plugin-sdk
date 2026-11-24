@@ -832,6 +832,51 @@ and reports the addresses live deployments hold. A sweep never touches DNS.
 The bootstrap token in `request.bootstrap.token` is the one secret of the launch: put it in the
 machine's startup data and keep nothing. The SDK scrubs it from error answers.
 
+#### The boot script
+
+What a deployment's machine runs at first boot is the same on every cloud, so the SDK renders it:
+`tlc_plugin_sdk.infrastructure.deployment_boot.render_deployment_script(request, ...)` returns the
+bash for an Ubuntu machine, to pass as the machine's startup data (user data, custom data). Run as
+root, it:
+
+- reports its progress on the console as `3LC_BOOT <stage>` lines (`3LC_BOOT failed: <stage> (exit N)`
+  when a step fails, `3LC_BOOT boot finished` at the end), logs to `/var/log/3lc-workspace-boot.log`
+  and records `services=`, `bootstrap=`, `tls=`, `dns=` and `health=` lines in `/etc/3lc/boot-status`;
+- installs `uv`, a virtualenv at `/opt/3lc`, and `3lc` with `request.compute_spec` (else your
+  `default_compute_spec`) and your `extra_specs`, from the indexes `request.env` names
+  (`TLC_NODE_PIP_INDEX_URLS`, with the `TLC_NODE_PIP_INDEX_<NAME>_URL` / `_USERNAME` / `_PASSWORD` of
+  an index that needs credentials, `TLC_NODE_CORE_SPEC` for the core to install, and
+  `TLC_NODE_STAGING_CATALOG=1` to have the deployment install plugins from the staging index);
+- writes the services' environment to `/etc/3lc/env`: `request.env` under your `identity_env`, the
+  mode, `request.plugins`, the storage root and scan folders, without anything that is the
+  launcher's own (its root, scan folders, allowed URLs, API key, node-agent settings);
+- redeems `request.bootstrap.token` at the Config Service for the two service keys, each written to
+  its service's own environment file; with `record_id` and `token` empty it redeems nothing;
+- starts the Object Service (port 5015) and the Compute Service (port 5020) as systemd units, and a
+  watcher that writes a failing unit's journal tail to the console between `3LC_JOURNAL_BEGIN` and
+  `3LC_JOURNAL_END`;
+- installs Caddy in front of both for the request's hostnames.
+
+What differs per cloud is a parameter:
+
+| Parameter | What you supply |
+|---|---|
+| `identity_env` | Environment that tells the services which identity and location the machine has (`AWS_DEFAULT_REGION`, `AZURE_CLIENT_ID`) |
+| `storage_schemes`, `confine_object_service` | Your object store's URL schemes (`"s3://"`, `"abfs://"`): a full deployment's Object Service is bound to them and to the deployment's local project roots |
+| `public_address_command` | Shell that prints the machine's public IPv4 address, from your metadata service |
+| `download_command`, `wheel_urls` | Shell that downloads the storage URL `$1` into the directory `$2` with the machine's identity, and the wheels to install that way in place of the `3lc-compute` requirement |
+| `before_install`, `after_services` | Shell lines of your own, before the first package install and once the services are started |
+| `tls` | `"machine"`: Caddy obtains the certificates on the machine (`certificate == "machine"`). `"load_balancer"`: your load balancer holds the certificate and Caddy routes by host name behind it, over HTTP on 80, or over HTTPS on 443 with a self-signed certificate when `backend_tls`. `"none"`: no Caddy |
+| `wait_for_dns` | With `"machine"` and names in a zone: wait up to five minutes for each name to resolve to the machine's public address before Caddy first asks for a certificate |
+| `wait_for_health` | Wait up to five minutes for both services to answer on the machine before the boot is reported finished |
+
+With `request.hostnames` unset the script names the deployment by its address under sslip.io
+(`os.<dashed address>.sslip.io`, `compute.<dashed address>.sslip.io`), filled in on the machine from
+`public_address_command`; `tls_hostnames_for_ip(address)` gives the same names for your `endpoints`.
+A value that cannot go into the script (an environment value with a line break, a hostname that is
+not one) raises `InvalidBootInput`. The script carries the environment and the token: treat it as
+you treat the token.
+
 ### The launcher's DNS zone
 
 A plugin with `DnsFacet` writes a launcher's zone, with the launcher's own identity and never a

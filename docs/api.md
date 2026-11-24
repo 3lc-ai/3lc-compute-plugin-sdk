@@ -45,7 +45,7 @@ and the `TlcData` helper — is declared in `plugin-api.d.ts`.
 
 The typed provider contract ([specified here](provider-contract.md)): the base, the groups of
 operations a provider opts into, the wire dataclasses, the error family, the transitional
-deployment surface, and the conformance kit with its reference provider.
+deployment surface, the shared deployment boot script, and the conformance kit with its reference provider.
 
 ```{eval-rst}
 .. automodule:: tlc_plugin_sdk.infrastructure.plugin
@@ -61,6 +61,9 @@ deployment surface, and the conformance kit with its reference provider.
    :members:
 
 .. automodule:: tlc_plugin_sdk.infrastructure.transitional
+   :members:
+
+.. automodule:: tlc_plugin_sdk.infrastructure.deployment_boot
    :members:
 
 .. automodule:: tlc_plugin_sdk.infrastructure.testing
