@@ -852,6 +852,12 @@ def serve(
 
     from tlc_plugin_sdk.asgi_app import build_plugin_app
 
+    # PyTorch Inductor sends its compile workers' stdout and stderr to /dev/null unless this is "0".
+    # A C compiler failing in one (Triton building its launcher for torch.compile) then surfaces only
+    # as "CalledProcessError: ... returned non-zero exit status 1", without the compiler's message.
+    # With "0" they write to this worker's output, which the host logs. Set before the plugin, or a job
+    # process spawned from this one, imports torch; a value already in the environment is kept.
+    os.environ.setdefault("TORCHINDUCTOR_WORKER_SUPPRESS_LOGGING", "0")
     # Ensure the cwd is importable so a plugin laid out as a local package resolves.
     sys.path.insert(0, os.getcwd())
     plugin = _load_plugin(entry)
