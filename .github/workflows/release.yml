@@ -96,6 +96,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the staged/<version> tag
     environment: staging
     env:
       UV_PUBLISH_URL: https://pypi.3lc.ai/repositories/prereleases
@@ -120,14 +122,17 @@ jobs:
           : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'staging' environment}"
           : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'staging' environment}"
 
-      # The UTC stamp sorts after existing timestamped POC builds. Run + attempt distinguish
-      # concurrent builds and reruns, while numeric segments satisfy ordinary SDK ranges.
-      - name: Stamp build-numbered version
+      # X.Y.Z.devN, N = this workflow's run number: builds sort in run order and below the
+      # X.Y.Z release. A version that is already released can't be staged.
+      - name: Stamp the staged version
         run: |
           BASE=$(uv version --frozen --output-format json | jq -r '.version')
-          STAGED_VERSION="${BASE}.$(date -u +%Y%m%d%H%M%S).${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$BASE" >/dev/null; then
+            echo "::error::$BASE is released (tag v$BASE); bump the version on main first"; exit 1
+          fi
+          STAGED_VERSION="$BASE.dev$GITHUB_RUN_NUMBER"
           uv version --frozen "$STAGED_VERSION"
-          echo "staged build version: $STAGED_VERSION"
+          echo "STAGED_VERSION=$STAGED_VERSION" >> "$GITHUB_ENV"
 
       - name: Build
         run: uv build --no-sources
@@ -135,10 +140,17 @@ jobs:
       - name: Retain build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sdk-poc-${{ github.run_number }}-${{ github.run_attempt }}
+          name: sdk-${{ github.run_number }}-${{ github.run_attempt }}
           path: dist/*
           if-no-files-found: error
 
       - name: Publish to the staging index
         if: inputs.publish
         run: uv publish
+
+      - name: Tag the staged commit
+        if: inputs.publish
+        run: |
+          git tag "staged/$STAGED_VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/staged/$STAGED_VERSION"
+          echo "Staged $STAGED_VERSION from $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
