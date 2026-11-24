@@ -270,7 +270,14 @@ can tell a provider of the previous surface from one of this.
 
 `missing_fields` come from the plugin's settings layer: `InfrastructurePlugin.readiness()`
 answers `{ready, missing_fields}` with each missing setting as a `FormField`
-(`FormField.from_settings`). The settings layer keeps describing its own fields as
+(`FormField.from_settings`). A provider with `requires_connection` takes its account from the
+Connection every call names, so before answering the SDK settles the declaration
+(`settle_readiness`): a missing setting whose key is one of `account.fields` or
+`account.defaults` stays in `missing_fields` with `required` false, for a plugin's own settings
+page and a Connection that leaves the account empty, and no longer counts against `ready`.
+`ready` is then true unless another required setting is missing or `not_ready_reason` is set.
+Without `requires_connection` every required missing setting keeps the provider not ready. The
+settings layer keeps describing its own fields as
 `SettingsField` (`sdk:shared/settings.py:86-98`, `:472-505`), which is what a plugin's own
 settings page reads and is never sent to a host.
 

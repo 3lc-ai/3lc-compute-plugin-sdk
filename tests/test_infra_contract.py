@@ -441,6 +441,38 @@ def test_readiness_comes_from_the_settings_layer_as_form_fields(tmp_path: Path) 
         assert h.get("/settings", headers=_AMBIENT).status_code == 400, "settings are never sent a Connection"
 
 
+@pytest.mark.parametrize(
+    ("requires_connection", "account_key", "ready"),
+    [
+        (True, "api_key", True),
+        (False, "api_key", False),
+        (True, "account_id", False),
+    ],
+    ids=["the-connection-carries-it", "no-connection-required", "a-setting-that-matters-without-a-connection"],
+)
+def test_an_account_setting_the_connection_carries_does_not_keep_a_provider_not_ready(
+    tmp_path: Path, requires_connection: bool, account_key: str, ready: bool
+) -> None:
+    class FromConnection(_Nodes):
+        settings = PluginSettings(FakeSettings, "nodes")
+
+        def capabilities(self) -> CapabilitiesResponse:
+            return CapabilitiesResponse(
+                provider="nodes",
+                display_name="N",
+                requires_connection=requires_connection,
+                account=AccountSchema(noun="A", fields=[FormField(key=account_key, label="Key")]),
+                access_methods=[AccessMethod(kind="SECRET", label="S")],
+                nodes=NodeCapabilities(),
+                **self.readiness(),
+            )
+
+    with PluginHarness(FromConnection(), plugin_id="nodes", config_root=tmp_path) as h:
+        caps = CapabilitiesResponse.from_dict(h.get("/infra/capabilities").json())
+    assert caps.ready is ready
+    assert [(f.key, f.required) for f in caps.missing_fields] == [("api_key", not ready)], "still listed, as optional"
+
+
 # ── Typed errors ─────────────────────────────────────────────────────────────
 
 

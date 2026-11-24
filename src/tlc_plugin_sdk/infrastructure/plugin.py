@@ -98,6 +98,10 @@ class InfrastructurePlugin(HubPlugin):
     def readiness(self) -> dict[str, Any]:
         """``{"ready", "missing_fields"}`` for :meth:`capabilities`, from the settings layer.
 
+        A provider that requires a Connection takes its account from the Connection, so before
+        answering the SDK settles the declaration with :func:`settle_readiness`: a missing setting
+        keyed like an account field stays listed but no longer keeps the provider not ready.
+
         Returns:
             Keyword arguments for :class:`~tlc_plugin_sdk.infrastructure.CapabilitiesResponse`:
             the settings still needed as prompts, and ``ready`` when no required one is missing.
@@ -354,6 +358,32 @@ def _field_problems(where: str, fields: list[FormField]) -> list[str]:
         if f.choices and f.kind != "select":
             problems.append(f"{where}: field {f.key!r} lists choices and is not a select")
     return problems
+
+
+def settle_readiness(caps: CapabilitiesResponse) -> None:
+    """Count the account's settings as satisfied when the Connection carries the account.
+
+    When ``caps.requires_connection`` is set, every call names a Connection, and that Connection
+    carries the account (its ``account.fields`` and ``account.defaults``). A missing setting with
+    the key of one of those fields is then listed as optional (``required=False``): a plugin's own
+    settings page may still offer it, for a Connection that leaves the account empty, but it no
+    longer keeps the provider not ready. ``ready`` turns true when that was all that kept it false:
+    no other required field is missing and ``not_ready_reason`` is empty. Without
+    ``requires_connection`` the declaration is left as it is.
+
+    Args:
+        caps: The declaration, changed in place.
+    """
+    if not caps.requires_connection or caps.account is None:
+        return
+    from_connection = {f.key for f in caps.account.fields} | {f.key for f in caps.account.defaults}
+    settled = False
+    for missing in caps.missing_fields:
+        if missing.key in from_connection and missing.required:
+            missing.required = False
+            settled = True
+    if settled and not caps.ready and not caps.not_ready_reason:
+        caps.ready = not any(f.required for f in caps.missing_fields)
 
 
 def capabilities_problems(plugin: InfrastructurePlugin, caps: CapabilitiesResponse) -> list[str]:

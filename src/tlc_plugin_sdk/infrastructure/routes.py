@@ -47,7 +47,12 @@ from tlc_plugin_sdk.infrastructure.errors import (
     scrub,
 )
 from tlc_plugin_sdk.infrastructure.facets import CatalogFacet, DeploymentProvider, DnsFacet, NodeProvider, StorageFacet
-from tlc_plugin_sdk.infrastructure.plugin import InfrastructurePlugin, capabilities_problems, provided_operations
+from tlc_plugin_sdk.infrastructure.plugin import (
+    InfrastructurePlugin,
+    capabilities_problems,
+    provided_operations,
+    settle_readiness,
+)
 from tlc_plugin_sdk.infrastructure.transitional import WorkspaceFacet
 from tlc_plugin_sdk.infrastructure.types import (
     BundleRequest,
@@ -291,6 +296,7 @@ def _capabilities_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     def _capabilities() -> dict[str, Any]:
         def run() -> dict[str, Any]:
             caps = plugin.capabilities()
+            settle_readiness(caps)
             caps.operations = provided_operations(plugin)
             caps.storage = plugin.storage_capabilities() if isinstance(plugin, StorageFacet) else None
             problems = capabilities_problems(plugin, caps)
