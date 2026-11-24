@@ -1798,15 +1798,15 @@ holds the launcher's record ledger (2.6).
 |---|---|
 | `capabilities.account` | `fields`: `tenant_id`, `subscription_id`, `resource_group`. `defaults`: `location` |
 | `AMBIENT` method | Available when the Azure credential chain finds a sign-in (an `az login` session, or a managed identity). `purposes`: nodes, storage. The plugin opts its own client and the 3LC core into the CLI sign-in. With the host's built-in own-identity Connection the account comes from the plugin's settings. |
-| `KEYLESS` method | `fields`: `identity_name`. With 2.9: `paste_back` the control identity's `client_id`, `identity_token.audience` `api://AzureADTokenExchange`. Unavailable until the host can mint tokens. |
+| `KEYLESS` method | `fields`: `name_prefix`. `identity_token.audience` `api://AzureADTokenExchange`. `paste_back`: the template's `connection` output less the account fields (`location`, `control_client_id`, `deployment_identity_id`, `node_identity_id`, `node_identity_client_id`, `storage_account`, `container`, `subnet_id`, `issuer`, `subject`). Offered by the host only when its Config Service mints tokens. |
 | `host` | `matches = {}`: no host principal; the Config Service decides which host may use a Connection. `deployment_of` on a deployment VM |
-| `describe_grant` | A "Deploy to Azure" portal link to a template that creates the control, deployment and node identities, the federated credential and role assignments scoped to the resource group. `files`: the template and parameters. `command`: `az deployment group create ...`. |
+| `describe_grant` | `files`: a per-Connection template (issuer and subject as parameter defaults) that creates the control, deployment and node identities, the federated credential, the network (subnet with its security group, the deployment's public IP), a storage account without shared-key access and its container, and the role assignments: Virtual Machine Contributor on the group (control, deployment), Managed Identity Operator on the identities each may attach, Storage Blob Data Contributor on the container; no Network Contributor. `command`: `az deployment group create ...`. A "Deploy to Azure" link only when the host serves the template at a URL (the plugin's `grant_template_url` setting). |
 | `prepare_grant_update` | Not implemented. An update is `describe_grant(action="update")`: the same template redeployed. |
 | `verify_connection` | Read the subscription and resource group, the role assignments and the identities; `account` from what ARM answers; `observation` from the template deployment's outputs |
 | `connection_node_access` | On own sign-in with rights to assign roles: create the node identity and its storage role assignment directly |
 | `storage_candidates` | Storage accounts and containers in the resource group, as `abfss://` locations |
 | `permissions.storage.access_modes` | `read`, `read_write` |
-| Resolver | With 2.9: exchange of the identity token for an ARM or storage token; returns the plugin's own credential class |
+| Resolver | Exchange of the pushed identity token for an ARM token (a storage token on demand); returns the plugin's own credential class, an Azure `TokenCredential` |
 | `create_node` | VM with the node identity attached at create, the agent installed by cloud-init, `AZURE_CLIENT_ID` set on the machine so workers pick that identity; `storage_access = "identity"`; tags as in 2.4 |
 | `catalog`, `locations` | VM sizes with retail prices and per-family quota; `unavailable_reason` names a zero quota; locations where the size is offered |
 | `deployment_options` | `location`, then `virtual_network`, then `subnet` |
