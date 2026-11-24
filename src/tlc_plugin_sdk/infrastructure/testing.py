@@ -53,11 +53,13 @@ from tlc_plugin_sdk.connections import (
     AMBIENT_ONLY_PREFIXES,
     BOUND_CREDENTIAL_HEADER,
     CONNECTION_HEADER,
+    CONNECTION_TOKEN_HEADER,
     CONNECTION_USE_HEADER,
     Ambient,
     ConnectionBinding,
     ConnectionUse,
     CredentialUnavailable,
+    IdentityToken,
     ResolvedCredential,
     ResolveRequest,
     SecretToken,
@@ -66,8 +68,10 @@ from tlc_plugin_sdk.connections import (
     current_use,
     encode_binding,
     encode_credential,
+    encode_identity_token,
     encode_use,
     register_resolver,
+    token_audience,
 )
 from tlc_plugin_sdk.infrastructure.errors import ERROR_CODES, Conflict, InvalidRequest, NotFound
 from tlc_plugin_sdk.infrastructure.facets import CatalogFacet, DeploymentProvider, DnsFacet, NodeProvider, StorageFacet
@@ -113,6 +117,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     GrantUpdate,
     GrantUpdateRequest,
     HostIdentity,
+    IdentityTokenSpec,
     Location,
     Locations,
     NodeAccessRequest,
@@ -142,6 +147,7 @@ from tlc_plugin_sdk.infrastructure.types import (
     StorageRule,
     SweepReport,
     SweepRequest,
+    TokenIdentity,
     VerifyRequest,
     is_node_state,
 )
@@ -192,6 +198,7 @@ def acting_as(
     binding: ConnectionBinding | None,
     credential: ResolvedCredential | None = None,
     use: ConnectionUse | None = None,
+    token: IdentityToken | None = None,
 ) -> Iterator[None]:
     """Act on ``binding`` in code a unit test calls directly, as a request through the routes would.
 
@@ -207,6 +214,7 @@ def acting_as(
         binding: The Connection the call acts on, or ``None`` for a call that names none.
         credential: The credential bound for the call.
         use: What the call uses the Connection for.
+        token: The identity token the host sent for the call, scrubbed from route errors.
 
     Yields:
         Nothing; the context is set for the block.
@@ -214,16 +222,22 @@ def acting_as(
     connection_token = _connections._CONNECTION.set(binding)
     credential_token = _connections._CREDENTIAL.set(credential)
     use_token = _connections._USE.set(use)
+    identity_token = _connections._IDENTITY_TOKEN.set(token)
     try:
         yield
     finally:
+        _connections._IDENTITY_TOKEN.reset(identity_token)
         _connections._USE.reset(use_token)
         _connections._CREDENTIAL.reset(credential_token)
         _connections._CONNECTION.reset(connection_token)
 
 
 def connection_headers(
-    binding: ConnectionBinding, *, use: ConnectionUse | None = None, credential: SecretToken | None = None
+    binding: ConnectionBinding,
+    *,
+    use: ConnectionUse | None = None,
+    credential: SecretToken | None = None,
+    token: IdentityToken | None = None,
 ) -> dict[str, str]:
     """The host-owned headers a host sends for a call that acts on ``binding``.
 
@@ -231,6 +245,7 @@ def connection_headers(
         binding: The Connection's binding.
         use: What the Connection is used for, when the host says.
         credential: The value of a ``SECRET`` Connection.
+        token: The identity token of a ``KEYLESS`` Connection whose method declares one.
 
     Returns:
         The headers, for :meth:`~tlc_plugin_sdk.harness.PluginHarness.call` or :func:`check_provider`.
@@ -240,6 +255,8 @@ def connection_headers(
         headers[CONNECTION_USE_HEADER] = encode_use(use)
     if credential is not None:
         headers[BOUND_CREDENTIAL_HEADER] = encode_credential(credential)
+    if token is not None:
+        headers[CONNECTION_TOKEN_HEADER] = encode_identity_token(token)
     return headers
 
 
@@ -432,6 +449,48 @@ class _Run:
             self.status_detail(r),
         )
 
+    def identity_tokens(self) -> None:
+        """A method that declares ``identity_token``: its resolver needs the token, and a call without one is 424."""
+        caps = self.caps
+        for method in caps.access_methods:
+            if method.paste_back:
+                self.check("connect: only a method that grants asks for paste_back fields", method.grants, method.kind)
+            spec = method.identity_token
+            if spec is None:
+                continue
+            if not self.check("connect: only a KEYLESS method declares identity_token", method.kind == "KEYLESS"):
+                continue
+            self.check("connect: identity_token names an audience", bool(spec.audience))
+            registered = token_audience(caps.provider)
+            self.check(
+                "connect: the KEYLESS resolver is registered with the declared token audience",
+                registered == spec.audience,
+                f"registered {registered!r}, declared {spec.audience!r}",
+            )
+            if not self.listed("connection.verify"):
+                continue
+            binding = ConnectionBinding(id="conformance-token", provider=caps.provider, kind="KEYLESS")
+            stranger = IdentityToken(
+                connection_id="another-connection",
+                audience=spec.audience,
+                token="conformance.token.value",
+                expires_at="2099-01-01T00:00:00Z",
+            )
+            for label, headers in (
+                ("without a token", connection_headers(binding)),
+                ("with another Connection's token", connection_headers(binding, token=stranger)),
+            ):
+                r = self.h.call(
+                    "POST", "/infra/connection/verify", json_body=VerifyRequest().to_dict(), headers=headers
+                )
+                self.responses.append(("POST", "/infra/connection/verify", r.status_code, r.text))
+                self.check(f"connect: a KEYLESS call {label} answers 424", r.status_code == 424, self.status_detail(r))
+                self.check(
+                    f"connect: a KEYLESS refusal {label} never echoes the token",
+                    stranger.token not in r.text,
+                    r.text[:200],
+                )
+
     def connect(self) -> None:
         caps = self.caps
         if self.listed("connection.grant"):
@@ -443,12 +502,22 @@ class _Run:
                     for f in (caps.account.fields if caps.account else [])
                 }
                 access = {f.key: f.example or f.default or "conformance" for f in method.fields if not f.secret}
+                identity = (
+                    TokenIdentity(
+                        issuer="https://issuer.conformance.invalid",
+                        subject="conformance",
+                        audience=method.identity_token.audience,
+                    )
+                    if method.identity_token is not None
+                    else None
+                )
                 request = GrantRequest(
                     connection_id="conformance",
                     kind=method.kind,
                     account=account,
                     access=access,
                     permissions=ConnectionPermissions(nodes=True),
+                    identity=identity,
                 )
                 r = self.call("POST", "/infra/connection/grant", json_body=request.to_dict())
                 grant = self.round_trips("connect: POST /infra/connection/grant answers a Grant", r, Grant)
@@ -474,6 +543,7 @@ class _Run:
                     r.status_code == 400,
                     self.status_detail(r),
                 )
+        self.identity_tokens()
         for operation, method_, path in (
             ("connection.grant_update", "POST", "/infra/connection/grant/update"),
             ("connection.verify", "POST", "/infra/connection/verify"),
@@ -1273,6 +1343,9 @@ class FakeProvider(
         shared_ingress: Whether ``check_deployment`` answers an ``ingress_key`` in a zone, so
             that ``prepare_deployment`` has a validation record to ask for.
         requires_connection: What capabilities say.
+        identity_token_audience: Set by :meth:`require_identity_token`: the ``KEYLESS`` method then
+            declares ``identity_token`` and ``paste_back``, and its resolver needs the token.
+        identity_tokens: The Connection id of every identity token the resolver was handed.
     """
 
     settings = PluginSettings(FakeSettings, "fake")
@@ -1290,17 +1363,25 @@ class FakeProvider(
         self.node_access: dict[str, dict[str, Any]] = {}
         self._transfers: dict[str, TransferRegistry] = {}
         self._bundles: dict[str, BundleRegistry] = {}
+        self.identity_token_audience = ""
+        self.identity_tokens: list[str] = []
         register_resolver("fake", self.resolve_keyless)
+
+    def require_identity_token(self, audience: str = "api://fake-token-exchange") -> None:
+        """Make the ``KEYLESS`` method one that needs a host-minted identity token for ``audience``."""
+        self.identity_token_audience = audience
+        register_resolver("fake", self.resolve_keyless, token_audience=audience)
 
     def get_ui_fragment(self) -> str:
         return "<div>fake provider</div>"
 
     # ── the credential seam ──
 
-    @staticmethod
-    def resolve_keyless(request: ResolveRequest) -> Ambient | FakeCredential:
+    def resolve_keyless(self, request: ResolveRequest) -> Ambient | FakeCredential:
         """The fake's ``KEYLESS`` resolver, registered for provider ``fake`` when a fake is built."""
         binding = request.binding
+        if request.identity_token is not None:
+            self.identity_tokens.append(request.identity_token.connection_id)
         if binding.access.get("role_name") == "refused":
             msg = "The fake account refused to let this host in"
             raise CredentialUnavailable(msg, remedy="Use a role_name other than 'refused'.")
@@ -1380,6 +1461,16 @@ class FakeProvider(
                             key="role_name", label="Role name", example="3lc-fake", default="3lc-fake", max_length=64
                         )
                     ],
+                    identity_token=(
+                        IdentityTokenSpec(audience=self.identity_token_audience)
+                        if self.identity_token_audience
+                        else None
+                    ),
+                    paste_back=(
+                        [FormField(key="client_id", label="Client id", example="00000000-0000", max_length=64)]
+                        if self.identity_token_audience
+                        else []
+                    ),
                 ),
                 AccessMethod(
                     kind="AMBIENT",
@@ -1441,7 +1532,10 @@ class FakeProvider(
             creates["nodes"] = [f"A role {role}-node that a node runs as."]
         if permissions.storage:
             creates["storage"] = [f"{rule.access} access to {rule.location}" for rule in permissions.storage]
-        document = {"role": role, "trusts": _FAKE_HOST, "permissions": permissions.to_dict()}
+        trusts = _FAKE_HOST
+        if request.identity is not None:
+            trusts = f"{request.identity.issuer} as {request.identity.subject}"
+        document = {"role": role, "trusts": trusts, "permissions": permissions.to_dict()}
         return Grant(
             summary=f"{'Updates' if update else 'Creates'} the role {role} in fake account {account}.",
             action=request.action,
@@ -1449,7 +1543,7 @@ class FakeProvider(
             link_label="Open the fake console",
             steps=["Open the link.", "Review what is created.", "Choose Apply and wait for it to complete."],
             creates=creates,
-            trusts=f"The fake principal {_FAKE_HOST}",
+            trusts=f"The fake principal {trusts}",
             files=[GrantFile(name="3lc-connection.json", content=json.dumps(document, sort_keys=True))],
             command="fake grants apply --file 3lc-connection.json",
             permissions=permissions,

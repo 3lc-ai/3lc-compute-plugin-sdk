@@ -1271,10 +1271,10 @@ storage rule 256 characters, 20 per Connection; a secret value 4 KiB.
 
 ### 2.9 Additive, with the package that needs it
 
-Specified here so the first package leaves room for them. None is built in the first SDK
-package; each lands as an additive change with the package named.
+Specified here so the first package leaves room for them. Each lands as an additive change with
+the package named; the identity token is built, the rest are not yet.
 
-**With Azure granted access (package I).**
+**With Azure granted access (package I): built.**
 
 ```python
 @dataclass
@@ -1303,8 +1303,13 @@ class IdentityToken:
 # ResolveRequest gains:  identity_token: IdentityToken | None = None
 ```
 
-The token travels in a fourth host-owned header, `x-3lc-connection-token`. A plugin does not
-ask for it: a worker has no channel back to its host, and none is added. The provider declares
+The token travels in a fourth host-owned header, `x-3lc-connection-token`, whose value is the
+JSON object `{connection_id, audience, token, expires_at}` (`encode_identity_token`), at most
+8 KiB. A plugin declares the need twice, in the method's `identity_token` and in
+`register_resolver(provider, resolver, token_audience=...)`, which is what the SDK's middleware
+reads; the conformance kit checks that the two agree. The testing helpers take it as
+`connection_headers(..., token=)` and `acting_as(..., token=)`, and `FakeProvider.require_identity_token()`
+turns the fake's `KEYLESS` method into one that needs it. A plugin does not ask for it: a worker has no channel back to its host, and none is added. The provider declares
 the need; the host, which already asks the Config Service for a grant before every call
 (`compute:config_service.py:716-724`), obtains a token for that Connection and audience and
 sends it. Rules:
@@ -1315,7 +1320,9 @@ sends it. Rules:
 - A token lives at most 10 minutes. The host may reuse one for the same Connection and audience
   until 60 seconds before it expires. A plugin never caches a token.
 - A method that declares `identity_token` and a request without the header, or with a token for
-  another Connection, answers 424 from the SDK.
+  another Connection or audience, answers 424 from the SDK. The header on a capabilities or grant
+  route, or without a Connection header, answers 400, as does a repeated or malformed one; no
+  answer quotes the token.
 - A `KEYLESS` method with `identity_token` is offered only when the host's Config Service can
   mint tokens.
 - What a plugin may rely on: the token is a JWT signed by `GrantRequest.identity.issuer`, with

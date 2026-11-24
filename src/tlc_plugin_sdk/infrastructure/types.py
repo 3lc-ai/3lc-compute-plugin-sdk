@@ -103,6 +103,7 @@ __all__ = [
     "GrantUpdateRequest",
     "GrantUpdateStatus",
     "HostIdentity",
+    "IdentityTokenSpec",
     "Location",
     "Locations",
     "NodeAccessRequest",
@@ -141,6 +142,7 @@ __all__ = [
     "SweepItem",
     "SweepReport",
     "SweepRequest",
+    "TokenIdentity",
     "TransferRequest",
     "VerifyRequest",
     "WorkspaceInstance",
@@ -363,6 +365,17 @@ class AccountSchema(Wire):
 
 
 @dataclass
+class IdentityTokenSpec(Wire):
+    """What a ``KEYLESS`` access method needs a host-minted identity token for.
+
+    Attributes:
+        audience: The ``aud`` the provider's token exchange expects (``api://AzureADTokenExchange``).
+    """
+
+    audience: str
+
+
+@dataclass
 class AccessMethod(Wire):
     """One way a Compute Service obtains authority in an account.
 
@@ -376,6 +389,10 @@ class AccessMethod(Wire):
         preferred: The method a new Connection gets; at most one method says so.
         fields: The method's ``access`` fields a person enters.
         grants: Whether ``describe_grant`` applies to this method.
+        identity_token: ``KEYLESS`` only: the host sends a token it obtained for the Connection
+            and this audience in ``x-3lc-connection-token`` on every call; ``None`` for none.
+        paste_back: Access fields a person reads off the finished grant and enters after it ran;
+            only when ``grants``.
     """
 
     kind: ConnectionKind
@@ -387,6 +404,8 @@ class AccessMethod(Wire):
     preferred: bool = False
     fields: list[FormField] = field(default_factory=list)
     grants: bool = False
+    identity_token: IdentityTokenSpec | None = None
+    paste_back: list[FormField] = field(default_factory=list)
 
 
 @dataclass
@@ -627,6 +646,21 @@ class CapabilitiesResponse(Wire):
 
 
 @dataclass
+class TokenIdentity(Wire):
+    """Who a Connection's identity tokens come from: what the grant must trust.
+
+    Attributes:
+        issuer: The https URL of the identity-token issuer, compared as an exact string.
+        subject: The one subject minted for this Connection.
+        audience: The tokens' ``aud``.
+    """
+
+    issuer: str
+    subject: str
+    audience: str
+
+
+@dataclass
 class GrantRequest(Wire):
     """What ``describe_grant`` is asked: the grant for one Connection, to create or to update.
 
@@ -639,6 +673,8 @@ class GrantRequest(Wire):
         action: ``create``, or ``update`` to change the installed grant in place.
         installed_ref: ``GrantObservation.resource_ref`` of the installed grant, for an update.
         default_storage_root: The host's project root, when the caller may be offered it.
+        identity: For a method that declares ``identity_token``: the issuer and subject the grant
+            trusts; ``None`` otherwise.
     """
 
     connection_id: str
@@ -649,6 +685,7 @@ class GrantRequest(Wire):
     action: Literal["create", "update"] = "create"
     installed_ref: str = ""
     default_storage_root: str = ""
+    identity: TokenIdentity | None = None
 
 
 @dataclass

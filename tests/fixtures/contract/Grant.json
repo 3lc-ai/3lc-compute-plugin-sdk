@@ -22,11 +22,11 @@
         "read_write access to fake://fake-data/projects"
       ]
     },
-    "trusts": "The fake principal fake-host-principal",
+    "trusts": "The fake principal https://issuer.3lc.invalid as conn-1",
     "files": [
       {
         "name": "3lc-connection.json",
-        "content": "{\"permissions\": {\"deployments\": true, \"nodes\": true, \"options\": {\"deployment_nodes\": true}, \"storage\": [{\"access\": \"read_write\", \"location\": \"fake://fake-data/projects\"}]}, \"role\": \"3lc-fake\", \"trusts\": \"fake-host-principal\"}",
+        "content": "{\"permissions\": {\"deployments\": true, \"nodes\": true, \"options\": {\"deployment_nodes\": true}, \"storage\": [{\"access\": \"read_write\", \"location\": \"fake://fake-data/projects\"}]}, \"role\": \"3lc-fake\", \"trusts\": \"https://issuer.3lc.invalid as conn-1\"}",
         "media_type": "application/json"
       }
     ],

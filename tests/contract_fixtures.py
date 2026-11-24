@@ -26,6 +26,7 @@ from tlc_plugin_sdk.connections import (
     ConnectionBinding,
     ConnectionPermissions,
     ConnectionUse,
+    IdentityToken,
     SecretToken,
     StorageRule,
     encode_credential,
@@ -81,6 +82,7 @@ from tlc_plugin_sdk.infrastructure import (
     StorageRoot,
     SweepItem,
     SweepRequest,
+    TokenIdentity,
     TransferRequest,
     VerifyRequest,
     WorkspaceFacet,
@@ -119,7 +121,7 @@ class _Recorder:
     def __init__(self, harness: PluginHarness) -> None:
         self.h = harness
         self.examples: dict[str, dict[str, Any]] = {}
-        self.headers = connection_headers(_BINDING, use=_USE)
+        self.headers = connection_headers(_BINDING, use=_USE, token=_TOKEN)
 
     def keep(self, name: str, route: str, example: Any) -> None:
         self.examples[name] = {"type": name, "route": route, "example": example}
@@ -137,8 +139,17 @@ class _Recorder:
         return data
 
 
+_TOKEN = IdentityToken(
+    connection_id="conn-1",
+    audience="api://fake-token-exchange",
+    token="eyJhbGciOiJSUzI1NiJ9.fake.signature",
+    expires_at="2026-01-01T00:10:00Z",
+)
+
+
 def _fake_examples(root: Path) -> dict[str, dict[str, Any]]:
     fake = FakeProvider()
+    fake.require_identity_token(_TOKEN.audience)
     with PluginHarness(fake, plugin_id="fake", config_root=root) as h:
         r = _Recorder(h)
         r.keep("ConnectionBinding", f"header {connection_headers(_BINDING).popitem()[0]}", _BINDING.to_dict())
@@ -156,6 +167,9 @@ def _fake_examples(root: Path) -> dict[str, dict[str, Any]]:
             access={"role_name": "3lc-fake"},
             permissions=_PERMISSIONS,
             default_storage_root="fake://fake-data/projects",
+            identity=TokenIdentity(
+                issuer="https://issuer.3lc.invalid", subject="conn-1", audience="api://fake-token-exchange"
+            ),
         )
         r.call("POST", "/infra/connection/grant", "Grant", body=grant.to_dict(), request="GrantRequest", bare=True)
         verified = r.call(
@@ -332,6 +346,8 @@ def _fake_examples(root: Path) -> dict[str, dict[str, Any]]:
     nested: dict[str, tuple[str, Any]] = {
         "AccountSchema": ("CapabilitiesResponse.account", caps.account),
         "AccessMethod": ("CapabilitiesResponse.access_methods[]", caps.access_methods[0]),
+        "IdentityTokenSpec": ("AccessMethod.identity_token", caps.access_methods[0].identity_token),
+        "TokenIdentity": ("GrantRequest.identity", grant.identity),
         "FormField": ("AccountSchema.fields[]", caps.account.fields[0] if caps.account else None),
         "Choice": ("FormField.choices[]", caps.account.defaults[0].choices[0] if caps.account else None),
         "HostIdentity": ("CapabilitiesResponse.host", caps.host),

@@ -71,7 +71,8 @@
             "default": "3lc-connection"
           }
         ],
-        "grants": true
+        "grants": true,
+        "paste_back": []
       },
       {
         "kind": "AMBIENT",
@@ -85,7 +86,8 @@
         "unavailable_reason": "",
         "preferred": false,
         "fields": [],
-        "grants": false
+        "grants": false,
+        "paste_back": []
       }
     ],
     "host": {

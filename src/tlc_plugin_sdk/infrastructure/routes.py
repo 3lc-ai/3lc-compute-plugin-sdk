@@ -37,6 +37,7 @@ from tlc_plugin_sdk.connections import (
     CredentialUnavailable,
     current_connection,
     current_credential,
+    current_identity_token,
 )
 from tlc_plugin_sdk.infrastructure.errors import (
     InvalidRequest,
@@ -155,15 +156,17 @@ def error_handlers() -> ExceptionHandlersMap:
 
 
 def _credential_secrets() -> list[str]:
-    """What the request's own credential must never see echoed."""
+    """What the request's own credential and identity token must never see echoed."""
+    token = current_identity_token()
+    hidden = [token.token] if token is not None else []
     credential = current_credential()
     values = getattr(credential, "secret_values", None)
     if not callable(values):
-        return []
+        return hidden
     try:
-        return [str(v) for v in values() if v]
+        return [*hidden, *(str(v) for v in values() if v)]
     except Exception:
-        return []
+        return hidden
 
 
 def _secrets(plugin: InfrastructurePlugin, extra: Iterable[str]) -> list[str]:

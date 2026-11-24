@@ -68,7 +68,8 @@
             "default": ""
           }
         ],
-        "grants": false
+        "grants": false,
+        "paste_back": []
       }
     ],
     "permissions": {

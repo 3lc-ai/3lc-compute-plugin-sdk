@@ -28,6 +28,24 @@
         "default": "3lc-fake"
       }
     ],
-    "grants": true
+    "grants": true,
+    "identity_token": {
+      "audience": "api://fake-token-exchange"
+    },
+    "paste_back": [
+      {
+        "key": "client_id",
+        "label": "Client id",
+        "kind": "text",
+        "required": true,
+        "secret": false,
+        "help": "",
+        "example": "00000000-0000",
+        "pattern": "",
+        "max_length": 64,
+        "choices": [],
+        "default": ""
+      }
+    ]
   }
 }

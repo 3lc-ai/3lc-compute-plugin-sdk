@@ -25,6 +25,11 @@
     },
     "action": "create",
     "installed_ref": "",
-    "default_storage_root": "fake://fake-data/projects"
+    "default_storage_root": "fake://fake-data/projects",
+    "identity": {
+      "issuer": "https://issuer.3lc.invalid",
+      "subject": "conn-1",
+      "audience": "api://fake-token-exchange"
+    }
   }
 }

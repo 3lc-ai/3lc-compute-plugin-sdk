@@ -1,0 +1,7 @@
+{
+  "type": "IdentityTokenSpec",
+  "route": "AccessMethod.identity_token",
+  "example": {
+    "audience": "api://fake-token-exchange"
+  }
+}

@@ -75,6 +75,7 @@ __all__ = [
     "AMBIENT_ONLY_PREFIXES",
     "BOUND_CREDENTIAL_HEADER",
     "CONNECTION_HEADER",
+    "CONNECTION_TOKEN_HEADER",
     "CONNECTION_USE_HEADER",
     "CREDENTIALS_KEY",
     "CREDENTIAL_KEY",
@@ -84,12 +85,14 @@ __all__ = [
     "MAX_CREDENTIAL_BYTES",
     "MAX_STORAGE_RULES",
     "MAX_STORAGE_RULE_LENGTH",
+    "MAX_TOKEN_BYTES",
     "Ambient",
     "ConnectionBinding",
     "ConnectionKind",
     "ConnectionPermissions",
     "ConnectionUse",
     "CredentialUnavailable",
+    "IdentityToken",
     "ProviderCredential",
     "ResolveRequest",
     "ResolvedCredential",
@@ -105,12 +108,15 @@ __all__ = [
     "credential_middleware",
     "current_connection",
     "current_credential",
+    "current_identity_token",
     "current_use",
     "encode_binding",
     "encode_credential",
+    "encode_identity_token",
     "encode_use",
     "register_resolver",
     "resolve",
+    "token_audience",
 ]
 
 CONNECTION_HEADER = "x-3lc-connection"
@@ -118,6 +124,13 @@ CONNECTION_HEADER = "x-3lc-connection"
 
 CONNECTION_USE_HEADER = "x-3lc-connection-use"
 """The request header carrying a JSON-encoded :class:`ConnectionUse` (host-owned, optional)."""
+
+CONNECTION_TOKEN_HEADER = "x-3lc-connection-token"
+"""The request header carrying a JSON-encoded :class:`IdentityToken` (host-owned): sent on a call for
+a ``KEYLESS`` Connection whose access method declares ``identity_token``."""
+
+MAX_TOKEN_BYTES = 8 * 1024
+"""The largest :data:`CONNECTION_TOKEN_HEADER` value."""
 
 ConnectionKind = Literal["AMBIENT", "KEYLESS", "SECRET"]
 """How a Compute Service obtains authority in an account: its own sign-in, granted access, a stored value."""
@@ -581,6 +594,67 @@ ResolvedCredential = Ambient | SecretToken | ProviderCredential
 """What :func:`current_credential` returns for a request that names a Connection."""
 
 
+@dataclass(frozen=True, repr=False)
+class IdentityToken:
+    """A short-lived token the host's Config Service signed for one Connection.
+
+    A JWT signed by the Connection's issuer, with ``sub`` its subject and ``aud`` the audience the
+    access method declares, living at most 10 minutes. A plugin exchanges it with its provider and
+    never caches it; it is never logged and never in a repr.
+
+    Attributes:
+        connection_id: The Connection it was minted for.
+        audience: Its ``aud``.
+        token: The signed JWT.
+        expires_at: When it expires, ISO-8601.
+    """
+
+    connection_id: str
+    audience: str
+    token: str
+    expires_at: str
+
+    def __repr__(self) -> str:
+        return f"IdentityToken(connection_id={self.connection_id!r}, audience={self.audience!r}, token=<redacted>)"
+
+    @classmethod
+    def from_json(cls, raw: str | bytes) -> IdentityToken:
+        """Parse the header value.
+
+        Args:
+            raw: The JSON object ``{connection_id, audience, token, expires_at}``.
+
+        Returns:
+            The token.
+
+        Raises:
+            ValueError: When it is not that object with four non-empty strings. The message never
+                quotes the value.
+        """
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        keys = ("connection_id", "audience", "token", "expires_at")
+        if not isinstance(data, dict) or not all(isinstance(data.get(k), str) and data.get(k) for k in keys):
+            msg = "expected a JSON object {connection_id, audience, token, expires_at} of non-empty strings"
+            raise ValueError(msg)
+        return cls(**{k: str(data[k]) for k in keys})
+
+
+def encode_identity_token(token: IdentityToken) -> str:
+    """The :data:`CONNECTION_TOKEN_HEADER` value for ``token``."""
+    return json.dumps(
+        {
+            "connection_id": token.connection_id,
+            "audience": token.audience,
+            "token": token.token,
+            "expires_at": token.expires_at,
+        },
+        separators=(",", ":"),
+    )
+
+
 @dataclass(frozen=True)
 class ResolveRequest:
     """What a resolver is asked to turn into a credential.
@@ -588,10 +662,13 @@ class ResolveRequest:
     Attributes:
         binding: The Connection's binding.
         use: What the host says the Connection is used for, or ``None``.
+        identity_token: The token the host sent for this Connection, when the access method
+            declares ``identity_token``; ``None`` otherwise.
     """
 
     binding: ConnectionBinding
     use: ConnectionUse | None = None
+    identity_token: IdentityToken | None = None
 
 
 Resolver = Callable[[ResolveRequest], Ambient | ProviderCredential]
@@ -599,6 +676,10 @@ Resolver = Callable[[ResolveRequest], Ambient | ProviderCredential]
 identity the Connection grants (a deployment acting on the Connection it was launched through)."""
 
 _RESOLVERS: dict[str, Resolver] = {}
+_TOKEN_AUDIENCES: dict[str, str] = {}
+_IDENTITY_TOKEN: contextvars.ContextVar[IdentityToken | None] = contextvars.ContextVar(
+    "tlc_identity_token", default=None
+)
 _CONNECTION: contextvars.ContextVar[ConnectionBinding | None] = contextvars.ContextVar("tlc_connection", default=None)
 _CREDENTIAL: contextvars.ContextVar[ResolvedCredential | None] = contextvars.ContextVar(
     "tlc_connection_credential", default=None
@@ -609,7 +690,7 @@ _CREDENTIALS: contextvars.ContextVar[Mapping[str, SecretToken]] = contextvars.Co
 _USE: contextvars.ContextVar[ConnectionUse | None] = contextvars.ContextVar("tlc_connection_use", default=None)
 
 
-def register_resolver(provider: str, resolver: Resolver) -> None:
+def register_resolver(provider: str, resolver: Resolver, *, token_audience: str = "") -> None:
     """Resolve ``KEYLESS`` Connections of ``provider`` with ``resolver`` in this process.
 
     A plugin registers its resolver at import. ``AMBIENT`` is resolved by the SDK and ``SECRET``
@@ -619,16 +700,36 @@ def register_resolver(provider: str, resolver: Resolver) -> None:
         provider: The provider slug.
         resolver: Called with a :class:`ResolveRequest` in a worker thread; returns the plugin's
             own credential or raises :class:`CredentialUnavailable`.
+        token_audience: The ``KEYLESS`` access method's ``identity_token.audience``, when it
+            declares one: every ``KEYLESS`` request of ``provider`` must then carry a
+            :data:`CONNECTION_TOKEN_HEADER` for its Connection and this audience, or answers 424.
     """
     _RESOLVERS[provider] = resolver
+    if token_audience:
+        _TOKEN_AUDIENCES[provider] = token_audience
+    else:
+        _TOKEN_AUDIENCES.pop(provider, None)
 
 
-def resolve(binding: ConnectionBinding, use: ConnectionUse | None = None) -> ResolvedCredential:
+def token_audience(provider: str) -> str:
+    """The audience a ``KEYLESS`` request of ``provider`` needs a token for, or ``""`` for none."""
+    return _TOKEN_AUDIENCES.get(provider, "")
+
+
+def current_identity_token() -> IdentityToken | None:
+    """The identity token the current request carries, for scrubbing; a plugin reads its resolver's."""
+    return _IDENTITY_TOKEN.get()
+
+
+def resolve(
+    binding: ConnectionBinding, use: ConnectionUse | None = None, identity_token: IdentityToken | None = None
+) -> ResolvedCredential:
     """Resolve a binding into the credential a request uses.
 
     Args:
         binding: The Connection's binding.
         use: What the host says the Connection is used for (default: the current request's).
+        identity_token: The token the host sent for a ``KEYLESS`` Connection, if any.
 
     Returns:
         :class:`Ambient` for ``AMBIENT``; whatever the registered resolver returns for ``KEYLESS``.
@@ -646,7 +747,9 @@ def resolve(binding: ConnectionBinding, use: ConnectionUse | None = None) -> Res
     if resolver is None:
         msg = f"This plugin cannot use {binding.kind} Connections for {binding.provider}"
         raise CredentialUnavailable(msg)
-    return resolver(ResolveRequest(binding=binding, use=use if use is not None else _USE.get()))
+    return resolver(
+        ResolveRequest(binding=binding, use=use if use is not None else _USE.get(), identity_token=identity_token)
+    )
 
 
 def current_connection() -> ConnectionBinding | None:
@@ -877,6 +980,11 @@ def connection_middleware(app: Any) -> Any:
     resolver raised. A ``SECRET`` binding is not resolved here: its value is the request's
     :data:`BOUND_CREDENTIAL_HEADER`, which :func:`credential_middleware` binds. Such a binding
     without that header, or with one granted for another Connection or service, answers 424.
+    A ``KEYLESS`` binding of a provider whose resolver was registered with a ``token_audience``
+    needs one :data:`CONNECTION_TOKEN_HEADER` for that Connection and audience: without it, or with
+    one for another Connection or audience, it answers 424. The token reaches the resolver as
+    :attr:`ResolveRequest.identity_token` and is scrubbed from every refusal; a repeated, oversized
+    or malformed one answers 400 without quoting it, as does one sent without a Connection.
     Resolution runs in a worker thread (a provider resolver may call its provider), with
     :func:`current_use` already set. The resolution is set in context variables for the handler,
     including ``def`` handlers run in a thread, which receive a copy of the context, and reset
@@ -892,7 +1000,8 @@ def connection_middleware(app: Any) -> Any:
 
     header = CONNECTION_HEADER.encode()
     use_header = CONNECTION_USE_HEADER.encode()
-    owned = (header, use_header, BOUND_CREDENTIAL_HEADER.encode())
+    token_header = CONNECTION_TOKEN_HEADER.encode()
+    owned = (header, use_header, BOUND_CREDENTIAL_HEADER.encode(), token_header)
 
     async def middleware(scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -904,8 +1013,25 @@ def connection_middleware(app: Any) -> Any:
             await _reply(send, 400, detail, "invalid_request")
             return
         values = [value for name, value in headers if name == header]
+        tokens = [value for name, value in headers if name == token_header]
         if not values:
+            if tokens:
+                detail = f"A {CONNECTION_TOKEN_HEADER} header is sent only with a {CONNECTION_HEADER} header"
+                await _reply(send, 400, detail, "invalid_request")
+                return
             await app(scope, receive, send)
+            return
+        if len(tokens) > 1:
+            await _reply(send, 400, f"Send at most one {CONNECTION_TOKEN_HEADER} header", "invalid_request")
+            return
+        if tokens and len(tokens[0]) > MAX_TOKEN_BYTES:
+            detail = f"The {CONNECTION_TOKEN_HEADER} header is over its limit of {MAX_TOKEN_BYTES} bytes"
+            await _reply(send, 400, detail, "invalid_request")
+            return
+        try:
+            identity_token = IdentityToken.from_json(tokens[0]) if tokens else None
+        except ValueError as exc:
+            await _reply(send, 400, f"Invalid {CONNECTION_TOKEN_HEADER} header: {exc}", "invalid_request")
             return
         if len(values) > 1:
             await _reply(send, 400, f"Send one {CONNECTION_HEADER} header, not {len(values)}", "invalid_request")
@@ -941,26 +1067,59 @@ def connection_middleware(app: Any) -> Any:
                 finally:
                     _CONNECTION.reset(connection_token)
                 return
-            context = contextvars.copy_context()
-            try:
-                credential = await anyio.to_thread.run_sync(context.run, resolve, binding, use)
-            except CredentialUnavailable as exc:
-                await _reply(send, 424, str(exc), exc.code, exc.remedy)
+            if binding.kind != KIND_KEYLESS:
+                identity_token = None
+            refusal = _token_refusal(binding, identity_token)
+            if refusal:
+                await _reply(send, 424, refusal, CredentialUnavailable.code)
                 return
-            except Exception as exc:
-                await _reply(send, *_resolver_failure(binding, exc))
-                return
-            connection_token = _CONNECTION.set(binding)
-            credential_token = _CREDENTIAL.set(credential)
+            hidden = [identity_token.token] if identity_token is not None else []
+            id_token = _IDENTITY_TOKEN.set(identity_token)
             try:
-                await app(scope, receive, send)
+                context = contextvars.copy_context()
+                try:
+                    credential = await anyio.to_thread.run_sync(context.run, resolve, binding, use, identity_token)
+                except CredentialUnavailable as exc:
+                    await _reply(send, 424, _hide(str(exc), hidden), exc.code, _hide(exc.remedy, hidden))
+                    return
+                except Exception as exc:
+                    status, detail, code, remedy, retry = _resolver_failure(binding, exc)
+                    await _reply(send, status, _hide(detail, hidden), code, _hide(remedy, hidden), retry)
+                    return
+                connection_token = _CONNECTION.set(binding)
+                credential_token = _CREDENTIAL.set(credential)
+                try:
+                    await app(scope, receive, send)
+                finally:
+                    _CREDENTIAL.reset(credential_token)
+                    _CONNECTION.reset(connection_token)
             finally:
-                _CREDENTIAL.reset(credential_token)
-                _CONNECTION.reset(connection_token)
+                _IDENTITY_TOKEN.reset(id_token)
         finally:
             _USE.reset(use_token)
 
     return middleware
+
+
+def _token_refusal(binding: ConnectionBinding, token: IdentityToken | None) -> str:
+    """Why a ``KEYLESS`` binding cannot be resolved with the identity token it came with, or ``""``."""
+    audience = token_audience(binding.provider) if binding.kind == KIND_KEYLESS else ""
+    if not audience:
+        return ""
+    if token is None:
+        return f"This {binding.provider} Connection needs an identity token, and the request carried none"
+    if token.connection_id != binding.id:
+        return f"The request's identity token was minted for another Connection than {binding.id}"
+    if token.audience != audience:
+        return f"The request's identity token is for another audience than {audience}"
+    return ""
+
+
+def _hide(text: str, hidden: list[str]) -> str:
+    for value in hidden:
+        if value:
+            text = text.replace(value, "***")
+    return text
 
 
 def _resolver_failure(binding: ConnectionBinding, exc: Exception) -> tuple[int, str, str, str, float | None]:

@@ -82,7 +82,8 @@
         "unavailable_reason": "",
         "preferred": true,
         "fields": [],
-        "grants": false
+        "grants": false,
+        "paste_back": []
       },
       {
         "kind": "KEYLESS",
@@ -111,7 +112,8 @@
             "default": ""
           }
         ],
-        "grants": false
+        "grants": false,
+        "paste_back": []
       }
     ],
     "host": {
