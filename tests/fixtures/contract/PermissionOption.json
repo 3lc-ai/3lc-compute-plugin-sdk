@@ -1,0 +1,16 @@
+{
+  "type": "PermissionOption",
+  "route": "PermissionSchema.options[]",
+  "example": {
+    "key": "deployment_nodes",
+    "label": "Deployments may start their own nodes",
+    "purpose": "deployments",
+    "help": "",
+    "default": true,
+    "operations": [
+      "node.create",
+      "node.describe",
+      "node.terminate"
+    ]
+  }
+}

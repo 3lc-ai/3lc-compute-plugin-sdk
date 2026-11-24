@@ -1,0 +1,15 @@
+{
+  "type": "SweepReport",
+  "route": "POST /infra/deployments/sweep (200)",
+  "example": {
+    "complete": true,
+    "released": [],
+    "held_addresses": [
+      "203.0.113.158"
+    ],
+    "pending": [
+      "fake:address/203.0.113.250"
+    ],
+    "problems": []
+  }
+}

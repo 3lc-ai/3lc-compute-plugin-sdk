@@ -1,0 +1,8 @@
+{
+  "type": "StorageDeleted",
+  "route": "DELETE /infra/storage/fake-new (200)",
+  "example": {
+    "deleted": true,
+    "id": "fake-new"
+  }
+}

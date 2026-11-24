@@ -1,0 +1,30 @@
+{
+  "type": "GrantRequest",
+  "route": "POST /infra/connection/grant (request)",
+  "example": {
+    "connection_id": "conn-1",
+    "kind": "KEYLESS",
+    "account": {
+      "account_id": "000000000000"
+    },
+    "access": {
+      "role_name": "3lc-fake"
+    },
+    "permissions": {
+      "deployments": true,
+      "nodes": true,
+      "storage": [
+        {
+          "location": "fake://fake-data/projects",
+          "access": "read_write"
+        }
+      ],
+      "options": {
+        "deployment_nodes": true
+      }
+    },
+    "action": "create",
+    "installed_ref": "",
+    "default_storage_root": "fake://fake-data/projects"
+  }
+}

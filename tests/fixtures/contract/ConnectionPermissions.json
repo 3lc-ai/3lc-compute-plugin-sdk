@@ -1,0 +1,17 @@
+{
+  "type": "ConnectionPermissions",
+  "route": "ConnectionBinding.permissions",
+  "example": {
+    "deployments": true,
+    "nodes": true,
+    "storage": [
+      {
+        "location": "fake://fake-data/projects",
+        "access": "read_write"
+      }
+    ],
+    "options": {
+      "deployment_nodes": true
+    }
+  }
+}

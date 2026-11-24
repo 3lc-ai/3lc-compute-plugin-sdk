@@ -1,0 +1,23 @@
+{
+  "type": "Locations",
+  "route": "GET /infra/catalog/locations (200)",
+  "example": {
+    "locations": [
+      {
+        "id": "fake-1",
+        "label": "Fake region 1",
+        "available": true,
+        "capacity": "High"
+      },
+      {
+        "id": "fake-2",
+        "label": "Fake region 2",
+        "available": true,
+        "capacity": "Low"
+      }
+    ],
+    "node_type": "fake-gpu",
+    "default": "fake-1",
+    "error": ""
+  }
+}

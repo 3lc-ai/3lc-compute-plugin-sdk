@@ -1,0 +1,32 @@
+{
+  "type": "PermissionSchema",
+  "route": "CapabilitiesResponse.permissions",
+  "example": {
+    "options": [
+      {
+        "key": "deployment_nodes",
+        "label": "Deployments may start their own nodes",
+        "purpose": "deployments",
+        "help": "",
+        "default": true,
+        "operations": [
+          "node.create",
+          "node.describe",
+          "node.terminate"
+        ]
+      }
+    ],
+    "storage": {
+      "scheme": "fake",
+      "example": "fake://fake-data/projects",
+      "pattern": "^fake://[a-z0-9*-]+(/.*)?$",
+      "access_modes": [
+        "read",
+        "read_write_no_delete",
+        "read_write"
+      ],
+      "help": "A bucket, or a folder in one. * matches any run of characters.",
+      "max_rules": 20
+    }
+  }
+}

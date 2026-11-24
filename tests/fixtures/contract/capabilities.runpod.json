@@ -1,0 +1,116 @@
+{
+  "type": "CapabilitiesResponse",
+  "route": "GET /infra/capabilities (200)",
+  "example": {
+    "provider": "runpod",
+    "display_name": "RunPod",
+    "contract": 2,
+    "ready": true,
+    "not_ready_reason": "",
+    "missing_fields": [],
+    "requires_connection": true,
+    "account": {
+      "noun": "RunPod account",
+      "fields": [],
+      "defaults": [],
+      "help": "The API key is the account."
+    },
+    "access_methods": [
+      {
+        "kind": "SECRET",
+        "label": "Uses an API key you store",
+        "summary": "3LC seals the key and releases it for each use.",
+        "purposes": [
+          "nodes",
+          "storage"
+        ],
+        "available": true,
+        "unavailable_reason": "",
+        "preferred": true,
+        "fields": [
+          {
+            "key": "api_key",
+            "label": "API key",
+            "kind": "secret",
+            "required": true,
+            "secret": true,
+            "help": "RunPod console, Settings, API keys.",
+            "example": "rpa_…",
+            "pattern": "",
+            "max_length": 256,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "volume_access_key",
+            "label": "Network volume access key",
+            "kind": "secret",
+            "required": false,
+            "secret": true,
+            "help": "Only for browsing and filling network volumes.",
+            "example": "",
+            "pattern": "",
+            "max_length": 256,
+            "choices": [],
+            "default": ""
+          },
+          {
+            "key": "volume_secret_key",
+            "label": "Network volume secret key",
+            "kind": "secret",
+            "required": false,
+            "secret": true,
+            "help": "",
+            "example": "",
+            "pattern": "",
+            "max_length": 256,
+            "choices": [],
+            "default": ""
+          }
+        ],
+        "grants": false
+      }
+    ],
+    "permissions": {
+      "options": []
+    },
+    "nodes": {
+      "kinds": [
+        "gpu"
+      ],
+      "types": [
+        "NVIDIA GeForce RTX 4090",
+        "NVIDIA RTX A6000"
+      ],
+      "type_label": "GPU",
+      "pricing": [
+        "on_demand",
+        "spot"
+      ],
+      "storage_access": [],
+      "type_connections": {}
+    },
+    "storage": {
+      "kind": "volume",
+      "label": "RunPod network volume",
+      "creatable": true,
+      "upload": true,
+      "browse": true,
+      "download": true,
+      "bundle": false,
+      "delete": true,
+      "transfer": true,
+      "rename": false
+    },
+    "operations": [
+      "connection.verify",
+      "node.create",
+      "node.state",
+      "node.delete",
+      "node.check",
+      "catalog",
+      "catalog.locations",
+      "storage"
+    ]
+  }
+}

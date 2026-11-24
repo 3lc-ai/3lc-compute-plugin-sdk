@@ -1,0 +1,34 @@
+{
+  "type": "ConnectionBinding",
+  "route": "header x-3lc-connection",
+  "example": {
+    "id": "conn-1",
+    "provider": "fake",
+    "kind": "KEYLESS",
+    "account": {
+      "account_id": "000000000000"
+    },
+    "access": {
+      "role_name": "3lc-fake",
+      "node_identity": "3lc-fake-node",
+      "setup_identity": "fake-host-principal"
+    },
+    "defaults": {
+      "location": "fake-1"
+    },
+    "permissions": {
+      "deployments": true,
+      "nodes": true,
+      "storage": [
+        {
+          "location": "fake://fake-data/projects",
+          "access": "read_write"
+        }
+      ],
+      "options": {
+        "deployment_nodes": true
+      }
+    },
+    "grant_ref": "fake:grant/conn-1"
+  }
+}

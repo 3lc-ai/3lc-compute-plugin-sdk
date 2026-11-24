@@ -1,0 +1,11 @@
+{
+  "type": "GrantUpdate",
+  "route": "POST /infra/connection/grant/update (200)",
+  "example": {
+    "status": "ready",
+    "detail": "A change is ready for review.",
+    "review_url": "https://console.fake.invalid/grants/conn-1/changes/2",
+    "revision": 1,
+    "pending_revision": 2
+  }
+}

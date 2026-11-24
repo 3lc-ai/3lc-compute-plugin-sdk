@@ -1,0 +1,12 @@
+{
+  "type": "DeploymentStorage",
+  "route": "DeploymentCheckRequest.storage",
+  "example": {
+    "root": "fake://fake-data/projects",
+    "scan": [
+      "fake://fake-data/train"
+    ],
+    "data": [],
+    "create_root": false
+  }
+}

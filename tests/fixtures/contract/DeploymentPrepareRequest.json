@@ -1,0 +1,14 @@
+{
+  "type": "DeploymentPrepareRequest",
+  "route": "POST /infra/deployments/prepare (request)",
+  "example": {
+    "deployment_id": "dep-1",
+    "placement": {
+      "location": "fake-1",
+      "network": "net-fake-1-a"
+    },
+    "namespace": "i-fake-1-z0fake.deploy.example.com",
+    "size": "fake-small",
+    "ingress_key": "fake-1-z0fake"
+  }
+}

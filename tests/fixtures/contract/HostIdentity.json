@@ -1,0 +1,11 @@
+{
+  "type": "HostIdentity",
+  "route": "CapabilitiesResponse.host",
+  "example": {
+    "display": "Fake host",
+    "matches": {
+      "setup_identity": "fake-host-principal"
+    },
+    "deployment_of": {}
+  }
+}

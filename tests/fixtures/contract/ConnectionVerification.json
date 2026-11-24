@@ -1,0 +1,47 @@
+{
+  "type": "ConnectionVerification",
+  "route": "POST /infra/connection/verify (200)",
+  "example": {
+    "identity": "fake:keyless:000000000000",
+    "account": {
+      "account_id": "000000000000"
+    },
+    "account_label": "Fake account 000000000000",
+    "checked": [
+      "resolve",
+      "whoami"
+    ],
+    "checks": [
+      {
+        "name": "fake://fake-data/projects",
+        "ok": true,
+        "level": "info",
+        "detail": ""
+      }
+    ],
+    "observation": {
+      "permissions": {
+        "deployments": true,
+        "nodes": true,
+        "storage": [
+          {
+            "location": "fake://fake-data/projects",
+            "access": "read_write"
+          }
+        ],
+        "options": {
+          "deployment_nodes": true
+        }
+      },
+      "account": {
+        "account_id": "000000000000"
+      },
+      "resource_ref": "fake:grant/conn-1",
+      "status": "complete",
+      "version": "1"
+    },
+    "facts": {
+      "Grant version": "1"
+    }
+  }
+}

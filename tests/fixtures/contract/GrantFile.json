@@ -1,0 +1,9 @@
+{
+  "type": "GrantFile",
+  "route": "Grant.files[]",
+  "example": {
+    "name": "3lc-connection.json",
+    "content": "{\"permissions\": {\"deployments\": true, \"nodes\": true, \"options\": {\"deployment_nodes\": true}, \"storage\": [{\"access\": \"read_write\", \"location\": \"fake://fake-data/projects\"}]}, \"role\": \"3lc-fake\", \"trusts\": \"fake-host-principal\"}",
+    "media_type": "application/json"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "type": "FormField",
+  "route": "AccountSchema.fields[]",
+  "example": {
+    "key": "account_id",
+    "label": "Account id",
+    "kind": "text",
+    "required": true,
+    "secret": false,
+    "help": "The twelve digits of the fake account.",
+    "example": "000000000000",
+    "pattern": "^\\d{12}$",
+    "max_length": 12,
+    "choices": [],
+    "default": ""
+  }
+}

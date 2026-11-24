@@ -1,0 +1,8 @@
+{
+  "type": "Choice",
+  "route": "FormField.choices[]",
+  "example": {
+    "id": "fake-1",
+    "label": "Fake region 1"
+  }
+}

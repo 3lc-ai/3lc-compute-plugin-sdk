@@ -1,0 +1,23 @@
+{
+  "type": "ConnectionNodeAccess",
+  "route": "POST /infra/connection/node-access (200)",
+  "example": {
+    "supported": true,
+    "ready": true,
+    "title": "Node storage access",
+    "detail": "Nodes reach storage as the fake node identity.",
+    "action_label": "",
+    "checks": [
+      {
+        "name": "fake://fake-data/projects",
+        "ok": true,
+        "level": "info",
+        "detail": "read_write"
+      }
+    ],
+    "storage_access": {
+      "rules": []
+    },
+    "revision": "1"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "CatalogRequest",
+  "route": "POST /infra/catalog (request)",
+  "example": {
+    "purpose": "gpu_node",
+    "location": "fake-1"
+  }
+}

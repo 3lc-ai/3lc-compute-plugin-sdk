@@ -1,0 +1,22 @@
+{
+  "type": "SweepRequest",
+  "route": "POST /infra/deployments/sweep (request)",
+  "example": {
+    "keep": [
+      {
+        "deployment_id": "dep-1",
+        "provider_id": "fake-dep-dep-1"
+      }
+    ],
+    "gone": [
+      {
+        "deployment_id": "dep-0",
+        "provider_id": ""
+      }
+    ],
+    "locations": [
+      "fake-1"
+    ],
+    "grace_s": 600.0
+  }
+}

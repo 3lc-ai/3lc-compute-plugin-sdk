@@ -1,0 +1,24 @@
+{
+  "type": "DeploymentCheckRequest",
+  "route": "POST /infra/deployments/check (request)",
+  "example": {
+    "label": "ada",
+    "size": "fake-small",
+    "placement": {
+      "location": "fake-1",
+      "network": "net-fake-1-a"
+    },
+    "storage": {
+      "root": "fake://fake-data/projects",
+      "scan": [
+        "fake://fake-data/train"
+      ],
+      "data": [],
+      "create_root": false
+    },
+    "zone": {
+      "id": "Z0FAKE",
+      "name": "deploy.example.com"
+    }
+  }
+}

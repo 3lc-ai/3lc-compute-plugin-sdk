@@ -1,0 +1,181 @@
+{
+  "type": "CapabilitiesResponse",
+  "route": "GET /infra/capabilities (200)",
+  "example": {
+    "provider": "azure",
+    "display_name": "Azure",
+    "contract": 2,
+    "ready": true,
+    "not_ready_reason": "",
+    "missing_fields": [],
+    "requires_connection": true,
+    "account": {
+      "noun": "Azure subscription and resource group",
+      "fields": [
+        {
+          "key": "tenant_id",
+          "label": "Tenant ID",
+          "kind": "text",
+          "required": true,
+          "secret": false,
+          "help": "",
+          "example": "00000000-0000-0000-0000-000000000000",
+          "pattern": "",
+          "max_length": 36,
+          "choices": [],
+          "default": ""
+        },
+        {
+          "key": "subscription_id",
+          "label": "Subscription ID",
+          "kind": "text",
+          "required": true,
+          "secret": false,
+          "help": "",
+          "example": "11111111-1111-1111-1111-111111111111",
+          "pattern": "",
+          "max_length": 36,
+          "choices": [],
+          "default": ""
+        },
+        {
+          "key": "resource_group",
+          "label": "Resource group",
+          "kind": "text",
+          "required": true,
+          "secret": false,
+          "help": "",
+          "example": "3lc",
+          "pattern": "",
+          "max_length": 90,
+          "choices": [],
+          "default": ""
+        }
+      ],
+      "defaults": [
+        {
+          "key": "location",
+          "label": "Default location",
+          "kind": "text",
+          "required": false,
+          "secret": false,
+          "help": "",
+          "example": "westeurope",
+          "pattern": "",
+          "max_length": 256,
+          "choices": [],
+          "default": ""
+        }
+      ],
+      "help": "3LC creates everything in this one resource group."
+    },
+    "access_methods": [
+      {
+        "kind": "AMBIENT",
+        "label": "Uses this machine's own sign-in",
+        "summary": "An az login session on this machine, or the managed identity of the VM it runs on.",
+        "purposes": [
+          "nodes",
+          "storage"
+        ],
+        "available": true,
+        "unavailable_reason": "",
+        "preferred": true,
+        "fields": [],
+        "grants": false
+      },
+      {
+        "kind": "KEYLESS",
+        "label": "Uses access you grant to 3LC",
+        "summary": "You create a managed identity that trusts this Compute Service. No key is stored.",
+        "purposes": [
+          "deployments",
+          "nodes",
+          "storage"
+        ],
+        "available": false,
+        "unavailable_reason": "This Compute Service cannot yet prove its identity to Azure.",
+        "preferred": false,
+        "fields": [
+          {
+            "key": "identity_name",
+            "label": "Identity name",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "3lc-connection",
+            "pattern": "",
+            "max_length": 128,
+            "choices": [],
+            "default": ""
+          }
+        ],
+        "grants": false
+      }
+    ],
+    "host": {
+      "display": "ada@example.com (az login)",
+      "matches": {},
+      "deployment_of": {}
+    },
+    "permissions": {
+      "options": [],
+      "storage": {
+        "scheme": "abfss",
+        "example": "abfss://projects@myaccount.dfs.core.windows.net/3lc",
+        "pattern": "^abfss://[a-z0-9*-]{1,63}@[a-z0-9*]{1,24}\\.dfs\\.core\\.windows\\.net(/.*)?$",
+        "access_modes": [
+          "read",
+          "read_write"
+        ],
+        "help": "A container, or a folder in one.",
+        "max_rules": 20
+      }
+    },
+    "nodes": {
+      "kinds": [
+        "gpu",
+        "cpu"
+      ],
+      "types": [
+        "Standard_NC4as_T4_v3",
+        "Standard_NC24ads_A10_v5"
+      ],
+      "type_label": "VM size",
+      "pricing": [
+        "on_demand",
+        "spot"
+      ],
+      "storage_access": [
+        "identity",
+        "ambient"
+      ],
+      "type_connections": {}
+    },
+    "storage": {
+      "kind": "container",
+      "label": "Azure storage container",
+      "creatable": true,
+      "upload": true,
+      "browse": true,
+      "download": true,
+      "bundle": true,
+      "delete": true,
+      "transfer": true,
+      "rename": true
+    },
+    "operations": [
+      "connection.verify",
+      "connection.node_access",
+      "storage.candidates",
+      "node.create",
+      "node.state",
+      "node.delete",
+      "node.check",
+      "catalog",
+      "catalog.locations",
+      "storage"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "type": "DeploymentCapabilities",
+  "route": "CapabilitiesResponse.deployments",
+  "example": {
+    "certificate": "provider",
+    "shared_ingress": true,
+    "sslip": true
+  }
+}

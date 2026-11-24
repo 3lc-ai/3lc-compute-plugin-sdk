@@ -1,0 +1,8 @@
+{
+  "type": "BundleRequest",
+  "route": "POST /infra/storage/bundle (request)",
+  "example": {
+    "url": "fake://fake-data/train",
+    "name": ""
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "type": "Grant",
+  "route": "POST /infra/connection/grant (200)",
+  "example": {
+    "summary": "Creates the role 3lc-fake in fake account 000000000000.",
+    "action": "create",
+    "link": "https://console.fake.invalid/grants/create?connection=conn-1",
+    "link_label": "Open the fake console",
+    "steps": [
+      "Open the link.",
+      "Review what is created.",
+      "Choose Apply and wait for it to complete."
+    ],
+    "creates": {
+      "deployments": [
+        "A role 3lc-fake-deployment that a managed deployment runs as."
+      ],
+      "nodes": [
+        "A role 3lc-fake-node that a node runs as."
+      ],
+      "storage": [
+        "read_write access to fake://fake-data/projects"
+      ]
+    },
+    "trusts": "The fake principal fake-host-principal",
+    "files": [
+      {
+        "name": "3lc-connection.json",
+        "content": "{\"permissions\": {\"deployments\": true, \"nodes\": true, \"options\": {\"deployment_nodes\": true}, \"storage\": [{\"access\": \"read_write\", \"location\": \"fake://fake-data/projects\"}]}, \"role\": \"3lc-fake\", \"trusts\": \"fake-host-principal\"}",
+        "media_type": "application/json"
+      }
+    ],
+    "command": "fake grants apply --file 3lc-connection.json",
+    "permissions": {
+      "deployments": true,
+      "nodes": true,
+      "storage": [
+        {
+          "location": "fake://fake-data/projects",
+          "access": "read_write"
+        }
+      ],
+      "options": {
+        "deployment_nodes": true
+      }
+    },
+    "access": {
+      "role_name": "3lc-fake",
+      "node_identity": "3lc-fake-node",
+      "setup_identity": "fake-host-principal"
+    },
+    "version": "1",
+    "console_url": "https://console.fake.invalid/grants/conn-1",
+    "notes": [
+      "Delete the role to revoke the access."
+    ]
+  }
+}

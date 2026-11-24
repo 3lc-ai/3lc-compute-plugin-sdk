@@ -1,0 +1,8 @@
+{
+  "type": "StorageRule",
+  "route": "ConnectionPermissions.storage[]",
+  "example": {
+    "location": "fake://fake-data/projects",
+    "access": "read_write"
+  }
+}

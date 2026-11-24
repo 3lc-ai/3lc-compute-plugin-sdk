@@ -1,0 +1,8 @@
+{
+  "type": "DnsZone",
+  "route": "DeploymentCheckRequest.zone",
+  "example": {
+    "id": "Z0FAKE",
+    "name": "deploy.example.com"
+  }
+}

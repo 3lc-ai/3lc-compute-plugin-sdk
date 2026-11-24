@@ -1,0 +1,25 @@
+{
+  "type": "DeploymentResponse",
+  "route": "POST /infra/deployments (201)",
+  "example": {
+    "provider_id": "fake-dep-dep-1",
+    "addresses": [
+      {
+        "type": "ipv4",
+        "value": "203.0.113.158"
+      }
+    ],
+    "endpoints": {
+      "object_service_url": "https://os-ada.i-fake-1-z0fake.deploy.example.com",
+      "compute_service_url": "https://compute-ada.i-fake-1-z0fake.deploy.example.com"
+    },
+    "location": "fake-1",
+    "placement": {
+      "location": "fake-1",
+      "network": "net-fake-1-a"
+    },
+    "hourly_rate": 0.1,
+    "resource_ref": "fake:deployment/dep-1",
+    "failure": ""
+  }
+}

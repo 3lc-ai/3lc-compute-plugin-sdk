@@ -1,0 +1,17 @@
+{
+  "type": "DnsRecords",
+  "route": "GET /infra/dns/records (200)",
+  "example": {
+    "records": [
+      {
+        "name": "_validate.i-fake-1-z0fake.deploy.example.com",
+        "type": "TXT",
+        "values": [
+          "fake-fake-1-z0fake"
+        ],
+        "ttl": 60
+      }
+    ],
+    "next_cursor": ""
+  }
+}

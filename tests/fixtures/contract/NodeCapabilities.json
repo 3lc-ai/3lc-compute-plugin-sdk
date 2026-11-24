@@ -1,0 +1,24 @@
+{
+  "type": "NodeCapabilities",
+  "route": "CapabilitiesResponse.nodes",
+  "example": {
+    "kinds": [
+      "gpu",
+      "cpu"
+    ],
+    "types": [
+      "fake-gpu",
+      "fake-cpu"
+    ],
+    "type_label": "Fake machine",
+    "pricing": [
+      "on_demand",
+      "spot"
+    ],
+    "storage_access": [
+      "identity",
+      "ambient"
+    ],
+    "type_connections": {}
+  }
+}

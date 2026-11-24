@@ -1,0 +1,13 @@
+{
+  "type": "StorageItem",
+  "route": "StorageListing.storage[]",
+  "example": {
+    "id": "fake-data",
+    "name": "fake-data",
+    "url": "fake://fake-data",
+    "region": "fake-1",
+    "size_gb": null,
+    "kind": "bucket",
+    "default": true
+  }
+}

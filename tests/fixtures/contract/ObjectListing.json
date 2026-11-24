@@ -1,0 +1,22 @@
+{
+  "type": "ObjectListing",
+  "route": "GET /infra/storage/list (200)",
+  "example": {
+    "url": "fake://fake-data/",
+    "prefixes": [
+      {
+        "name": "train",
+        "url": "fake://fake-data/train/"
+      }
+    ],
+    "objects": [
+      {
+        "key": "readme.txt",
+        "name": "readme.txt",
+        "size": 5,
+        "url": "fake://fake-data/readme.txt"
+      }
+    ],
+    "truncated": false
+  }
+}

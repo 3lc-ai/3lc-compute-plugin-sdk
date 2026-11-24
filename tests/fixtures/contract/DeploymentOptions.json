@@ -1,0 +1,57 @@
+{
+  "type": "DeploymentOptions",
+  "route": "POST /infra/deployments/options (200)",
+  "example": {
+    "placement": [
+      {
+        "key": "location",
+        "label": "Location",
+        "choices": [
+          {
+            "id": "fake-1",
+            "label": "Fake region 1"
+          },
+          {
+            "id": "fake-2",
+            "label": "Fake region 2"
+          }
+        ],
+        "default": "fake-1",
+        "required": true
+      },
+      {
+        "key": "network",
+        "label": "Network",
+        "choices": [
+          {
+            "id": "net-fake-1-a",
+            "label": "Default network of fake-1"
+          },
+          {
+            "id": "net-fake-1-b",
+            "label": "Second network of fake-1"
+          }
+        ],
+        "default": "net-fake-1-a",
+        "required": true
+      }
+    ],
+    "costs": [
+      {
+        "label": "Machine",
+        "description": "Billed while the deployment runs.",
+        "hourly": 0.1,
+        "currency": "USD"
+      },
+      {
+        "label": "Shared ingress",
+        "description": "One per network.",
+        "hourly": 0.03,
+        "currency": "USD",
+        "reused": false
+      }
+    ],
+    "warnings": [],
+    "blockers": []
+  }
+}

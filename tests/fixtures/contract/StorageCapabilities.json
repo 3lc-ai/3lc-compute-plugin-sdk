@@ -1,0 +1,17 @@
+{
+  "type": "StorageCapabilities",
+  "route": "CapabilitiesResponse.storage",
+  "example": {
+    "kind": "bucket",
+    "label": "Fake bucket",
+    "creatable": true,
+    "upload": true,
+    "browse": true,
+    "download": true,
+    "bundle": true,
+    "delete": true,
+    "transfer": true,
+    "rename": true,
+    "default_id": "fake-data"
+  }
+}

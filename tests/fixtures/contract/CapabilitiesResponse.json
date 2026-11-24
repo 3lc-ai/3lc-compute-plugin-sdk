@@ -1,0 +1,242 @@
+{
+  "type": "CapabilitiesResponse",
+  "route": "GET /infra/capabilities (200)",
+  "example": {
+    "provider": "fake",
+    "display_name": "Fake cloud",
+    "contract": 2,
+    "ready": false,
+    "not_ready_reason": "",
+    "missing_fields": [
+      {
+        "key": "api_key",
+        "label": "Fake API key",
+        "kind": "secret",
+        "required": true,
+        "secret": true,
+        "help": "Any value works; the provider is in memory.",
+        "example": "fake-…",
+        "pattern": "",
+        "max_length": 256,
+        "choices": [],
+        "default": ""
+      }
+    ],
+    "requires_connection": false,
+    "account": {
+      "noun": "Fake account",
+      "fields": [
+        {
+          "key": "account_id",
+          "label": "Account id",
+          "kind": "text",
+          "required": true,
+          "secret": false,
+          "help": "The twelve digits of the fake account.",
+          "example": "000000000000",
+          "pattern": "^\\d{12}$",
+          "max_length": 12,
+          "choices": [],
+          "default": ""
+        }
+      ],
+      "defaults": [
+        {
+          "key": "location",
+          "label": "Default location",
+          "kind": "select",
+          "required": false,
+          "secret": false,
+          "help": "",
+          "example": "",
+          "pattern": "",
+          "max_length": 256,
+          "choices": [
+            {
+              "id": "fake-1",
+              "label": "Fake region 1"
+            },
+            {
+              "id": "fake-2",
+              "label": "Fake region 2"
+            }
+          ],
+          "default": "fake-1"
+        }
+      ],
+      "help": "Any twelve digits work; the provider is in memory."
+    },
+    "access_methods": [
+      {
+        "kind": "KEYLESS",
+        "label": "Uses access you grant to 3LC",
+        "summary": "You create a role in the fake account that trusts this host.",
+        "purposes": [
+          "deployments",
+          "nodes",
+          "storage"
+        ],
+        "available": true,
+        "unavailable_reason": "",
+        "preferred": true,
+        "fields": [
+          {
+            "key": "role_name",
+            "label": "Role name",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "",
+            "example": "3lc-fake",
+            "pattern": "",
+            "max_length": 64,
+            "choices": [],
+            "default": "3lc-fake"
+          }
+        ],
+        "grants": true
+      },
+      {
+        "kind": "AMBIENT",
+        "label": "Uses this machine's own sign-in",
+        "summary": "The Compute Service acts as itself.",
+        "purposes": [
+          "nodes",
+          "storage"
+        ],
+        "available": true,
+        "unavailable_reason": "",
+        "preferred": false,
+        "fields": [],
+        "grants": false
+      },
+      {
+        "kind": "SECRET",
+        "label": "Uses an API key you store",
+        "summary": "",
+        "purposes": [
+          "nodes",
+          "storage"
+        ],
+        "available": true,
+        "unavailable_reason": "",
+        "preferred": false,
+        "fields": [
+          {
+            "key": "api_key",
+            "label": "API key",
+            "kind": "secret",
+            "required": true,
+            "secret": true,
+            "help": "",
+            "example": "fake-…",
+            "pattern": "",
+            "max_length": 256,
+            "choices": [],
+            "default": ""
+          }
+        ],
+        "grants": false
+      }
+    ],
+    "host": {
+      "display": "Fake host",
+      "matches": {
+        "setup_identity": "fake-host-principal"
+      },
+      "deployment_of": {}
+    },
+    "permissions": {
+      "options": [
+        {
+          "key": "deployment_nodes",
+          "label": "Deployments may start their own nodes",
+          "purpose": "deployments",
+          "help": "",
+          "default": true,
+          "operations": [
+            "node.create",
+            "node.describe",
+            "node.terminate"
+          ]
+        }
+      ],
+      "storage": {
+        "scheme": "fake",
+        "example": "fake://fake-data/projects",
+        "pattern": "^fake://[a-z0-9*-]+(/.*)?$",
+        "access_modes": [
+          "read",
+          "read_write_no_delete",
+          "read_write"
+        ],
+        "help": "A bucket, or a folder in one. * matches any run of characters.",
+        "max_rules": 20
+      }
+    },
+    "nodes": {
+      "kinds": [
+        "gpu",
+        "cpu"
+      ],
+      "types": [
+        "fake-gpu",
+        "fake-cpu"
+      ],
+      "type_label": "Fake machine",
+      "pricing": [
+        "on_demand",
+        "spot"
+      ],
+      "storage_access": [
+        "identity",
+        "ambient"
+      ],
+      "type_connections": {}
+    },
+    "deployments": {
+      "certificate": "provider",
+      "shared_ingress": true,
+      "sslip": true
+    },
+    "storage": {
+      "kind": "bucket",
+      "label": "Fake bucket",
+      "creatable": true,
+      "upload": true,
+      "browse": true,
+      "download": true,
+      "bundle": true,
+      "delete": true,
+      "transfer": true,
+      "rename": true,
+      "default_id": "fake-data"
+    },
+    "operations": [
+      "connection.grant",
+      "connection.grant_update",
+      "connection.verify",
+      "connection.node_access",
+      "storage.candidates",
+      "node.create",
+      "node.state",
+      "node.delete",
+      "node.check",
+      "node.diagnostics",
+      "catalog",
+      "catalog.locations",
+      "deployment.options",
+      "deployment.check",
+      "deployment.prepare",
+      "deployment.create",
+      "deployment.state",
+      "deployment.delete",
+      "deployment.retain",
+      "deployment.list",
+      "deployment.sweep",
+      "storage",
+      "dns",
+      "workspace.create"
+    ]
+  }
+}

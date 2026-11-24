@@ -1,0 +1,17 @@
+{
+  "type": "NodeAccessRequest",
+  "route": "POST /infra/connection/node-access (request)",
+  "example": {
+    "storage_roots": [
+      {
+        "url": "fake://fake-data/projects",
+        "access": "read_write",
+        "role": "project_root"
+      }
+    ],
+    "storage_access": {
+      "rules": []
+    },
+    "expected_revision": "0"
+  }
+}
