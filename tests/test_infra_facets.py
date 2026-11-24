@@ -241,6 +241,13 @@ def _node(node_id: str = "n1", **more: Any) -> dict[str, Any]:
     ).to_dict()
 
 
+def test_a_node_with_an_unknown_pricing_is_refused_not_launched(fake: Any) -> None:
+    plugin, h = fake
+    r = h.post("/infra/nodes", json_body={**_node(), "pricing": "reserved"}, headers=_KEYLESS)
+    assert r.status_code == 400 and r.json()["code"] == "invalid_request" and "on_demand" in r.json()["remedy"]
+    assert plugin.nodes == {}
+
+
 @pytest.mark.parametrize(
     ("headers", "credential", "storage_access", "identity"),
     [
@@ -261,6 +268,9 @@ def test_a_node_is_created_described_and_deleted_with_each_kind_of_connection(
     assert (created.storage_access, created.identity) == (storage_access, identity)
     record = plugin.nodes["fake-n1"]
     assert record["credential"] == credential and record["connection"] == ("conn-1" if headers else "")
+    assert record["kind"] == "gpu", "the node kind is not overwritten by the Connection's kind"
+    kinds = {"FakeCredential": "KEYLESS", "Ambient": "AMBIENT", "SecretToken": "SECRET"}
+    assert record["connection_kind"] == kinds.get(credential, "")
     assert record["tags"] == {"3lc": "node", "3lc-id": "n1", "3lc-owner": "ada", "3lc-host": "svc-1"}
     assert record["location"] == ("fake-2" if headers else "fake-1"), (
         "the Connection's default location, else the plugin's"
@@ -496,6 +506,7 @@ def test_a_launch_runs_options_check_prepare_create_with_the_launcher_writing_th
     assert again == created and len(plugin.deployments) == 1, "create is idempotent on the deployment id"
     assert plugin.deployments["fake-dep-dep-1"]["tags"]["3lc-id"] == "dep-1"
     assert plugin.deployments["fake-dep-dep-1"]["credential"] == "FakeCredential"
+    assert plugin.deployments["fake-dep-dep-1"]["connection_kind"] == "KEYLESS"
 
     address = created.addresses[0].value
     names = [

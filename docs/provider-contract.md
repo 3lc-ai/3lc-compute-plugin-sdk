@@ -105,6 +105,13 @@ These hold for every type below and are the SDK's existing rules (`sdk:infrastru
   key whose presence carries meaning when it is unset: a field that is `None`, and the optional
   keys of the answers that already did so (`CreateNodeResponse`, `NodeStateResponse`, the
   storage types).
+- One exception to "never raises": a request a provider acts on refuses an enum value it does
+  not know. In `CreateNodeRequest` (`kind`, `pricing`), `DeploymentRequest` (`mode`) and every
+  `StorageRoot` (`access`, `role`), a value that is set and not one of the field's values is an
+  `InvalidRequest` (400) whose remedy names the allowed values, so nothing launches on a default
+  nobody chose. An unset or empty value is the field's default, and case is not significant for
+  `kind` and `pricing`. An answer stays tolerant: an unknown value in a response reads as the
+  field's default or its safe value.
 - New optional fields and new operations may be added in a later minor without a change from a
   provider that does not use them. Nothing in a request is ever required of a provider that did
   not declare the operation it belongs to.

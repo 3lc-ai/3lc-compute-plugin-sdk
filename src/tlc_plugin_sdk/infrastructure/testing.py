@@ -1279,7 +1279,7 @@ class FakeProvider(
         use = current_use()
         return {
             "connection": binding.id if binding is not None else "",
-            "kind": binding.kind if binding is not None else "",
+            "connection_kind": binding.kind if binding is not None else "",
             "credential": type(credential).__name__ if credential is not None else "",
             "resource_id": use.resource_id if use is not None else "",
             "source_identity": use.source_identity if use is not None else "",
@@ -1519,7 +1519,7 @@ class FakeProvider(
             response: CreateNodeResponse = existing["response"]
             return response
         acting = self._acting()
-        access = {"KEYLESS": "identity", "AMBIENT": "ambient"}.get(acting["kind"], "none")
+        access = {"KEYLESS": "identity", "AMBIENT": "ambient"}.get(acting["connection_kind"], "none")
         node: dict[str, Any] = {
             "state": "running",
             "kind": request.kind,

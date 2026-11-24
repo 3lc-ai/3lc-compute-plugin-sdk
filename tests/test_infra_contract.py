@@ -162,8 +162,29 @@ def test_a_create_request_carries_kind_location_and_storage_roots() -> None:
     wire = req.to_dict()
     assert "flavor" not in wire and "workspace" not in wire and "gpu_type" not in wire
     assert CreateNodeRequest.from_dict(wire) == req
-    assert CreateNodeRequest.from_dict({"kind": "quantum", "pricing": "free"}).kind == "gpu"
-    assert CreateNodeRequest.from_dict({"pricing": "free"}).pricing == ""
+    assert CreateNodeRequest.from_dict({}).kind == "gpu" and CreateNodeRequest.from_dict({}).pricing == ""
+
+
+@pytest.mark.parametrize(
+    ("body", "named"),
+    [
+        ({"kind": "quantum"}, "'gpu', 'cpu'"),
+        ({"pricing": "free"}, "'on_demand', 'spot'"),
+        ({"storage_roots": [{"url": "s3://b", "access": "write"}]}, "'read', 'read_write'"),
+        ({"storage_roots": [{"url": "s3://b", "role": "cache"}]}, "'project_root', 'scan', 'data'"),
+    ],
+)
+def test_a_create_request_refuses_an_unknown_enum_value(body: dict[str, Any], named: str) -> None:
+    with pytest.raises(InvalidRequest) as raised:
+        CreateNodeRequest.from_dict(body)
+    assert named in raised.value.remedy
+
+
+def test_a_deployment_request_refuses_an_unknown_mode_and_a_response_stays_tolerant() -> None:
+    with pytest.raises(InvalidRequest, match="mode"):
+        DeploymentRequest.from_dict({"deployment_id": "d", "name": "n", "bootstrap": {}, "mode": "partial"})
+    assert DeploymentRequest.from_dict({"deployment_id": "d", "name": "n", "bootstrap": {}}).mode == "full"
+    assert CreateNodeResponse.from_dict({"provider_id": "p", "storage_access": "telepathy"}).storage_access == "none"
     assert CreateNodeRequest.from_dict({"idle_ttl_s": 0}).idle_ttl_s == 0.0, "zero or less means never"
 
 

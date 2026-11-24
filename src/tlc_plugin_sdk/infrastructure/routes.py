@@ -396,7 +396,7 @@ def _node_create_handlers(plugin: InfrastructurePlugin) -> list[Any]:
 
     @http_post("/infra/nodes", status_code=201, sync_to_thread=True, exception_handlers=_ERRORS)
     def _create_node(data: dict[str, Any]) -> dict[str, Any]:
-        req = CreateNodeRequest.from_dict(data)
+        req = answer(plugin, lambda: CreateNodeRequest.from_dict(data))
         if not req.node_id or not req.token:
             raise ProviderHTTPError(400, "The create call needs both a node_id and a token", "invalid_request")
         # ── transitional ──
@@ -549,7 +549,7 @@ def _deployment_create_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     @http_post("/infra/deployments", status_code=201, sync_to_thread=True, exception_handlers=_ERRORS)
     def _create_deployment(data: dict[str, Any]) -> dict[str, Any]:
         _require_connection()
-        request = DeploymentRequest.from_dict(data)
+        request = answer(plugin, lambda: DeploymentRequest.from_dict(data))
         if not request.deployment_id or not request.bootstrap.record_id:
             detail = "The create call needs a deployment_id and the bootstrap record it becomes"
             raise ProviderHTTPError(400, detail, "invalid_request")

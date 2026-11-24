@@ -41,6 +41,7 @@ from tlc_plugin_sdk.infrastructure._wire import (
     _str_dict,
     _str_list,
     _stripped,
+    refuse_unknown,
 )
 from tlc_plugin_sdk.infrastructure.errors import error_body
 from tlc_plugin_sdk.infrastructure.transitional import (
@@ -769,6 +770,8 @@ class StorageRoot(Wire):
         role: ``project_root``, a ``scan`` folder or a ``data`` location.
     """
 
+    _refuses_unknown: ClassVar[bool] = True
+
     url: str
     access: Literal["read", "read_write"] = "read_write"
     role: Literal["project_root", "scan", "data"] = "project_root"
@@ -870,10 +873,14 @@ def _idle_ttl(value: Any) -> float:
 
 
 def _node_kind(value: Any) -> NodeKind:
+    """A request's node kind; unset is ``gpu``, anything else unknown is refused."""
+    refuse_unknown("kind", _stripped(value).lower(), ("gpu", "cpu"))
     return "cpu" if _stripped(value).lower() == "cpu" else "gpu"
 
 
 def _pricing(value: Any) -> Literal["", "on_demand", "spot"]:
+    """A request's pricing; unset is ``""`` (the provider's choice), anything else unknown is refused."""
+    refuse_unknown("pricing", _stripped(value).lower(), ("", "on_demand", "spot"))
     text = _stripped(value).lower()
     if text == "on_demand":
         return "on_demand"
@@ -949,7 +956,11 @@ class CreateNodeRequest:
 
     @classmethod
     def from_dict(cls, data: Any) -> CreateNodeRequest:
-        """Parse from the JSON body the host sends; keys it does not know are ignored."""
+        """Parse from the JSON body the host sends; keys it does not know are ignored.
+
+        Raises:
+            InvalidRequest: ``kind``, ``pricing`` or a storage root holds a value the contract does not define.
+        """
         d = _mapping(data)
         return cls(
             node_id=_stripped(d.get("node_id")),
@@ -1638,6 +1649,8 @@ class DeploymentRequest(Wire):
         mode: ``full`` or ``demo``.
         detailed_diagnostics: Whether the detailed diagnostics collector is granted.
     """
+
+    _refuses_unknown: ClassVar[bool] = True
 
     deployment_id: str
     name: str

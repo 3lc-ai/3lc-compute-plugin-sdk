@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """How a wire dataclass reads and writes JSON: the coercion helpers and the :class:`Wire` codec.
 
-A peer's shape never raises here. Scalars are coerced, lists are filtered to their item type, a
-value of the wrong kind is the field's default, and a key the type does not know is dropped.
+A peer's shape never raises here, with one exception: a request that refuses unknown values
+(:attr:`Wire._refuses_unknown`) raises :class:`~tlc_plugin_sdk.infrastructure.errors.InvalidRequest`
+for a ``Literal`` field it cannot read, since acting on a default would do something nobody asked
+for. Otherwise scalars are coerced, lists are filtered to their item type, a value of the wrong kind
+is the field's default, and a key the type does not know is dropped.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import types
 import typing
 from collections.abc import Mapping
 from typing import Any, ClassVar, Literal, Self
+
+from tlc_plugin_sdk.infrastructure.errors import InvalidRequest
 
 __all__ = ["Wire"]
 
@@ -115,6 +120,26 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 # ── The codec ──────────────────────────────────────────────────────────────────
 
 _MISSING = dataclasses.MISSING
+
+
+def refuse_unknown(name: str, value: Any, allowed: tuple[Any, ...]) -> None:
+    """Raise :class:`InvalidRequest` when a request's ``value`` is set but not one of ``allowed``.
+
+    ``None`` and ``""`` read as unset: the field's default applies.
+
+    Args:
+        name: The field, for the message.
+        value: What the peer sent.
+        allowed: The values the field takes.
+
+    Raises:
+        InvalidRequest: ``value`` is set and not allowed.
+    """
+    text = value.strip() if isinstance(value, str) else value
+    if text is None or text == "" or text in allowed:
+        return
+    choices = ", ".join(repr(a) for a in allowed if a != "")
+    raise InvalidRequest(f"Unknown {name} {value!r}", remedy=f"Use one of {choices}.")
 
 
 def _is_message(tp: Any) -> bool:
@@ -247,6 +272,9 @@ class Wire:
     #: Field name → what an unreadable value of a required ``Literal`` field reads as (the safe
     #: reading: ``"failed"`` for a status). Without an entry it reads as the type's first value.
     _unreadable: ClassVar[dict[str, str]] = {}
+    #: Whether an unknown value of a ``Literal`` field raises :class:`InvalidRequest` instead of
+    #: reading as the default: set on what the host asks a provider to act on, never on answers.
+    _refuses_unknown: ClassVar[bool] = False
 
     @classmethod
     def _hints(cls) -> dict[str, Any]:
@@ -265,6 +293,9 @@ class Wire:
 
         Returns:
             The message.
+
+        Raises:
+            InvalidRequest: The class refuses unknown values and a ``Literal`` field holds one.
         """
         source = _mapping(data)
         hints = cls._hints()
@@ -278,6 +309,8 @@ class Wire:
                 default = f.default_factory()
             else:
                 default = _zero(tp, fallback)
+            if cls._refuses_unknown and typing.get_origin(tp) is Literal:
+                refuse_unknown(f.name, source.get(f.name), typing.get_args(tp))
             values[f.name] = _decode(tp, source.get(f.name), default, fallback)
         return cls(**values)
 
