@@ -261,20 +261,17 @@ _BOOTSTRAP_ANSWER = "/etc/3lc/bootstrap.json"
 _KEYS_EOF = "__3LC_KEYS__"
 # Turns the redeem answer into the two env files; runs under the service venv's Python, as root, with
 # a 077 umask. JSON quoting is systemd's double-quote syntax for the characters a key can hold.
-_WRITE_KEYS_PY = (
-    """import json
+_WRITE_KEYS_PY = """import json
 with open("%(answer)s") as f:
     answer = json.load(f)
 for field, path in (("object_service", "%(object)s"), ("compute_service", "%(compute)s")):
     with open(path, "w") as f:
         f.write("TLC_API_KEY=" + json.dumps(str(answer[field]["api_key"])) + "\\n")
-"""
-    % {
-        "answer": _BOOTSTRAP_ANSWER,
-        "object": OBJECT_SERVICE_ENV_FILE,
-        "compute": COMPUTE_SERVICE_ENV_FILE,
-    }
-)
+""" % {
+    "answer": _BOOTSTRAP_ANSWER,
+    "object": OBJECT_SERVICE_ENV_FILE,
+    "compute": COMPUTE_SERVICE_ENV_FILE,
+}
 
 
 def _redeem_url(config_service_url: str, record_id: str) -> str:
