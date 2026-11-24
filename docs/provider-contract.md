@@ -720,6 +720,12 @@ class NodeProvider(ABC):
   the Connection's grant created, which it reads from the binding's `access`
   (`aws:provider.py:1033-1070`), and says which in `identity`. It never copies a credential onto
   the node: credential variables in `env` are dropped (`aws:provider.py:1012-1031`).
+- **The node's 3LC credential.** The host, not the provider, gives a worker node its credential
+  for 3LC services, as `TLC_NODE_CREDENTIAL` in the create request's `env`. Under a Config Service Connection it comes with that Connection's `node.create`
+  grant. With no Connection, or under the built-in Connection that acts as the host's own
+  identity, it comes with an identity-only `node.create` grant whenever the host has a Config
+  Service. A host without a Config Service gives the node none, and node preflight then carries
+  a `node_credential` check at `warning`. The host revokes the credential when the node is deleted.
 - **Worker identity selection.** A machine with more than one identity attached must tell its
   workers which to use. The provider sets that in the machine's environment at bootstrap, under
   names the node agent's allow-list passes to workers. No response field carries it. The
@@ -1483,6 +1489,8 @@ meaning does; "Changes" says what does not.
 | `GET /api/infra/storage/{plugin}/candidates` | `:1312` | `storage.candidates` | Items are `{location, label}` |
 | `POST /api/infra/preflight`, `GET /api/infra/nodes/preflight` | `:567`, `:879` | `node.check` | `location` replaces `datacenter`; `pricing` added |
 | `POST /api/infra/nodes` | `:911` | `node.create` | `kind` replaces `flavor`; `location` added; a deployment is refused here |
+| `GET /api/infra/nodes/catalog?plugin_id=&connection_id=&kind=gpu\|cpu&location=` | `:928` | `catalog(purpose="gpu_node"` or `"cpu_node")` | Answer is `Catalog` |
+| `GET /api/infra/nodes/catalog/locations?plugin_id=&connection_id=&node_type=` | `:955` | `catalog.locations` | Answer is `Locations` |
 | `GET`, `DELETE /api/infra/nodes/{id}` and the node file routes | `:960`-`:1173` | `node.state`, `node.delete`, the node agent | None |
 | `GET /api/infra/{plugin}/placement` | `:510` | `deployment.options` | Becomes `POST` with `{connection_id, selected}`; answer is `DeploymentOptions` |
 | `GET /api/infra/{plugin}/sizes` | `:527` | `catalog(purpose="deployment")` | `location` replaces `region`; answer is `Catalog` |
@@ -1822,7 +1830,8 @@ deployments, no storage and no DNS. Its "Test" route stays plugin-private.
 object of those keys. This fills the seam the plugin leaves open today
 (`runpod:connection.py:54-63`). It implements `connection.verify` (who the key belongs to, as
 `account_label`), the node operations, `catalog` and `catalog.locations` (stock by datacenter),
-and storage over network volumes. `storage_access` is `"none"`. It implements no grant, no node
+and storage over network volumes. Its capabilities list `nodes.storage_access` as empty, and a
+create answers `storage_access = "none"`. It implements no grant, no node
 identity and no deployments. A launcher is never granted a secret
 (`cs:db/models/connection.py:105-113`), which is consistent: RunPod hosts no deployments.
 
