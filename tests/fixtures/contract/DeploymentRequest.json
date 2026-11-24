@@ -37,6 +37,12 @@
     "plugins": [],
     "owner": "ada@example.com",
     "mode": "full",
-    "detailed_diagnostics": false
+    "detailed_diagnostics": false,
+    "public": true,
+    "seed_provider_configs": {
+      "fake": {
+        "default_location": "fake-east-1"
+      }
+    }
   }
 }

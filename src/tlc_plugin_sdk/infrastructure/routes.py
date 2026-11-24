@@ -559,8 +559,10 @@ def _deployment_create_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     def _create_deployment(data: dict[str, Any]) -> dict[str, Any]:
         _require_connection()
         request = answer(plugin, lambda: DeploymentRequest.from_dict(data))
-        if not request.deployment_id or not request.bootstrap.record_id:
-            detail = "The create call needs a deployment_id and the bootstrap record it becomes"
+        if not request.deployment_id:
+            raise ProviderHTTPError(400, "The create call needs a deployment_id", "invalid_request")
+        if request.bootstrap.token and not request.bootstrap.record_id:
+            detail = "A bootstrap token needs the deployment record it redeems for"
             raise ProviderHTTPError(400, detail, "invalid_request")
         return answer(plugin, lambda: provider.create_deployment(request).to_dict(), secrets=[request.bootstrap.token])
 
@@ -587,7 +589,6 @@ def _deployment_delete_handlers(plugin: InfrastructurePlugin) -> list[Any]:
         "/infra/deployments/{provider_id:str}", status_code=200, sync_to_thread=True, exception_handlers=_ERRORS
     )
     def _delete_deployment(provider_id: str) -> dict[str, Any]:
-        _require_connection()
         return answer(plugin, lambda: provider.delete_deployment(provider_id).to_dict())
 
     return [_delete_deployment]

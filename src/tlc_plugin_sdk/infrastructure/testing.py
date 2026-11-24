@@ -36,6 +36,7 @@ what emits the golden fixtures of the wire types.
 from __future__ import annotations
 
 import argparse
+import functools
 import io
 import json
 import re
@@ -1004,9 +1005,9 @@ class _Run:
                 )
                 self.check("deployments: at most 500 listed", len(listing.deployments) <= 500)
         r1 = self.call("DELETE", f"/infra/deployments/{pid}")
-        r2 = self.call("DELETE", f"/infra/deployments/{pid}")
+        r2 = self.call("DELETE", f"/infra/deployments/{pid}", bare=True)
         self.check(
-            "deployments: DELETE /infra/deployments/{id} answers 200 twice (idempotent)",
+            "deployments: DELETE /infra/deployments/{id} answers 200 twice, the second without a Connection",
             r1.status_code == 200 and r2.status_code == 200,
             f"first {self.status_detail(r1)}; second {self.status_detail(r2)}",
         )
@@ -1321,10 +1322,12 @@ def _canonical(permissions: ConnectionPermissions) -> ConnectionPermissions:
     )
 
 
-class FakeProvider(
-    InfrastructurePlugin, NodeProvider, DeploymentProvider, StorageFacet, CatalogFacet, DnsFacet, WorkspaceFacet
-):
+class FakeProvider(InfrastructurePlugin, NodeProvider, DeploymentProvider, StorageFacet, CatalogFacet, DnsFacet):
     """Every operation of the contract, in memory: the SDK's reference provider.
+
+    ``FakeProvider()`` also serves the transitional deployment surface (it is a ``WorkspaceFacet``
+    and lists ``workspace.create``); ``FakeProvider(transitional=False)`` presents only the
+    generation 2 deployment operations, the shape a host's launcher drives through the typed path.
 
     Nodes and deployments live in dicts keyed by provider id and are idempotent on the host's id;
     storage is one ``{key: bytes}`` per bucket under ``fake://<bucket>/``; transfers and bundles
@@ -1350,7 +1353,15 @@ class FakeProvider(
 
     settings = PluginSettings(FakeSettings, "fake")
 
-    def __init__(self) -> None:
+    def __new__(cls, *, transitional: bool = True) -> FakeProvider:
+        # ── transitional ──
+        if transitional and not issubclass(cls, WorkspaceFacet):
+            return super().__new__(_with_workspaces(cls))
+        # ── end transitional ──
+        return super().__new__(cls)
+
+    def __init__(self, *, transitional: bool = True) -> None:
+        del transitional  # chosen in __new__
         self.nodes: dict[str, dict[str, Any]] = {}
         self.deployments: dict[str, dict[str, Any]] = {}
         self.zones: dict[str, dict[tuple[str, str], DnsRecord]] = {}
@@ -2098,6 +2109,8 @@ class FakeProvider(
             "ingress_key": request.ingress_key,
             "storage": request.storage.to_dict(),
             "mode": request.mode,
+            "public": request.public,
+            "seed_provider_configs": {k: dict(v) for k, v in request.seed_provider_configs.items()},
             "tags": {"3lc": "deployment", "3lc-id": request.deployment_id, "3lc-owner": request.owner},
             "response": response,
             **self._acting(),
@@ -2124,6 +2137,7 @@ class FakeProvider(
             return NodeStateResponse(state="gone", detail="no such deployment")
         record["state"] = "terminated"
         record["routed"] = False
+        record["deleted_by"] = self._acting()
         return NodeStateResponse(state="terminated")
 
     def retain_deployment(self, provider_id: str) -> NodeStateResponse:
@@ -2218,7 +2232,12 @@ class FakeProvider(
                 name=name, type=record.type, values=list(record.values), ttl=record.ttl
             )
 
-    # ── transitional: workspaces ──
+
+# ── transitional ──
+class _Workspaces(WorkspaceFacet):
+    """The transitional deployment surface a ``FakeProvider`` serves unless built with ``transitional=False``."""
+
+    nodes: dict[str, dict[str, Any]]
 
     def list_workspaces(self, *, owner: str = "") -> WorkspaceListing:
         return WorkspaceListing(
@@ -2231,8 +2250,14 @@ class FakeProvider(
             ]
         )
 
-    # ── end transitional ──
 
+@functools.cache
+def _with_workspaces(cls: type[FakeProvider]) -> type[FakeProvider]:
+    """``cls`` that also serves the transitional surface, under the same name."""
+    return type(cls.__name__, (cls, _Workspaces), {"__module__": cls.__module__, "__qualname__": cls.__qualname__})
+
+
+# ── end transitional ──
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 

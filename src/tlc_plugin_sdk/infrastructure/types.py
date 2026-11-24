@@ -1561,7 +1561,8 @@ class DeploymentBootstrap(Wire):
     """How the machine becomes its deployment record at the Config Service.
 
     Attributes:
-        record_id: The deployment record the machine becomes.
+        record_id: The deployment record the machine becomes; ``""`` when the launcher has no
+            Config Service, and then ``token`` is ``""`` too and the machine redeems nothing.
         config_service_url: Where it redeems its token.
         token: The single-use bootstrap token; scrubbed from error answers and never in a repr.
         launcher_service_id: The launcher's service id.
@@ -1689,6 +1690,9 @@ class DeploymentRequest(Wire):
         owner: Who the deployment is for.
         mode: ``full`` or ``demo``.
         detailed_diagnostics: Whether the detailed diagnostics collector is granted.
+        public: Whether the deployment admits visitors.
+        seed_provider_configs: Provider settings the new deployment starts with, by plugin id,
+            each ``{setting key: value}``.
     """
 
     _refuses_unknown: ClassVar[bool] = True
@@ -1707,6 +1711,8 @@ class DeploymentRequest(Wire):
     owner: str = ""
     mode: Literal["full", "demo"] = "full"
     detailed_diagnostics: bool = False
+    public: bool = False
+    seed_provider_configs: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass

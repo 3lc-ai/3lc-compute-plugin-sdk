@@ -902,9 +902,10 @@ class DeploymentHostnames:
 
 @dataclass
 class DeploymentBootstrap:
-    record_id: str                     # the Config Service's deployment record the machine becomes
+    record_id: str                     # the Config Service's deployment record the machine becomes;
+                                       # "" when the launcher has no Config Service
     config_service_url: str
-    token: str = field(default="", repr=False)   # single use; scrubbed from error answers
+    token: str = field(default="", repr=False)   # single use; scrubbed from error answers; "" with record_id
     launcher_service_id: str = ""
 
 
@@ -966,6 +967,9 @@ class DeploymentRequest:
     owner: str = ""
     mode: Literal["full", "demo"] = "full"
     detailed_diagnostics: bool = False
+    public: bool = False               # the deployment admits visitors
+    seed_provider_configs: dict[str, dict[str, str]] = field(default_factory=dict)
+                                       # provider settings the deployment starts with, by plugin id
 
 
 @dataclass
@@ -1053,7 +1057,9 @@ The launch, as the launcher runs it:
    too long for its ingress, a placement that cannot host one, quota) and the `ingress_key`.
    This replaces the name check, which today cannot say whether a name is free because the final
    name depends on the account and network (`aws:ingress.py:1096-1113`).
-3. **Allocate.** The launcher allocates the hostnames (2.6) and checks they are free in its zone.
+3. **Allocate.** The launcher allocates the hostnames (2.6), checks they are free in its zone and
+   writes the owner record that claims them (2.6), before prepare: a prepare that runs long cannot
+   lose the name to another launch. A launch that ends without a deployment removes the claim.
 4. **Prepare**, only when the provider lists `deployment.prepare`. Called repeatedly until
    `ready` or `failed`. It is idempotent, may create what deployments share (a load balancer, a
    certificate), and answers the DNS records that must exist for it to finish. The launcher
@@ -1063,7 +1069,9 @@ The launch, as the launcher runs it:
    This step exists because a provider-managed certificate is validated through the launcher's
    zone while it is being created: today the provider writes that record itself and waits
    inside the create call for up to 15 minutes (`aws:ingress.py:593-655`, `:407-418`).
-5. **Create.** One call that returns when the machine exists. It is idempotent on
+5. **Create.** One call that returns when the machine exists. A launcher without a Config Service
+   sends `bootstrap.record_id` and `bootstrap.token` both empty; the provider then starts the
+   machine with nothing to redeem, and the route refuses a token without a record. It is idempotent on
    `deployment_id`: a repeat returns the existing machine. It answers `addresses`; the launcher
    writes its records (2.6) and records them against the deployment. With
    `certificate == "machine"` the machine requests its certificates itself once its names
@@ -1079,8 +1087,10 @@ Afterwards:
 
 - **Delete.** The launcher removes the deployment's records first, then calls
   `delete_deployment`, so a name never points at an address about to be freed
-  (`aws:sweep.py:19-21`). Idempotent; a refused step raises and the launcher retries. The same
-  operation deletes a deployment no registry tracks, found through `list_deployments`
+  (`aws:sweep.py:19-21`). Idempotent; a refused step raises and the launcher retries. The
+  Connection is optional: without one the provider acts with the host's own identity. The same
+  operation deletes a deployment no registry tracks, found through `list_deployments`, and the
+  launcher deleting one it finds untracked has no Connection for it
   (`compute:infra/manager.py:3020-3030`, the call the host times as `delete_untracked_node`,
   `compute:infra/provider_client.py:74`).
 - **Retain** removes whatever routes traffic to a failed machine and keeps the machine
@@ -1139,8 +1149,9 @@ shapes that exist today, unchanged, so a deployment that is running keeps its na
 | set | `""` | `os-<label>.i-<key>.<zone>` | `compute-<label>.i-<key>.<zone>` | `i-<key>.<zone>` |
 
 In the unshared shape the launcher writes three address records, the deployment's own name
-first (`aws:hostnames.py:210-241`). In the shared shape it writes two, plus an owner record
-`_owner-<label>.<namespace>` (`aws:ingress.py:667-696`).
+first (`aws:hostnames.py:210-241`), and an owner record `_owner.<label>.<zone>`. In the shared
+shape it writes two, plus an owner record `_owner-<label>.<namespace>` (`aws:ingress.py:667-696`).
+The owner record is written at allocation, before prepare, and the address records at create.
 
 The `ingress_key` is whatever opaque string the provider returns from `check`; the launcher
 does not derive it and does not interpret it. The AWS plugin returns exactly the value it
@@ -1198,12 +1209,20 @@ ledger cannot be a local file there.
 | Owner `TXT` records in the zone | Written in the same atomic change as the names, so a claim cannot exist without its owner; needs no other service; the shared shape does this today (`aws:ingress.py:685-693`) | The zone lists owners, not which deployment record they belong to, without a lookup |
 
 **Recommended: both, each for what it is good at.** The owner `TXT` record is the claim and the
-source of truth for whether a name is this launcher's: its value is a digest of
-`launcher_service_id` and `deployment_id`, created with the names and deleted with them. The
-deployment record holds the list of records written, so a delete does not need to search the
-zone. A sweep reconciles the two: a name whose owner record is this launcher's and whose
-deployment the launcher no longer tracks is removed. A launcher without a Config Service keeps
-the list on its own node record (`compute:infra/manager.py:3800-3801`).
+source of truth for whether a name is this launcher's: its value is
+`3lc-owner:v1:<launcher id>:<deployment id>`. It is written alone at allocation, so the claim
+holds through a long prepare, and deleted last, with the names. The deployment record holds the
+list of records written, so a delete does not need to search the zone. A launcher without a
+Config Service keeps the list on its own node record (`compute:infra/manager.py:3800-3801`).
+
+**The zone sweep reports, and removes only what it can prove gone.** A name whose owner record
+is this launcher's and whose deployment the launcher does not track is a candidate, and the sweep
+reports every candidate. It removes a candidate's records only when it can prove the deployment
+gone. Without a Config Service its proof is its own launches: a deployment id it launched and
+whose deletion or failed launch it recorded. The Config Service would add a list of that
+launcher's non-deleted deployment ids, so that any id it does not name is gone, including one
+launched before the launcher's own records began. An owner record with another launcher's id, or
+a value it cannot read, is never touched.
 
 **Launcher settings.**
 
@@ -1328,9 +1347,16 @@ sends it. Rules:
 - What a plugin may rely on: the token is a JWT signed by `GrantRequest.identity.issuer`, with
   `sub` equal to its `subject`, `aud` equal to the declared audience, and at least 60 seconds of
   life left when the request arrives.
-- The consequence for Azure: the access token the exchange yields lasts about an hour and
-  cannot be renewed inside the request, since renewing needs a new identity token. So no call
-  outlives it. A transfer that would stops at expiry and records `credential_expired`
+- What the SDK's middleware enforces is `register_resolver(provider, resolver,
+  token_audience=...)`: the header is required, and its audience checked, exactly for a provider
+  registered with a `token_audience`. The header value is the JSON object
+  `{"connection_id", "audience", "token", "expires_at"}`, at most 8 KiB encoded.
+- The consequence for Azure: the access token the exchange yields lives up to 24 hours and cannot
+  be revoked, so a leaked one is good until it expires; it is never logged or returned. It cannot
+  be renewed inside the request, since renewing needs a new identity token. So no call outlives
+  it. The exchange is retried, for up to about a minute, on the two Entra codes seen right after
+  a grant or a key rotation while the federated credential or the issuer's keys propagate
+  (`AADSTS700213` after a grant, `AADSTS7000272` after a rotation); any other refusal is final. A transfer that would stops at expiry and records `credential_expired`
   (2.3 rule 6); the Hub offers to continue, and the copy skips what is done.
 - `paste_back` values are access fields the person reads off the finished grant (a client id).
   They need access fields to be writable after create (section 4).
@@ -1381,11 +1407,11 @@ Config Service operation whose binding the host uses (`compute:config_service.py
 | `catalog` | `POST /infra/catalog` | `CatalogRequest` | `Catalog` | optional | `node.describe`; `connection.verify` for `purpose == "deployment"` |
 | `catalog.locations` | `GET /infra/catalog/locations?node_type=` | | `Locations` | optional | `node.describe` |
 | `deployment.options` | `POST /infra/deployments/options` | `DeploymentOptionsRequest` (`{selected}`) | `DeploymentOptions` | required | `connection.verify` |
-| `deployment.check` | `POST /infra/deployments/check` | `DeploymentCheckRequest` | `DeploymentCheck` | required | `connection.verify` |
+| `deployment.check` | `POST /infra/deployments/check` | `DeploymentCheckRequest` | `DeploymentCheck` | required | `connection.verify`; the launch's `workspace.create` inside a launch |
 | `deployment.prepare` | `POST /infra/deployments/prepare` | `DeploymentPrepareRequest` | `DeploymentPrepared` | required | the launch's `workspace.create` |
 | `deployment.create` | `POST /infra/deployments` | `DeploymentRequest` | `DeploymentResponse` (201) | required | `workspace.create` |
 | `deployment.state` | `GET /infra/deployments/{provider_id}?diagnostics=` | | `NodeStateResponse` | required | `node.describe`; `workspace.diagnose` for `detailed` |
-| `deployment.delete` | `DELETE /infra/deployments/{provider_id}` | | `NodeStateResponse` | required | `workspace.teardown` |
+| `deployment.delete` | `DELETE /infra/deployments/{provider_id}` | | `NodeStateResponse` | optional | `workspace.teardown`; without a Connection the provider acts with the host's own identity |
 | `deployment.retain` | `POST /infra/deployments/{provider_id}/retain` | | `NodeStateResponse` | required | `workspace.retain` |
 | `deployment.list` | `GET /infra/deployments?owner=` | | `DeploymentListing` | optional | |
 | `deployment.sweep` | `POST /infra/deployments/sweep` | `SweepRequest` | `SweepReport` | optional | `node.describe` |
@@ -1399,11 +1425,15 @@ On the grant column, where it is not the obvious one:
 - **Node checks and catalogs ride `node.describe`.** They only read, and a `node.create` grant
   would mint an identity for a node nobody has asked for yet; this is the host's
   `PREFLIGHT_OPERATION` (`compute:infra/manager.py:225-228`, `:3187`).
-- **Deployment options, check and sizes ride `connection.verify`**, as placement and sizes do
-  today (`compute:infra/manager.py:3129-3131`). They cannot ride `node.describe`: they are asked
+- **Deployment options, the interactive check and sizes ride `connection.verify`**, as
+  placement and sizes do today (`compute:infra/manager.py:3129-3131`). They cannot ride `node.describe`: they are asked
   by a launcher, and the Config Service refuses a launcher every operation but
   `workspace.create`, `connection.verify`, `connection.prepare` and `storage.discover`
   (`cs:api/hub/plugin_grants.py:829-833`, `cs:db/models/connection.py:113`).
+- **The check inside a launch rides the launch's own `workspace.create` grant**, as prepare
+  does. A launch may run in the background, where no person's bearer is held to ask for a
+  `connection.verify` grant; the name check a person runs while filling the form is the
+  interactive one and rides `connection.verify`.
 - **Prepare rides the launch's own `workspace.create` grant.** The launcher asks for that grant
   once, when the launch starts, and holds its bootstrap token in memory
   (`compute:infra/manager.py:3671-3672`, `:3736-3745`). `workspace.create` requires the
@@ -1706,8 +1736,9 @@ holds the launcher's record ledger (2.6).
 | `region`, `vpc_id`, `subnet_id`, `availability_zone` | `placement[...]`, keys the provider's options declared |
 | `dns_zone_id`, `dns_zone_name` | `DeploymentCheckRequest.zone` for the ingress key; on create the launcher sends `hostnames` |
 | `detailed_diagnostics` | `detailed_diagnostics` |
-| `public` | removed; no provider reads it |
-| `seed_provider_configs`, transient `credentials`, `provider_configs` | removed with the owner-credentials facet |
+| `public` | `public` |
+| `seed_provider_configs` | `seed_provider_configs`, the settings themselves by plugin id rather than a flag |
+| transient `credentials`, `provider_configs` | removed with the owner-credentials facet |
 
 **The AWS plugin's private routes and `extra` keys**
 
@@ -1806,7 +1837,7 @@ holds the launcher's record ledger (2.6).
 | `connection_node_access` | On own sign-in with rights to assign roles: create the node identity and its storage role assignment directly |
 | `storage_candidates` | Storage accounts and containers in the resource group, as `abfss://` locations |
 | `permissions.storage.access_modes` | `read`, `read_write` |
-| Resolver | Exchange of the pushed identity token for an ARM token (a storage token on demand); returns the plugin's own credential class, an Azure `TokenCredential` |
+| Resolver | Registered with `token_audience="api://AzureADTokenExchange"`. Exchange of the pushed identity token for an ARM token (a storage token on demand); returns the plugin's own credential class, an Azure `TokenCredential`. The exchanged token lives up to 24 hours and cannot be revoked; the exchange is retried only on `AADSTS700213` (right after a grant) and `AADSTS7000272` (right after a key rotation) |
 | `create_node` | VM with the node identity attached at create, the agent installed by cloud-init, `AZURE_CLIENT_ID` set on the machine so workers pick that identity; `storage_access = "identity"`; tags as in 2.4 |
 | `catalog`, `locations` | VM sizes with retail prices and per-family quota; `unavailable_reason` names a zero quota; locations where the size is offered |
 | `deployment_options` | `location`, then `virtual_network`, then `subnet` |
@@ -1919,6 +1950,12 @@ workspace branch of `FakeProvider` and the `workspaces` check group in `testing.
 is deleting the module and those blocks. A plugin that is a `WorkspaceFacet` and not yet a
 `DeploymentProvider` declares no `deployments` in its capabilities: the host and the Hub read
 `workspace.create` from `operations` for as long as the surface exists.
+
+**Which path the launcher takes.** The host's launcher takes the typed deployment path only when a
+provider lists `deployment.create` and does not list `workspace.create`; a provider that lists
+both is driven through the transitional surface. `FakeProvider()` lists both;
+`FakeProvider(transitional=False)` presents only the generation 2 surface (no `workspace.*`
+operations, no `WorkspaceFacet`) and is what a host tests the typed path against.
 
 And one rule for the binding, because the Config Service is unchanged: in milestone 1 the host
 builds the generation 2 binding from today's grant by copying `metadata` into `access` as

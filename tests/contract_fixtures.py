@@ -291,6 +291,8 @@ def _fake_examples(root: Path) -> dict[str, dict[str, Any]]:
             compute_spec="3lc-compute==1.3.0",
             env={"TLC_EXAMPLE": "1"},
             owner="ada@example.com",
+            public=True,
+            seed_provider_configs={"fake": {"default_location": "fake-east-1"}},
         )
         r.call(
             "POST", "/infra/deployments", "DeploymentResponse", body=deployment.to_dict(), request="DeploymentRequest"

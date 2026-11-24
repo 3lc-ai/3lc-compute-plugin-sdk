@@ -246,6 +246,8 @@ def _decode_dict(item: Any, value: Mapping[Any, Any]) -> dict[str, Any]:
         return {str(k): _bool(v) for k, v in value.items() if v is not None}
     if typing.get_origin(item) is list:
         return {str(k): _str_list(v) for k, v in value.items()}
+    if typing.get_origin(item) is dict:
+        return {str(k): _decode_dict(typing.get_args(item)[1], v) for k, v in value.items() if isinstance(v, Mapping)}
     return {str(k): v for k, v in value.items()}
 
 

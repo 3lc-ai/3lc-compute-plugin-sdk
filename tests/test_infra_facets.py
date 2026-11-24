@@ -583,7 +583,15 @@ def test_a_failed_launch_reports_failure_and_can_be_retained(fake: Any) -> None:
     assert missing.status_code == 404 and missing.json()["code"] == "not_found"
 
 
-def test_every_deployment_call_but_list_and_sweep_needs_a_connection(fake: Any) -> None:
+def _deployment_request(deployment_id: str) -> dict[str, Any]:
+    return DeploymentRequest(
+        deployment_id=deployment_id,
+        name=deployment_id,
+        bootstrap=DeploymentBootstrap(record_id=f"rec-{deployment_id}", config_service_url="https://cs"),
+    ).to_dict()
+
+
+def test_every_deployment_call_but_list_sweep_and_delete_needs_a_connection(fake: Any) -> None:
     _, h = fake
     for method, path, body in (
         ("POST", "/infra/deployments/options", {}),
@@ -591,13 +599,39 @@ def test_every_deployment_call_but_list_and_sweep_needs_a_connection(fake: Any) 
         ("POST", "/infra/deployments/prepare", {"deployment_id": "d"}),
         ("POST", "/infra/deployments", {"deployment_id": "d", "bootstrap": {"record_id": "r"}}),
         ("GET", "/infra/deployments/x", None),
-        ("DELETE", "/infra/deployments/x", None),
         ("POST", "/infra/deployments/x/retain", None),
     ):
         assert h.call(method, path, json_body=body).status_code == 400, (method, path)
     assert h.get("/infra/deployments").status_code == 200
     assert h.post("/infra/deployments/sweep", json_body={}).status_code == 200
     assert h.post("/infra/deployments", json_body={"name": "no id"}, headers=_KEYLESS).status_code == 400
+
+
+def test_a_deployment_is_deleted_without_a_connection_under_the_hosts_own_identity(fake: Any) -> None:
+    plugin, h = fake
+    created = h.post("/infra/deployments", json_body=_deployment_request("dep-u"), headers=_KEYLESS)
+    assert created.status_code == 201, created.text
+    pid = created.json()["provider_id"]
+    assert h.call("DELETE", f"/infra/deployments/{pid}").json() == {"state": "terminated"}
+    assert plugin.deployments[pid]["deleted_by"]["connection"] == "", "no Connection: the host's own identity"
+    assert h.call("DELETE", "/infra/deployments/never-made").json()["state"] == "gone"
+
+
+def test_a_launcher_without_a_config_service_creates_with_no_record_and_no_token(fake: Any) -> None:
+    plugin, h = fake
+    body = _deployment_request("dep-n")
+    body["bootstrap"] = {"record_id": "", "config_service_url": "", "token": ""}
+    body["public"] = True
+    body["seed_provider_configs"] = {"aws": {"region": "eu-west-1"}}
+    created = h.post("/infra/deployments", json_body=body, headers=_KEYLESS)
+    assert created.status_code == 201, created.text
+    record = plugin.deployments[created.json()["provider_id"]]
+    assert record["record_id"] == "" and record["public"] is True
+    assert record["seed_provider_configs"] == {"aws": {"region": "eu-west-1"}}
+    body = _deployment_request("dep-t")
+    body["bootstrap"] = {"record_id": "", "config_service_url": "https://cs.example", "token": "orphan-token"}
+    refused = h.post("/infra/deployments", json_body=body, headers=_KEYLESS)
+    assert refused.status_code == 400 and "orphan-token" not in refused.text
 
 
 def test_a_dns_change_is_atomic_and_two_launches_cannot_both_win_a_name(fake: Any) -> None:

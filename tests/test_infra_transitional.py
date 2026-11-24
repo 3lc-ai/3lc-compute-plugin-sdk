@@ -160,3 +160,18 @@ def test_placement_discovery_filters_malformed_collections() -> None:
     placement = WorkspacePlacement.from_dict({"regions": [{"id": "r"}, "junk"], "defaults": {"region": "r", "x": None}})
     assert placement.regions == [{"id": "r"}] and placement.defaults == {"region": "r"}
     assert WorkspacePlacement.from_dict(placement.to_dict()) == placement
+
+
+def test_a_fake_without_the_transitional_surface_lists_only_generation_2_deployments(tmp_path: Path) -> None:
+    default = FakeProvider()
+    assert isinstance(default, WorkspaceFacet) and "workspace.create" in provided_operations(default)
+    typed = FakeProvider(transitional=False)
+    assert isinstance(typed, FakeProvider) and not isinstance(typed, WorkspaceFacet)
+    operations = provided_operations(typed)
+    assert "deployment.create" in operations
+    assert not [op for op in operations if op.startswith("workspace.")]
+    with PluginHarness(typed, plugin_id="fake", config_root=tmp_path) as h:
+        assert not [op for op in h.get("/infra/capabilities").json()["operations"] if op.startswith("workspace.")]
+        assert h.get("/infra/workspaces").status_code == 404
+        refused = h.post("/infra/nodes", json_body=_workspace())
+        assert refused.status_code == 400
