@@ -4,10 +4,13 @@ orphan: true
 
 # Infrastructure provider contract
 
-**Status: proposal.** This specifies contract generation 2 of the infrastructure plugin surface
-(`tlc_plugin_sdk.infrastructure` and `tlc_plugin_sdk.connections`), to ship as SDK 0.8. It is
-written so that the SDK, the Compute Service (the host), the Hub, the Config Service and each
-provider plugin can be built against it independently. Nothing in it is implemented.
+**Status: the SDK part is built; the rest is a proposal.** This specifies contract generation 2
+of the infrastructure plugin surface (`tlc_plugin_sdk.infrastructure` and
+`tlc_plugin_sdk.connections`), to ship as SDK 0.8. It is written so that the SDK, the Compute
+Service (the host), the Hub, the Config Service and each provider plugin can be built against it
+independently. The SDK implements sections 2.1 to 2.8 and 3.1 to 3.3 (package A of section 6.2),
+with the reference provider and the golden fixtures of section 6.4; no host, Hub, Config Service
+or provider plugin implements it yet.
 
 The contract serves three goals a person has on any cloud: connect to cloud storage, start a GPU
 node, start a managed deployment. A fourth group, connect an account, is what the other three
@@ -98,7 +101,11 @@ identity, no deployments. Machines reads: no account, no cloud access method, no
 These hold for every type below and are the SDK's existing rules (`sdk:infrastructure/types.py:5-19`):
 
 - `from_dict` reads known keys only, drops unknown ones, coerces scalars and never raises on a
-  peer's shape. `to_dict` omits a key whose presence carries meaning when it is unset.
+  peer's shape. A required field a peer left out reads as the empty value of its type, and an
+  unreadable status reads as the safe one (`failed`). `to_dict` emits every field, and omits a
+  key whose presence carries meaning when it is unset: a field that is `None`, and the optional
+  keys of the answers that already did so (`CreateNodeResponse`, `NodeStateResponse`, the
+  storage types).
 - New optional fields and new operations may be added in a later minor without a change from a
   provider that does not use them. Nothing in a request is ever required of a provider that did
   not declare the operation it belongs to.
@@ -242,11 +249,24 @@ class CapabilitiesResponse:
 ```
 
 Validation, enforced by the SDK before answering and asserted by the conformance kit:
-`provider` matches `^[a-z0-9][a-z0-9._-]*$`; field keys are unique per list and across
-`account.fields`, `account.defaults` and each method's `fields`; `secret` is true exactly when
-`kind == "secret"`; at most one access method per kind and at most one `preferred`; every
+`provider` matches `^[a-z0-9][a-z0-9._-]*$`; `contract` is 2; a field key matches its pattern
+and is unique in its list, across `account.fields` and `account.defaults`, and between each
+method's `fields` and the account's (two methods may use the same key, since a Connection has
+one method); `secret` is true exactly when `kind == "secret"`; `max_length` is 1 to 2048 and
+`max_rules` 1 to 20; at most one access method per kind and at most one `preferred`; every
 `PermissionOption.key` is unique; `nodes` is set exactly when the class is a `NodeProvider`, and
-`deployments` exactly when it is a `DeploymentProvider`.
+`deployments` exactly when it is a `DeploymentProvider`. A declaration that breaks a rule is
+answered 502 with the rules it breaks (`capabilities_problems`), never served. The conformance
+kit also asserts that `provider` equals the plugin id.
+
+`CapabilitiesResponse.from_dict` reads an answer without `contract` as generation 0, so a host
+can tell a provider of the previous surface from one of this.
+
+`missing_fields` come from the plugin's settings layer: `InfrastructurePlugin.readiness()`
+answers `{ready, missing_fields}` with each missing setting as a `FormField`
+(`FormField.from_settings`). The settings layer keeps describing its own fields as
+`SettingsField` (`sdk:shared/settings.py:86-98`, `:472-505`), which is what a plugin's own
+settings page reads and is never sent to a host.
 
 Why each part exists:
 
@@ -413,6 +433,13 @@ class StorageCandidate:
 class StorageCandidates:
     items: list[StorageCandidate] = field(default_factory=list)   # at most 2000
     truncated: bool = False
+
+
+@dataclass
+class NodeAccessRequest:
+    storage_roots: list[StorageRoot] = field(default_factory=list)
+    storage_access: dict[str, Any] | None = None   # setup only: the reviewed rules; None keeps the active ones
+    expected_revision: str = ""        # setup only: the revision the review was based on
 ```
 
 Methods on `InfrastructurePlugin`. Each is optional; overriding one lists its operation.
@@ -452,7 +479,8 @@ def storage_candidates(self) -> StorageCandidates: ...
 - **`connection_node_access`** is unchanged in shape (`sdk:infrastructure/types.py:648-719`): it
   is how a machine on its own sign-in sets up a scoped node identity directly, when it has the
   rights to. `NodeAccessRequest` is today's `ConnectionCheckRequest` renamed, with
-  `project_root_url` replaced by `storage_roots`.
+  `project_root_url` replaced by `storage_roots`. The inspecting `GET` has no body: it carries
+  the roots as the query `storage_roots`, a JSON list of `StorageRoot` (absent means none).
 - **`storage_candidates`** runs under the Connection with a discovery-only grant and returns
   names, never contents (`aws:provider.py:2485-2508`).
 
@@ -483,7 +511,8 @@ class ConnectionBinding:
 class ProviderCredential(Protocol):
     """What a resolver returns. The class is the provider plugin's own; the SDK names no vendor."""
 
-    expires_at: str                    # ISO-8601, or "" when it does not expire
+    @property
+    def expires_at(self) -> str: ...   # ISO-8601, or "" when it does not expire; read-only, so a frozen dataclass conforms
 
     def secret_values(self) -> list[str]: ...   # scrubbed from every error answer
 
@@ -494,7 +523,7 @@ class ResolveRequest:
     use: ConnectionUse | None
 
 
-Resolver = Callable[[ResolveRequest], ProviderCredential]
+Resolver = Callable[[ResolveRequest], Ambient | ProviderCredential]   # Ambient: rule 7
 
 def register_resolver(provider: str, resolver: Resolver) -> None: ...   # KEYLESS only
 def current_connection() -> ConnectionBinding | None: ...
@@ -502,6 +531,11 @@ def current_use() -> ConnectionUse | None: ...
 def current_credential(service: str | None = None) -> Ambient | SecretToken | ProviderCredential | None: ...
 def credential_as(cls: type[T]) -> T: ...   # the request's credential as `cls`, else CredentialUnavailable
 ```
+
+`CredentialUnavailable` takes an optional `remedy`. What a resolver raises is answered before
+any handler runs: `CredentialUnavailable` as 424, a typed error of 2.4 (`RateLimited`,
+`PermissionDenied`) with its own status and code, and anything else as a 424 that names the
+Connection and the exception's class but not its text.
 
 The binding names no vendor concept. What a provider needs beyond the account is in `access`,
 under keys the provider declares and reads: the AWS plugin's are `role_arn`, `external_id`,
@@ -546,7 +580,8 @@ server before any SDK code runs, with no sentence. So:
 - That is why a storage rule is at most 256 characters and a Connection has at most 20: twenty
   rules of that length are under 6 KiB. Today both the Config Service and the AWS plugin allow
   50 (`cs:identity/connection_configuration.py:80`, `aws:storage_access.py:17`).
-- A secret value is at most 4 KiB as sent in `x-tlc-bound-credential`.
+- The `x-tlc-bound-credential` value, the JSON object that holds the secret, is at most 4 KiB.
+  The SDK refuses a larger one with 400.
 - The SDK worker sets `h11_max_incomplete_event_size` to 64 KiB explicitly, so the limit does
   not depend on which parser a venv happens to hold. The caps above hold either way.
 
@@ -557,7 +592,10 @@ server before any SDK code runs, with no sentence. So:
    or a resolved credential. A cache of it is keyed by the ambient credential itself, never by
    region or by request (`aws:provider.py:4972-4975`, `:4992-5028`). The SDK enforces the
    precondition: `GET /infra/capabilities`, `POST /infra/connection/grant` and the DNS routes
-   answer 400 when any Connection header is present, so those handlers can never observe one.
+   answer 400 when any of the three Connection headers is present, so those handlers can never
+   observe one. The refusal is the Connection middleware's, made by path before anything is
+   resolved. `/settings` is not an infrastructure-only path, so there the refusal is the
+   handler's, when a binding is present.
 2. A resolved credential belongs to one request. The SDK holds it in a context variable for the
    handler and resets it after (`sdk:connections.py:600-606`); it never writes one to
    `os.environ`, a file or the plugin's settings.
@@ -645,6 +683,9 @@ class NodeProvider(ABC):
     def node_diagnostics(self, provider_id: str) -> NodeStateResponse: ...
 ```
 
+`node.diagnostics` has no route of its own: it is the `diagnostics=true` query of the
+`node.state` route. A provider that does not list it answers the plain state for that query.
+
 - **`kind`** replaces `flavor` (`sdk:infrastructure/types.py:407`). A node is `gpu` or `cpu`; a
   deployment is not a node flavor and has its own group (2.5).
 - **Location.** A node request names where it goes with one string, `location`, chosen from
@@ -702,9 +743,12 @@ on the words of a sentence: today it searches provider sentences for `AccessDeni
 | `NotSupported` | 501 | `not_supported` | reports | Nothing |
 | `ProviderError` | 502 | `provider_error` | reports | Whatever the provider can say; may be empty |
 
-`ProviderError` gains `code: str`, `remedy: str = ""` and `retry_after_s: float | None = None`.
-Any other exception still answers 502 through `describe_error`
-(`sdk:infrastructure/plugin.py:190-208`) with `code = "provider_error"`. `CredentialExpired` is
+`ProviderError` gains `code: str` on the class, and `remedy: str = ""` and
+`retry_after_s: float | None = None` as keyword arguments. Any other exception still answers 502
+through `describe_error` (`sdk:infrastructure/plugin.py:190-208`) with `code = "provider_error"`.
+A plugin's own HTTP error and a body the framework could not parse keep their status and get the
+code of that status. A plugin-private route answers the same body when it is mounted with
+`routes.error_handlers()` and runs its work through `routes.answer`. `CredentialExpired` is
 for a credential that was valid when the call started and stopped being so during it; a repeat
 is safe because every create is idempotent.
 
@@ -743,11 +787,31 @@ class Catalog:
     error: str = ""                    # a failed lookup is an empty list with the reason
 
 
+@dataclass
+class Location:
+    id: str                            # the value sent back as `location`
+    label: str = ""
+    available: bool | None = None      # for the node type asked about; None: the provider cannot tell
+    capacity: str = ""                 # the provider's words for stock, "" when unknown
+
+
+@dataclass
+class Locations:
+    locations: list[Location] = field(default_factory=list)
+    node_type: str = ""
+    default: str = ""                  # where a request that names none goes; "" when chosen per request
+    error: str = ""
+
+
 class CatalogFacet(ABC):
     @abstractmethod
     def catalog(self, request: CatalogRequest) -> Catalog: ...
-    def locations(self, *, node_type: str = "") -> Locations: ...   # today's Datacenters, renamed
+    def locations(self, *, node_type: str = "") -> Locations: ...
 ```
+
+`Locations` takes the place of `Datacenters` (`sdk:infrastructure/types.py:1358-1398`) with
+typed rows. A provider's saved placement setting and what it resolves to, which `Datacenters`
+carried, are the plugin's own settings and are served by its own routes (decision 7).
 
 ### 2.5 Start a deployment
 
@@ -777,6 +841,11 @@ class CostNote:
     hourly: float | None = None
     currency: str = "USD"
     reused: bool | None = None         # an existing shared resource would be used
+
+
+@dataclass
+class DeploymentOptionsRequest:
+    selected: dict[str, str] = field(default_factory=dict)   # the placement chosen so far, by field key
 
 
 @dataclass
@@ -918,6 +987,23 @@ class SweepReport:
     held_addresses: list[str] = field(default_factory=list)    # addresses live deployments hold here
     pending: list[str] = field(default_factory=list)           # candidates still inside the grace period
     problems: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DeploymentInstance:
+    provider_id: str                   # what `delete_deployment` takes
+    deployment_id: str = ""            # the `3lc-id` tag; "" when the resource carries none
+    name: str = ""
+    owner: str = ""
+    size: str = ""
+    state: NodeProviderState = "unknown"
+    location: str = ""
+    addresses: list[Address] = field(default_factory=list)
+
+
+@dataclass
+class DeploymentListing:
+    deployments: list[DeploymentInstance] = field(default_factory=list)   # at most 500
 
 
 class DeploymentProvider(ABC):
@@ -1124,7 +1210,8 @@ contract only supplies inputs for (`storage_roots`, `storage_access`).
 `StorageFacet` and its twelve routes are unchanged (`sdk:infrastructure/facets.py:54-189`,
 `sdk:infrastructure/routes.py:362-499`): they are already provider-neutral, declare their own
 optional parts in `StorageCapabilities` (`sdk:infrastructure/types.py:788-857`), and act through
-a Connection like every other call. Two things change around them. How a location is written
+a Connection like every other call: each of the twelve answers 400 without one. Two things
+change around them. How a location is written
 moves from `connection_defaults.location_schema` to `PermissionSchema.storage`. And the upper
 bound on what a Connection may reach is `ConnectionPermissions.storage`, which the provider
 checks a project root and data locations against before it creates anything
@@ -1257,16 +1344,16 @@ Config Service operation whose binding the host uses (`compute:config_service.py
 | `connection.grant` | `POST /infra/connection/grant` | `GrantRequest` | `Grant` | never | |
 | `connection.grant_update` | `POST /infra/connection/grant/update` | `GrantUpdateRequest` | `GrantUpdate` | required | `connection.prepare` |
 | `connection.verify` | `POST /infra/connection/verify` | `VerifyRequest` | `ConnectionVerification` | required | `connection.verify` |
-| `connection.node_access` | `GET`, `POST /infra/connection/node-access` | `NodeAccessRequest` | `ConnectionNodeAccess` | required | `connection.verify` |
+| `connection.node_access` | `GET /infra/connection/node-access?storage_roots=`, `POST /infra/connection/node-access` | `NodeAccessRequest` (the `GET` carries only the roots, as JSON in the query) | `ConnectionNodeAccess` | required | `connection.verify` |
 | `storage.candidates` | `GET /infra/storage/candidates` | | `StorageCandidates` | required | `storage.discover` |
 | `node.create` | `POST /infra/nodes` | `CreateNodeRequest` | `CreateNodeResponse` (201) | optional | `node.create` |
 | `node.state` | `GET /infra/nodes/{provider_id}` | | `NodeStateResponse` | optional | `node.describe` |
 | `node.delete` | `DELETE /infra/nodes/{provider_id}` | | `NodeStateResponse` | optional | `node.terminate` |
 | `node.check` | `POST /infra/nodes/check` | `NodeCheckRequest` | `PreflightResponse` | optional | `node.describe` |
-| `node.diagnostics` | `GET /infra/nodes/{provider_id}?diagnostics=true` | | `NodeStateResponse` | optional | `node.describe` |
+| `node.diagnostics` | `GET /infra/nodes/{provider_id}?diagnostics=true` (the `node.state` route) | | `NodeStateResponse` | optional | `node.describe` |
 | `catalog` | `POST /infra/catalog` | `CatalogRequest` | `Catalog` | optional | `node.describe`; `connection.verify` for `purpose == "deployment"` |
 | `catalog.locations` | `GET /infra/catalog/locations?node_type=` | | `Locations` | optional | `node.describe` |
-| `deployment.options` | `POST /infra/deployments/options` | `{selected}` | `DeploymentOptions` | required | `connection.verify` |
+| `deployment.options` | `POST /infra/deployments/options` | `DeploymentOptionsRequest` (`{selected}`) | `DeploymentOptions` | required | `connection.verify` |
 | `deployment.check` | `POST /infra/deployments/check` | `DeploymentCheckRequest` | `DeploymentCheck` | required | `connection.verify` |
 | `deployment.prepare` | `POST /infra/deployments/prepare` | `DeploymentPrepareRequest` | `DeploymentPrepared` | required | the launch's `workspace.create` |
 | `deployment.create` | `POST /infra/deployments` | `DeploymentRequest` | `DeploymentResponse` (201) | required | `workspace.create` |
@@ -1310,8 +1397,9 @@ On the grant column, where it is not the obvious one:
 - Everything else is optional.
 
 **How optionality is declared.** The SDK fills `capabilities.operations` with the id of every
-operation whose route it mounted, and mounts a route only when the plugin's class provides the
-method: a mixin's abstract methods, or an optional method the class overrides. This is how the
+operation whose route it mounted (`provided_operations`, in the order of `OPERATIONS`), and
+mounts a route only when the plugin's class provides the method: a mixin's abstract methods, or
+an optional method the class overrides. This is how the
 sign-in routes are mounted today (`sdk:infrastructure/routes.py:643-677`) and it replaces both
 `facets` (`sdk:infrastructure/plugin.py:227-229`) and the nine booleans the AWS plugin puts in
 `extra` (`aws:plugin.py:226-236`), which the host reads by name
@@ -1325,8 +1413,12 @@ checks) is simply not implemented.
 `CapabilitiesResponse.extra`, `StorageItem.extra`, `Region.extra`, `StorageListing.extra`,
 `PresignResponse.extra` and `WorkspaceInstance.extra` are removed
 (`sdk:infrastructure/types.py:897`, `:982`, `:1019`, `:1051`, `:1168`, `:1414`), and nothing
-free-form replaces them on capabilities or on a deployment answer. A value the host or the Hub
-needs is a typed field. A value only the plugin's own page needs is served by the plugin's own
+free-form replaces them on capabilities or on a deployment answer. `WorkspaceInstance` is part
+of the transitional surface (6.2) and keeps its `extra` until that surface goes. A value the
+host or the Hub needs is a typed field: the one such value the removed maps carried is whether a
+storage accepts the browser's cross-origin upload, which the Hub's Data page reads from a
+presign answer (`hub:templates/data/index.html:1291`), so it is `PresignResponse.cors:
+bool | None`. A value only the plugin's own page needs is served by the plugin's own
 routes (`sdk:infrastructure/plugin.py:66-70`), which the host proxies and never calls. The one
 labelled-rows map left is `ConnectionVerification.facts`, whose consumer is the Hub's
 verification panel.
@@ -1517,7 +1609,7 @@ holds the launcher's record ledger (2.6).
 | `facets`, `lists_workspaces`, `facets_reported` | `sdk:infrastructure/types.py:894-900` | `operations` |
 | `requires_connection` | `sdk:infrastructure/types.py:896` | unchanged |
 | `extra` | `sdk:infrastructure/types.py:897` | typed fields |
-| `SettingsField` | `sdk:infrastructure/types.py:185-232` | `FormField` (`placeholder` is `example`; `href` returns later) |
+| `SettingsField` | `sdk:infrastructure/types.py:185-232` | On the wire, `FormField` (`placeholder` is `example`; `href` returns later). The type stays as the settings layer's own description of a field |
 | `ProjectStorage` | `sdk:infrastructure/types.py:239-264` | `storage_roots: list[StorageRoot]` |
 | `CreateNodeRequest.flavor`, `.workspace` | `sdk:infrastructure/types.py:407-413` | `kind`; `DeploymentRequest` |
 | `CreateNodeResponse.services`, `.ingress`, `.managed_by`, `.placement` | `sdk:infrastructure/types.py:478-485` | `DeploymentResponse.endpoints`; the launcher's ledger; removed; `DeploymentResponse.placement` |
@@ -1747,13 +1839,27 @@ removed in milestone 2 before 0.8.0 is cut. It is exactly:
 
 - `CreateNodeRequest.flavor` and `.workspace`, `WorkspaceRequest`, and
   `CreateNodeResponse.services`, `.ingress`, `.placement`: a deployment is still created by
-  `POST /infra/nodes` with `flavor == "workspace"`.
-- `WorkspaceFacet` and its four routes.
+  `POST /infra/nodes` with `flavor == "workspace"`. `flavor` is `"workspace"` or empty: what a
+  node is, is `kind`.
+- `WorkspaceFacet` and its four routes, with `WorkspaceInstance` (its `extra` included),
+  `WorkspaceListing` and `WorkspacePlacement`.
 - The AWS plugin's two private routes, `GET /infra/deployments/name-check` and
   `POST /infra/deployments/sweep`, mounted by its own `get_route_handlers` as now.
 - Three transitional operation ids so the host does not read `extra`: `workspace.create`
-  (the provider takes `flavor == "workspace"`), `workspace.name_check`, `workspace.sweep`.
+  (the provider takes `flavor == "workspace"`), `workspace.name_check`, `workspace.sweep`. The
+  SDK lists `workspace.create` for a class that is both a `NodeProvider` and a `WorkspaceFacet`.
+  It cannot see a plugin's private routes, so the plugin names the other two in the class
+  attribute `WorkspaceFacet.private_operations` and the SDK lists those it names (decision 9).
 - `ConnectionBinding.configuration`, the installed configuration in today's shape.
+
+In the SDK the surface is one module, `infrastructure/transitional.py`, plus blocks delimited by
+`# ── transitional ──` and `# ── end transitional ──` in the modules that must hold a piece of
+it: the fields in `types.py` and `connections.py`, `workspace_handlers` and the workspace branch
+of the node-create route in `routes.py`, the listing of the three ids in `plugin.py`, and the
+workspace branch of `FakeProvider` and the `workspaces` check group in `testing.py`. Removing it
+is deleting the module and those blocks. A plugin that is a `WorkspaceFacet` and not yet a
+`DeploymentProvider` declares no `deployments` in its capabilities: the host and the Hub read
+`workspace.create` from `operations` for as long as the surface exists.
 
 And one rule for the binding, because the Config Service is unchanged: in milestone 1 the host
 builds the generation 2 binding from today's grant by copying `metadata` into `access` as
@@ -1764,9 +1870,9 @@ itself; it derives the account from `role_arn` when `account` is empty.
 
 | Package | Owns | Must not touch | Consumes | Done when |
 |---|---|---|---|---|
-| **A** SDK contract | `infrastructure/types.py`, `plugin.py`, `facets.py`, `routes.py`, `errors.py`, `testing.py`, `connections.py`; removes `infrastructure/legacy.py`; `tests/fixtures/contract/`; the infrastructure sections of `docs/plugin-guide.md` | `worker.py` except the one `uvicorn.Config` line, `job_context.py`, `shared/`, `contract/` (the browser API) | this document | Every type in 2.1 to 2.8 exists with `from_dict`/`to_dict`; `FakeProvider` implements every operation including deployments and DNS; `check_provider` covers each; one JSON fixture per type is published; the transitional surface still passes its existing tests |
+| **A** SDK contract | `infrastructure/types.py`, `plugin.py`, `facets.py`, `routes.py`, `errors.py`, `testing.py`, `connections.py`, and the new `infrastructure/_wire.py` and `infrastructure/transitional.py`; removes `infrastructure/legacy.py`; `tests/fixtures/contract/`; the infrastructure sections of `docs/plugin-guide.md` | `worker.py` except the one `uvicorn.Config` line, `job_context.py`, `shared/`, `contract/` (the browser API) | this document | Every type in 2.1 to 2.8 exists with `from_dict`/`to_dict`; `FakeProvider` implements every operation including deployments and DNS; `check_provider` covers each; one JSON fixture per type is published; the transitional surface still passes its existing tests |
 | **B1** Host: capabilities, connect, credential seam, nodes, typed errors | `infra/provider_client.py`; `connections.py`; in `infra/manager.py` the functions `capabilities`, `verify_connection`, `connection_node_access`, `prepare_connection_update`, `connection_onboarding`, `host_scope`, `preflight`, `create_node`, the node branch of `_provision`, `_is_permission_refusal`; the Connection and node routes and the visitor allow-list in `routes/infra.py`; removes the owner-credentials routes and transients | In `infra/manager.py`: the workspace branch of `_provision`, `_deployment_dns_zone`, `check_deployment_name`, `sweep_deployment_names`, `_sweep_through`, `_report_workspace`, `workspace_choices`. Also `routes/workspaces.py`, `host_options.py`, `config.py`, `config_service.py`, `tests/fake_config_service.py`, `node_agent/` | A's types and `FakeProvider` | The host's lockstep tests pass against `FakeProvider`; the four `caps.raw.get` reads on the deployment path use the transitional operation ids; a node is created, described and deleted through `FakeProvider` with each of the three kinds |
-| **F1** AWS: capabilities, connect, nodes, storage | `plugin.py` (capabilities, connect, node and storage methods), the resolver and credential code in `provider.py`, `node_access.py`, `storage_access.py`, `connection_updates.py`, `validate.py`, `config.py` | `workspace.py`, `ingress.py`, `ingress_policy.py`, `hostnames.py`, `sweep.py`, the workspace renderer in `bootstrap.py`, except replacing reads of `binding.metadata` with `binding.access` | A | `check_provider` passes for every operation it lists; the plugin's existing tests pass; on the dev account: connect an account, verify, start a node and train from storage, and launch a deployment through the unchanged path |
+| **F1** AWS: capabilities, connect, nodes, storage | `plugin.py` (capabilities, connect, node and storage methods), the resolver and credential code in `provider.py`, `node_access.py`, `storage_access.py`, `connection_updates.py`, `validate.py`, `config.py` | `workspace.py`, `ingress.py`, `ingress_policy.py`, `hostnames.py`, `sweep.py`, the workspace renderer in `bootstrap.py`, except replacing reads of `binding.metadata` with `binding.access` and removing their reads of the removed `infrastructure.legacy` module (`workspace.py`, `ingress.py` and `provider.py` import it) | A | `check_provider` passes for every operation it lists; the plugin's existing tests pass; on the dev account: connect an account, verify, start a node and train from storage, and launch a deployment through the unchanged path |
 | **G** Machines and RunPod | each plugin's capabilities and class bases; RunPod's `connection.py` | nothing shared | A | `check_provider` passes; a machines node starts with a key from a Connection |
 | **H** Azure nodes | the whole plugin, rewritten: capabilities, own sign-in, nodes, catalog, storage | nothing shared | A | `check_provider` passes; in the sandbox, with the host's built-in own-identity Connection and no Config Service (`compute:connections.py:159-166`, `compute:infra/manager.py:3560-3561`): start a node with its identity attached, run a job on a table in Azure storage, delete it |
 | **E1** Hub, for milestone 1 only | the defaults loader in `static/js/connection-create.js` (`:775-830`), reading typed capabilities into the object the form already uses; the node-create dialog in `static/js/plugin-loader.js` (`kind`, `location`, `nodes.types`); removal of the wizard's owner-credentials code | the Connection form itself, `connection-edit.js`, `connections-admin.js`, `deployment-launch.js` | A's capability fixtures | The current Connection form and node dialog work against a generation 2 Compute Service for `aws` and `azure`. The loader composes the AWS role ARN itself for this milestone, since the Config Service still requires it at create; that line is deleted in E2 |
@@ -1791,7 +1897,13 @@ storage container in the sandbox, the token minted by a test helper. Until C lan
 ### 6.4 Interfaces between packages
 
 - **A to everyone: the wire.** A publishes, with its first staged build, one JSON fixture per
-  type under `tests/fixtures/contract/` and the `FakeProvider` that emits them. B1 and C test
+  type under `tests/fixtures/contract/` and the `FakeProvider` that emits them
+  (`tlc_plugin_sdk.infrastructure.testing`). Each file is `{type, route, example}`;
+  `capabilities.aws.json`, `capabilities.aws-deployments.json`, `capabilities.azure.json`,
+  `capabilities.runpod.json` and `capabilities.machines.json` are the declarations of 5.2 and
+  5.3, the first as AWS is while the transitional surface exists and the second as it is with
+  the deployment group. `tests/contract_fixtures.py --write` regenerates them and
+  `tests/test_infra_fixtures.py` fails when a type and its fixture drift. B1 and C test
   against `FakeProvider` in process, as the host's lockstep tests do today
   (`compute:infra/provider_client.py:10-17`). E1 and E2 render from fixtures and need no running
   plugin. F to J are done when `check_provider` passes for every operation they list
@@ -1874,6 +1986,33 @@ launcher without a zone names by address; the owner-credentials facet is removed
 6. **Whether 1.2 and 0.7 ship before this.** Decides whether the dual support of 6.5 is real.
    Blocks nothing in milestone 1.
 
+Decided while building the SDK package (A), each the smaller of its options. They stand unless
+reopened.
+
+7. **`Locations` has typed rows.** 2.4 said only that `Locations` is `Datacenters` renamed, and
+   `Datacenters` carried untyped rows plus a provider's saved placement setting, which 2.0
+   rules out. (a) Typed `Location` rows `{id, label, available, capacity}` and a `default`;
+   a provider's placement setting stays on its own routes. (b) Keep the untyped rows under the
+   new name. **Decided (a).** Touches G (RunPod maps its datacenter rows) and the Hub's node
+   dialog.
+
+8. **`DeploymentListing` is a list of `DeploymentInstance`.** 2.5 named the type without
+   defining it. (a) `{provider_id, deployment_id, name, owner, size, state, location,
+   addresses}`, the `WorkspaceInstance` fields in this contract's words plus the `3lc-id` tag a
+   launcher matches against its registry. (b) Reuse `WorkspaceInstance`. **Decided (a).**
+   Touches C, F2 and J.
+
+9. **A plugin names its two private transitional operations.** The SDK lists an operation
+   when it mounted the route, and it does not mount the AWS plugin's private name-check and
+   sweep routes. (a) The plugin sets `WorkspaceFacet.private_operations`; the SDK lists the
+   ids it names. (b) The SDK inspects the plugin's handler list for the two paths.
+   **Decided (a).** Touches F1 (one class attribute) and B1 (reads `operations`).
+
+10. **The inspecting `GET` of node access carries the storage roots as JSON in the query.**
+    3.1 gave the `GET` a `NodeAccessRequest` and a `GET` has no body. (a) `?storage_roots=`, a
+    JSON list of `StorageRoot`. (b) Make the inspection a `POST` with an `apply` flag.
+    **Decided (a).** It keeps "GET inspects, POST applies". Touches B1.
+
 ---
 
 ## Migration from 0.7
@@ -1883,11 +2022,14 @@ infrastructure and Connections surfaces exist only on the unreleased 0.5 to 0.7 
 
 **Removed**
 
-- Every `extra` field. Use the typed field.
+- Every `extra` field. Use the typed field (`PresignResponse.cors`), or serve the value from the
+  plugin's own route. `WorkspaceInstance.extra` stays until milestone 2.
 - `CapabilitiesResponse.facets`, `facets_reported`, `lists_workspaces`, `flavors`, `missing`,
   `region`, `workspace_fields`. Use `operations`, `nodes`, `deployments`.
+- `CreateNodeResponse.managed_by`, `ProjectStorage` and `CreateNodeRequest.project_storage`.
 - `CreateNodeRequest.flavor` and `.workspace`; `CreateNodeResponse.services`, `.ingress`,
-  `.managed_by`, `.placement`; `WorkspaceRequest`; `ProjectStorage`. (After milestone 2.)
+  `.placement`; `WorkspaceRequest`. (After milestone 2. Until then `flavor` is `"workspace"` or
+  empty.)
 - `WorkspaceFacet`, `WorkspaceInstance`, `WorkspaceListing`, `WorkspacePlacement`. (After
   milestone 2.)
 - `LegacyOwnerCredentialsFacet`, `OwnerCredentialsDescriptor`, `LoginDescriptor`,
@@ -1896,19 +2038,25 @@ infrastructure and Connections surfaces exist only on the unreleased 0.5 to 0.7 
 - `connections.AwsSession`.
 - `ConnectionBinding.metadata`; `.configuration` after milestone 2.
 - `GpuCatalog`, `CpuCatalog`, `preflight_query`, the `gpu_type` and `gpu_types` aliases.
+- `InfrastructurePlugin.implemented_facets`, the `FACET_*` constants, and the route-group
+  builders `core_handlers`, `catalog_handlers` and `legacy_handlers`.
+- `Ambient.region`. Read `Ambient.defaults`.
+- The storage routes without a Connection: each of the twelve now answers 400 without one.
 - `dns_zone_id` and `dns_zone_name` on a create request.
 
 **Renamed or reshaped**
 
 | 0.7 | 0.8 |
 |---|---|
-| `SettingsField` (`placeholder`) | `FormField` (`example`) |
+| `SettingsField` in `missing_fields` (`placeholder`) | `FormField` (`example`); `SettingsField` stays as the settings layer's own type |
+| `CapabilitiesResponse(**self.settings.readiness(s))` | `CapabilitiesResponse(..., **self.readiness())` |
+| `CapabilitiesResponse.node_types`, `pricing`, `node_type_label`, `node_type_connections` | `nodes.types`, `nodes.pricing`, `nodes.type_label`, `nodes.type_connections` |
 | `preflight`, `preflight_with_context`, `GET /infra/preflight` | `check_node`, `POST /infra/nodes/check` |
 | `connection_check`, `connection_check_with_context`, `GET /infra/connection/check` | `verify_connection`, `POST /infra/connection/verify` |
 | `ConnectionCheckRequest` | `VerifyRequest`, `NodeAccessRequest` |
 | `ConnectionCheckResponse` (`metadata`) | `ConnectionVerification` (`account`, `observation`, `facts`) |
 | `gpu_catalog`, `cpu_catalog`, `GET /infra/gpu-catalog`, `/infra/cpu-catalog` | `catalog`, `POST /infra/catalog` |
-| `datacenters`, `Datacenters`, `GET /infra/datacenters` | `locations`, `Locations`, `GET /infra/catalog/locations` |
+| `datacenters`, `Datacenters` (untyped rows), `GET /infra/datacenters` | `locations`, `Locations` (typed `Location` rows), `GET /infra/catalog/locations` |
 | `list_workspaces`, `GET /infra/workspaces` | `list_deployments`, `GET /infra/deployments` |
 | `workspace_placement`, `GET /infra/workspace-placement` | `deployment_options`, `POST /infra/deployments/options` |
 | `workspace_diagnostics`, `GET /infra/workspace-diagnostics/{id}` | `deployment_state(diagnostics="detailed")` |
@@ -1917,11 +2065,16 @@ infrastructure and Connections surfaces exist only on the unreleased 0.5 to 0.7 
 | `register_resolver(provider, kind, fn(binding))` | `register_resolver(provider, fn(ResolveRequest))` |
 | `InfrastructurePlugin` with four abstract node methods | `InfrastructurePlugin` plus the `NodeProvider` mixin |
 | Error body `{detail}` | `{detail, code, remedy, retry_after_s}` |
+| `routes.answer` raising litestar's `HTTPException` | raising `routes.ProviderHTTPError`; mount a private route with `exception_handlers=routes.error_handlers()` |
+| A storage call without a Connection | every storage call carries one |
 
 **Added**
 
 `NodeProvider`, `DeploymentProvider`, `DnsFacet`; `describe_grant`, `prepare_grant_update`,
 `storage_candidates` as typed operations; `ProviderCredential`, `ResolveRequest`,
-`credential_as`; `PermissionDenied`, `CredentialExpired`, `RateLimited`;
+`credential_as`, `SecretToken.fields`; `PermissionDenied`, `CredentialExpired`, `RateLimited`,
+`ErrorAnswer`; `OPERATIONS`, `provided_operations`, `capabilities_problems`,
+`InfrastructurePlugin.readiness`; `FakeProvider` for every operation, `connection_headers`, and
+the conformance groups `connect`, `check`, `deployments` and `dns`;
 `CreateNodeRequest.kind`, `.location`, `.host_id`; `CapabilitiesResponse.contract`,
 `operations`, `account`, `access_methods`, `host`, `permissions`, `nodes`, `deployments`.

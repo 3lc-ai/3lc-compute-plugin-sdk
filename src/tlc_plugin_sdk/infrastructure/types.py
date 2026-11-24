@@ -1,22 +1,21 @@
 # Copyright 2026 3LC Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The typed wire between the host's InfraManager and an infrastructure plugin.
+"""The typed wire between a host and an infrastructure plugin: contract generation 2.
 
-Every message the host sends a provider, and every answer it reads, is a dataclass here. The
-rules every one of them follows:
+Every message the host sends a provider, and every answer it reads, is a dataclass here (the
+Connection binding and its permissions are in :mod:`tlc_plugin_sdk.connections`). The rules every
+one of them follows:
 
 - ``from_dict(data)`` reads only known keys; unknown keys are dropped; ``None`` or a missing key
-  is the field default; scalars are coerced (``str()``/``int()``/``float()``/``bool()``) and lists
-  filtered to their item type, so an older or newer peer never raises here.
-- ``to_dict()`` emits every field the wire reads. A key whose presence carries meaning
-  (``token``, ``pricing``, ``detail``, ``hourly_rate``, ``services``, ``managed_by``, the
-  ``bootstrap_*`` trio, ``region``, ``storage`` …) is omitted when unset, so a reader's
-  ``"hourly_rate" in answer`` keeps its meaning.
-- The aliases the wire carries are kept on both sides: ``node_type``/``gpu_type`` on a create
-  body and a preflight query, ``node_types``/``gpu_types`` on capabilities. ``from_dict`` prefers
-  the ``node_*`` name; ``to_dict`` emits both.
-- An ``extra`` field is emit-only: ``to_dict`` merges it first and a typed key that is set wins; ``from_dict``
-  never fills it.
+  is the field default; scalars are coerced and lists filtered to their item type, so an older or
+  newer peer never raises here.
+- ``to_dict()`` emits every field. A key whose presence carries meaning (a quote the provider
+  does not have, a part of capabilities the provider does not offer) is omitted when it is
+  ``None``, and a few answers omit a key that is empty where their docstring says so.
+- A provider value a person must see comes with its display text from the provider. Nothing above
+  the plugin parses a provider identifier.
+- There is no untyped ``extra`` and no free-form display map. A value only the plugin's own page
+  needs is served by the plugin's own routes.
 """
 
 from __future__ import annotations
@@ -24,179 +23,210 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal, Self
+
+from tlc_plugin_sdk.connections import ConnectionKind, ConnectionPermissions, StorageAccessMode, StorageRule
+from tlc_plugin_sdk.infrastructure._wire import (
+    Wire,
+    _any_dict,
+    _bool,
+    _dict_list,
+    _int,
+    _int_list,
+    _mapping,
+    _opt_bool,
+    _opt_float,
+    _opt_int,
+    _str,
+    _str_dict,
+    _str_list,
+    _stripped,
+)
+from tlc_plugin_sdk.infrastructure.errors import error_body
+from tlc_plugin_sdk.infrastructure.transitional import (
+    WorkspaceInstance,
+    WorkspaceListing,
+    WorkspacePlacement,
+    WorkspaceRequest,
+)
 
 __all__ = [
-    "FACETS",
-    "FACET_CATALOG",
-    "FACET_LEGACY_OWNER_CREDENTIALS",
-    "FACET_STORAGE",
-    "FACET_WORKSPACES",
+    "CONTRACT_GENERATION",
+    "FIELD_KEY_PATTERN",
+    "OPERATIONS",
+    "PROVIDER_PATTERN",
+    "AccessMethod",
+    "AccountSchema",
+    "Address",
     "BundleRequest",
     "CapabilitiesResponse",
-    "ConnectionCheckRequest",
-    "ConnectionCheckResponse",
+    "Catalog",
+    "CatalogPurpose",
+    "CatalogRequest",
+    "Choice",
+    "ConnectionKind",
     "ConnectionNodeAccess",
-    "CpuCatalog",
+    "ConnectionPermissions",
+    "ConnectionVerification",
+    "CostNote",
     "CreateNodeRequest",
     "CreateNodeResponse",
     "CreateStorageRequest",
-    "Datacenters",
     "DeleteObjectsRequest",
-    "GpuCatalog",
-    "LoginDescriptor",
+    "DeploymentBootstrap",
+    "DeploymentCapabilities",
+    "DeploymentCheck",
+    "DeploymentCheckRequest",
+    "DeploymentHostnames",
+    "DeploymentInstance",
+    "DeploymentListing",
+    "DeploymentOptions",
+    "DeploymentOptionsRequest",
+    "DeploymentPrepareRequest",
+    "DeploymentPrepared",
+    "DeploymentRequest",
+    "DeploymentResponse",
+    "DeploymentStorage",
+    "DnsChange",
+    "DnsRecord",
+    "DnsRecords",
+    "DnsZone",
+    "ErrorAnswer",
+    "FieldKind",
+    "FormField",
+    "Grant",
+    "GrantFile",
+    "GrantObservation",
+    "GrantRequest",
+    "GrantUpdate",
+    "GrantUpdateRequest",
+    "GrantUpdateStatus",
+    "HostIdentity",
+    "Location",
+    "Locations",
+    "NodeAccessRequest",
+    "NodeCapabilities",
+    "NodeCheckRequest",
+    "NodeKind",
     "NodeProviderState",
     "NodeStateResponse",
+    "NodeStorageAccess",
     "ObjectListing",
-    "OwnerCredentialsDescriptor",
+    "Offer",
+    "PermissionOption",
+    "PermissionSchema",
+    "PlacementChoice",
+    "PlacementField",
     "PreflightCheck",
     "PreflightResponse",
     "PresignRequest",
     "PresignResponse",
-    "ProjectStorage",
+    "Pricing",
+    "Purpose",
     "Region",
-    "RoleDescriptor",
     "SettingsField",
+    "StorageAccessMode",
+    "StorageCandidate",
+    "StorageCandidates",
     "StorageCapabilities",
     "StorageDeleted",
     "StorageItem",
     "StorageListing",
+    "StorageLocationSchema",
+    "StorageRoot",
+    "StorageRule",
+    "SweepItem",
+    "SweepReport",
+    "SweepRequest",
     "TransferRequest",
+    "VerifyRequest",
     "WorkspaceInstance",
     "WorkspaceListing",
     "WorkspacePlacement",
     "WorkspaceRequest",
     "is_node_state",
-    "preflight_query",
 ]
 
-# ── Facet ids (the strings on the wire in ``capabilities.facets``) ──────────────
+#: The generation of this contract. A host registers an infrastructure plugin only when its
+#: capabilities say this number.
+CONTRACT_GENERATION = 2
 
-FACET_STORAGE = "storage"
-FACET_CATALOG = "catalog"
-FACET_WORKSPACES = "workspaces"
-FACET_LEGACY_OWNER_CREDENTIALS = "legacy-owner-credentials"
-#: Every facet id, in the order ``implemented_facets()`` reports them.
-FACETS: tuple[str, ...] = (FACET_STORAGE, FACET_CATALOG, FACET_WORKSPACES, FACET_LEGACY_OWNER_CREDENTIALS)
+#: Every operation id ``capabilities.operations`` can list, in the order it lists them. The SDK
+#: lists an operation exactly when it mounted the operation's route.
+OPERATIONS: tuple[str, ...] = (
+    "connection.grant",
+    "connection.grant_update",
+    "connection.verify",
+    "connection.node_access",
+    "storage.candidates",
+    "node.create",
+    "node.state",
+    "node.delete",
+    "node.check",
+    "node.diagnostics",
+    "catalog",
+    "catalog.locations",
+    "deployment.options",
+    "deployment.check",
+    "deployment.prepare",
+    "deployment.create",
+    "deployment.state",
+    "deployment.delete",
+    "deployment.retain",
+    "deployment.list",
+    "deployment.sweep",
+    "storage",
+    "dns",
+)
 
+#: What a provider slug matches.
+PROVIDER_PATTERN = r"^[a-z0-9][a-z0-9._-]*$"
+#: What a form field's key matches.
+FIELD_KEY_PATTERN = r"^[a-z][a-z0-9_]{0,39}$"
 
-# ── Coercion helpers (a peer never makes these raise) ──────────────────────────
-
-
-def _str(value: Any, default: str = "") -> str:
-    return default if value is None else str(value)
-
-
-def _stripped(value: Any) -> str:
-    return _str(value).strip()
-
-
-def _int(value: Any, default: int) -> int:
-    if value is None or isinstance(value, bool):
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _float(value: Any, default: float) -> float:
-    if value is None or isinstance(value, bool):
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _opt_int(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _opt_float(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+FieldKind = Literal["text", "secret", "select"]
+Purpose = Literal["deployments", "nodes", "storage"]
+NodeKind = Literal["gpu", "cpu"]
+Pricing = Literal["on_demand", "spot"]
+#: How a node reaches storage: through the identity attached to it, with what the machine already
+#: has, or not at all.
+NodeStorageAccess = Literal["identity", "ambient", "none"]
+CatalogPurpose = Literal["gpu_node", "cpu_node", "deployment"]
+GrantUpdateStatus = Literal["pending", "ready", "applied", "no_changes", "failed"]
 
 
-def _bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
+# ── Errors ─────────────────────────────────────────────────────────────────────
 
 
-def _opt_bool(value: Any) -> bool | None:
-    return None if value is None else _bool(value)
+@dataclass
+class ErrorAnswer(Wire):
+    """The body of every non-2xx answer of an infrastructure route.
+
+    Attributes:
+        detail: The sentence a person reads.
+        code: What a host branches on (:data:`~tlc_plugin_sdk.infrastructure.errors.ERROR_CODES`).
+        remedy: What a person can do about it, or ``""``.
+        retry_after_s: Seconds after which a repeat may succeed, or ``None``.
+    """
+
+    detail: str
+    code: str = "provider_error"
+    remedy: str = ""
+    retry_after_s: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """All four keys, ``retry_after_s`` as ``null`` when unset."""
+        return error_body(self.detail, self.code, self.remedy, self.retry_after_s)
 
 
-def _str_list(value: Any) -> list[str]:
-    if not isinstance(value, (list, tuple)):
-        return []
-    return [str(v) for v in value if v is not None and str(v).strip()]
-
-
-def _str_map(value: Any) -> dict[str, str]:
-    """A ``{name: value}`` object's entries whose name and value are both non-blank strings."""
-    if not isinstance(value, Mapping):
-        return {}
-    return {
-        k.strip(): v.strip()
-        for k, v in value.items()
-        if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip()
-    }
-
-
-def _int_list(value: Any) -> list[int]:
-    out: list[int] = []
-    if isinstance(value, (list, tuple)):
-        for v in value:
-            parsed = _opt_int(v)
-            if parsed is not None:
-                out.append(parsed)
-    return out
-
-
-def _dict_list(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, (list, tuple)):
-        return []
-    return [dict(v) for v in value if isinstance(v, Mapping)]
-
-
-def _str_dict(value: Any) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        return {}
-    return {str(k): str(v) for k, v in value.items() if v is not None}
-
-
-def _any_dict(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _opt_dict(value: Any) -> dict[str, Any] | None:
-    return dict(value) if isinstance(value, Mapping) else None
-
-
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-# ── Core ───────────────────────────────────────────────────────────────────────
+# ── Settings ───────────────────────────────────────────────────────────────────
 
 
 @dataclass
 class SettingsField:
-    """One field a person is asked for: an entry of ``missing_fields``, ``workspace_fields`` or
-    ``workspace_credentials``.
+    """One field of a plugin's settings, as the settings layer describes it to the plugin's own page.
+
+    On the wire to a host, a prompt is a :class:`FormField` (:meth:`FormField.from_settings`).
 
     Attributes:
         key: The settings key.
@@ -243,133 +273,590 @@ class SettingsField:
         }
 
 
-def _fields_from(value: Any) -> list[SettingsField]:
-    return [SettingsField.from_dict(v) for v in value] if isinstance(value, (list, tuple)) else []
+# ── Capabilities ───────────────────────────────────────────────────────────────
 
 
 @dataclass
-class ProjectStorage:
-    """Where the deployment keeps its projects, as far as a node can reach them.
+class Choice(Wire):
+    """One option of a ``select`` field.
 
-    ``project_root_url`` is the deployment's project root when a node can write it (a bucket or
-    container URL), else ``""``; ``project_scan_urls`` are its node-reachable scan folders. Both are
-    a snapshot taken when the node is created, and scan folders change over time: treat them as a
-    hint for what a node's storage credential should *at least* cover, never as a boundary to
-    refuse or restrict access by. A provider keeps no root of its own, and a job may carry another.
+    Attributes:
+        id: The value stored.
+        label: What a person reads; ``""`` shows the id.
     """
 
-    project_root_url: str = ""
-    project_scan_urls: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(cls, data: Any) -> ProjectStorage:
-        """Parse the ``project_storage`` object of a create body (anything else is empty)."""
-        d = _mapping(data)
-        return cls(
-            project_root_url=_stripped(d.get("project_root_url")),
-            project_scan_urls=_str_list(d.get("project_scan_urls")),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to the object the host sends."""
-        return {"project_root_url": self.project_root_url, "project_scan_urls": list(self.project_scan_urls)}
+    id: str
+    label: str = ""
 
 
 @dataclass
-class WorkspaceRequest:
-    """The ``workspace`` object of a create body for a ``flavor == "workspace"`` node.
+class FormField(Wire):
+    """One value a person is asked for. The Hub renders it; nothing above the plugin reads it.
 
-    A workspace created through a Connection carries its Config Service identity: ``workspace_id``
-    (the record the machine becomes), ``config_service_url`` (where it redeems) and
-    ``bootstrap_token``, the single-use token the machine redeems at
-    ``POST {config_service_url}/v1/workspaces/{workspace_id}/bootstrap`` for its two service keys.
-    The token is the one secret of the launch: a provider puts it in the machine's startup data
-    and keeps nothing (it is scrubbed from the SDK's error answers); a host sends it on the one
-    create call and never persists it. ``region`` and ``vpc_id`` say where the stack goes; empty
-    leaves the provider's default. ``dns_zone_id`` and ``dns_zone_name`` name the host's deployment
-    DNS zone (a Route 53 hosted zone id and its name, ``deploy.example.com``): a provider that
-    supports hostnames gives the workspace a stable address and public names under that zone,
-    ``<deployment>.<zone>``, derived from ``name``, and removes them when the workspace goes; both
-    empty (the default) leaves the provider's own naming. A workspace created the legacy way, with
-    its owner's keys, carries none of these.
-
-    The transient ``credentials`` and ``provider_configs`` a legacy request carries are not fields:
-    the SDK strips them from the body and exposes them through
-    :mod:`tlc_plugin_sdk.infrastructure.legacy` to a plugin with the legacy facet.
+    Attributes:
+        key: The key the value is stored under (:data:`FIELD_KEY_PATTERN`), unique within its list.
+        label: What the prompt says.
+        kind: ``text``, ``secret`` or ``select``.
+        required: Whether the form cannot be submitted without it.
+        secret: Masked input, never echoed, stored only in a sealed value. True exactly when
+            ``kind == "secret"``.
+        help: Where the value is found, in a sentence.
+        example: An example value, shown as the placeholder.
+        pattern: A regular expression the whole value must match; ``""`` accepts anything.
+        max_length: The longest value accepted, 1 to 2048.
+        choices: The options of a ``select``.
+        default: The value a new form starts with.
     """
 
-    project_root_url: str = ""
-    mode: str = "full"
-    public: bool = False
-    name: str = ""
-    bootstrap_plugins: list[str] = field(default_factory=list)
-    data_buckets: list[str] = field(default_factory=list)
-    create_bucket: bool = False
-    seed_provider_configs: bool = False
-    workspace_id: str = ""
-    config_service_url: str = ""
-    bootstrap_token: str = field(default="", repr=False)
-    region: str = ""
-    vpc_id: str = ""
-    dns_zone_id: str = ""
-    dns_zone_name: str = ""
-    subnet_id: str = ""
-    availability_zone: str = ""
-    launcher_service_id: str = ""
-    detailed_diagnostics: bool = False
-    project_scan_urls: list[str] = field(default_factory=list)
+    key: str
+    label: str
+    kind: FieldKind = "text"
+    required: bool = True
+    secret: bool = False
+    help: str = ""
+    example: str = ""
+    pattern: str = ""
+    max_length: int = 256
+    choices: list[Choice] = field(default_factory=list)
+    default: str = ""
 
     @classmethod
-    def from_dict(cls, data: Any) -> WorkspaceRequest:
-        """Parse the ``workspace`` object (anything else is empty; transient keys are dropped)."""
+    def from_settings(cls, described: SettingsField) -> FormField:
+        """The prompt for a settings field the plugin still needs (an entry of ``missing_fields``).
+
+        Args:
+            described: The field, as the settings layer describes it.
+
+        Returns:
+            The form field; a secret one has ``kind == "secret"``.
+        """
+        return cls(
+            key=described.key,
+            label=described.label,
+            kind="secret" if described.secret else "text",
+            required=described.required,
+            secret=described.secret,
+            help=described.help,
+            example=described.placeholder,
+        )
+
+
+@dataclass
+class AccountSchema(Wire):
+    """How this provider names an account.
+
+    Attributes:
+        noun: What an account is called (``"AWS account"``).
+        fields: The identity of the account: compared, key for key, with what the cloud says
+            when the Connection is verified. Empty when the secret is the account.
+        defaults: What is not identity: a default location.
+        help: A sentence shown with the form.
+    """
+
+    noun: str
+    fields: list[FormField] = field(default_factory=list)
+    defaults: list[FormField] = field(default_factory=list)
+    help: str = ""
+
+
+@dataclass
+class AccessMethod(Wire):
+    """One way a Compute Service obtains authority in an account.
+
+    Attributes:
+        kind: The Connection kind this method creates.
+        label: What a person reads (``"Uses access you grant to 3LC"``).
+        summary: One sentence shown under the label.
+        purposes: What a Connection of this method may be for.
+        available: Whether this host can use the method at all.
+        unavailable_reason: The sentence when it cannot.
+        preferred: The method a new Connection gets; at most one method says so.
+        fields: The method's ``access`` fields a person enters.
+        grants: Whether ``describe_grant`` applies to this method.
+    """
+
+    kind: ConnectionKind
+    label: str
+    summary: str = ""
+    purposes: list[Purpose] = field(default_factory=lambda: ["deployments", "nodes", "storage"])
+    available: bool = True
+    unavailable_reason: str = ""
+    preferred: bool = False
+    fields: list[FormField] = field(default_factory=list)
+    grants: bool = False
+
+
+@dataclass
+class HostIdentity(Wire):
+    """Who this host is to the provider, read from the machine's own credential chain only.
+
+    Attributes:
+        display: What a person recognises.
+        matches: The access fields a Connection must carry, with these values, to act for this
+            host. ``{}`` scopes nothing.
+        deployment_of: On a deployment, the access fields of the Connection it was launched
+            through. A Connection carrying all of them belongs to this host whatever ``matches`` says.
+    """
+
+    display: str = ""
+    matches: dict[str, str] = field(default_factory=dict)
+    deployment_of: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class PermissionOption(Wire):
+    """A provider-declared switch of a Connection's permissions.
+
+    Attributes:
+        key: The key in ``ConnectionPermissions.options``, unique among the options.
+        label: What a person reads.
+        purpose: Which of the three purposes it belongs under.
+        help: A sentence shown with it.
+        default: Its value on a new Connection.
+        operations: The Config Service operations it enables.
+    """
+
+    key: str
+    label: str
+    purpose: Purpose
+    help: str = ""
+    default: bool = False
+    operations: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StorageLocationSchema(Wire):
+    """How a storage rule's location is written for this provider.
+
+    Attributes:
+        scheme: The URL scheme (``"s3"``, ``"abfss"``).
+        example: An example location (``"s3://my-bucket/projects"``).
+        pattern: A regular expression one rule's location must match, wildcards included.
+        access_modes: The modes this cloud can express.
+        help: A sentence shown with the editor.
+        max_rules: How many rules a Connection may carry, 1 to 20.
+    """
+
+    scheme: str
+    example: str
+    pattern: str
+    access_modes: list[StorageAccessMode] = field(default_factory=lambda: ["read", "read_write"])
+    help: str = ""
+    max_rules: int = 20
+
+
+@dataclass
+class PermissionSchema(Wire):
+    """What a Connection's permissions can say for this provider.
+
+    Attributes:
+        options: The provider's own switches.
+        storage: How storage rules are written, or ``None`` when this provider has none.
+    """
+
+    options: list[PermissionOption] = field(default_factory=list)
+    storage: StorageLocationSchema | None = None
+
+
+@dataclass
+class NodeCapabilities(Wire):
+    """What nodes this provider starts.
+
+    Attributes:
+        kinds: ``gpu``, ``cpu`` or both.
+        types: The configured node types, offered by the create-node dialog.
+        type_label: What a node type is called (``"Machine"``).
+        pricing: How a node may be paid for.
+        storage_access: How a node of this provider can reach storage.
+        type_connections: ``{node_type: connection_id}`` for a provider whose node types each
+            have a credential of their own (a machine and its ssh key). The host creates and
+            checks a node of that type on the named Connection when the request names none,
+            under a grant for the person asking.
+    """
+
+    kinds: list[NodeKind] = field(default_factory=lambda: ["gpu"])
+    types: list[str] = field(default_factory=list)
+    type_label: str = ""
+    pricing: list[Pricing] = field(default_factory=lambda: ["on_demand"])
+    storage_access: list[Literal["identity", "ambient"]] = field(default_factory=list)
+    type_connections: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DeploymentCapabilities(Wire):
+    """What deployments this provider hosts.
+
+    Attributes:
+        certificate: Who obtains a deployment's certificate in a launcher's zone: the ``machine``
+            itself once its names resolve to it, or the ``provider`` (a managed certificate).
+        shared_ingress: ``check_deployment`` answers an ``ingress_key``.
+        sslip: The provider can name a deployment by its own address.
+    """
+
+    certificate: Literal["machine", "provider"]
+    shared_ingress: bool = False
+    sslip: bool = False
+
+
+@dataclass
+class StorageCapabilities:
+    """What the storage a provider offers can do: the ``storage`` object of capabilities, and the header of a listing.
+
+    Attributes:
+        kind: ``"bucket"`` or ``"volume"``.
+        label: What the Hub calls one (``"S3 bucket"``, ``"RunPod network volume"``).
+        creatable: ``POST /infra/storage`` works.
+        upload: ``POST /infra/storage/presign`` (mode ``upload``) works.
+        browse: ``GET /infra/storage/list`` works.
+        download: ``POST /infra/storage/presign`` (mode ``download``) works.
+        bundle: ``POST /infra/storage/bundle`` works.
+        delete: ``POST /infra/storage/delete`` works.
+        transfer: ``POST /infra/storage/transfer`` works.
+        rename: A transfer of one item with ``rename_to`` works.
+        default_id: The storage a node gets when the request names none (``""`` for none).
+        upload_hint: Why the browser cannot fill this storage right now, in a sentence.
+    """
+
+    kind: str
+    label: str
+    creatable: bool = True
+    upload: bool = True
+    browse: bool = True
+    download: bool = True
+    bundle: bool = True
+    delete: bool = True
+    transfer: bool = True
+    rename: bool = True
+    default_id: str = ""
+    upload_hint: str = ""
+
+    @classmethod
+    def from_dict(cls, data: Any) -> StorageCapabilities:
+        """Parse the ``storage`` object of capabilities or the header of a listing."""
         d = _mapping(data)
         return cls(
-            project_root_url=_stripped(d.get("project_root_url")),
-            mode=_str(d.get("mode")) or "full",
-            public=_bool(d.get("public")),
-            name=_str(d.get("name")),
-            bootstrap_plugins=_str_list(d.get("bootstrap_plugins")),
-            data_buckets=_str_list(d.get("data_buckets")),
-            project_scan_urls=_str_list(d.get("project_scan_urls")),
-            create_bucket=_bool(d.get("create_bucket")),
-            seed_provider_configs=_bool(d.get("seed_provider_configs")),
-            workspace_id=_stripped(d.get("workspace_id")),
-            config_service_url=_stripped(d.get("config_service_url")),
-            bootstrap_token=_stripped(d.get("bootstrap_token")),
-            region=_stripped(d.get("region")),
-            vpc_id=_stripped(d.get("vpc_id")),
-            subnet_id=_stripped(d.get("subnet_id")),
-            availability_zone=_stripped(d.get("availability_zone")),
-            launcher_service_id=_stripped(d.get("launcher_service_id")),
-            detailed_diagnostics=_bool(d.get("detailed_diagnostics")),
-            dns_zone_id=_stripped(d.get("dns_zone_id")),
-            dns_zone_name=_stripped(d.get("dns_zone_name")),
+            kind=_str(d.get("kind")),
+            label=_str(d.get("label")),
+            creatable=_bool(d.get("creatable"), True),
+            upload=_bool(d.get("upload"), True),
+            browse=_bool(d.get("browse"), True),
+            download=_bool(d.get("download"), True),
+            bundle=_bool(d.get("bundle"), True),
+            delete=_bool(d.get("delete"), True),
+            transfer=_bool(d.get("transfer"), True),
+            rename=_bool(d.get("rename"), True),
+            default_id=_str(d.get("default_id")),
+            upload_hint=_str(d.get("upload_hint")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to the object the host sends."""
-        return {
-            "project_root_url": self.project_root_url,
-            "mode": self.mode,
-            "public": self.public,
-            "name": self.name,
-            "bootstrap_plugins": list(self.bootstrap_plugins),
-            "data_buckets": list(self.data_buckets),
-            "project_scan_urls": list(self.project_scan_urls),
-            "create_bucket": self.create_bucket,
-            "seed_provider_configs": self.seed_provider_configs,
-            "workspace_id": self.workspace_id,
-            "config_service_url": self.config_service_url,
-            "bootstrap_token": self.bootstrap_token,
-            "region": self.region,
-            "vpc_id": self.vpc_id,
-            "subnet_id": self.subnet_id,
-            "availability_zone": self.availability_zone,
-            "launcher_service_id": self.launcher_service_id,
-            "detailed_diagnostics": self.detailed_diagnostics,
-            "dns_zone_id": self.dns_zone_id,
-            "dns_zone_name": self.dns_zone_name,
+        """Every flag; ``default_id`` and ``upload_hint`` only when non-empty."""
+        d: dict[str, Any] = {
+            "kind": self.kind,
+            "label": self.label,
+            "creatable": self.creatable,
+            "upload": self.upload,
+            "browse": self.browse,
+            "download": self.download,
+            "bundle": self.bundle,
+            "delete": self.delete,
+            "transfer": self.transfer,
+            "rename": self.rename,
         }
+        if self.default_id:
+            d["default_id"] = self.default_id
+        if self.upload_hint:
+            d["upload_hint"] = self.upload_hint
+        return d
+
+
+@dataclass
+class CapabilitiesResponse(Wire):
+    """What a provider answers for ``GET /infra/capabilities``.
+
+    The SDK fills ``storage`` (from the storage facet) and ``operations`` (from the routes it
+    mounted) before answering, overwriting an author-set value of either, and refuses to answer a
+    declaration that breaks the contract's rules.
+
+    Attributes:
+        provider: The Connection provider slug (:data:`PROVIDER_PATTERN`); equals the plugin id.
+        display_name: What a person calls the provider (``"AWS"``).
+        contract: The contract generation; a peer that says none reads as ``0``.
+        ready: Whether the plugin's own settings are complete.
+        not_ready_reason: The sentence when they are not.
+        missing_fields: The plugin settings still needed, as prompts.
+        requires_connection: A call to this provider acts on an account the request must name.
+        account: How an account is named, or ``None`` when this provider takes no Connection.
+        access_methods: The ways into an account, at most one per kind.
+        host: Who this host is to the provider, or ``None``.
+        permissions: What a Connection's permissions can say.
+        nodes: Set exactly when the class is a ``NodeProvider``.
+        deployments: Set exactly when the class is a ``DeploymentProvider``.
+        storage: What the provider's storage can do, when it has a storage facet.
+        operations: The ids of the operations whose routes are mounted.
+    """
+
+    provider: str
+    display_name: str
+    contract: int = CONTRACT_GENERATION
+    ready: bool = False
+    not_ready_reason: str = ""
+    missing_fields: list[FormField] = field(default_factory=list)
+    requires_connection: bool = False
+    account: AccountSchema | None = None
+    access_methods: list[AccessMethod] = field(default_factory=list)
+    host: HostIdentity | None = None
+    permissions: PermissionSchema = field(default_factory=PermissionSchema)
+    nodes: NodeCapabilities | None = None
+    deployments: DeploymentCapabilities | None = None
+    storage: StorageCapabilities | None = None
+    operations: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Self:
+        """Read a provider's answer; one without ``contract`` reads as generation ``0``."""
+        caps = super().from_dict(data)
+        caps.contract = _int(_mapping(data).get("contract"), 0)
+        return caps
+
+
+# ── Connect an account ─────────────────────────────────────────────────────────
+
+
+@dataclass
+class GrantRequest(Wire):
+    """What ``describe_grant`` is asked: the grant for one Connection, to create or to update.
+
+    Attributes:
+        connection_id: The Connection.
+        kind: Its access method.
+        account: Its account fields.
+        access: Its access fields as stored, server-generated ones included.
+        permissions: What the grant should allow.
+        action: ``create``, or ``update`` to change the installed grant in place.
+        installed_ref: ``GrantObservation.resource_ref`` of the installed grant, for an update.
+        default_storage_root: The host's project root, when the caller may be offered it.
+    """
+
+    connection_id: str
+    kind: ConnectionKind
+    account: dict[str, str]
+    access: dict[str, str]
+    permissions: ConnectionPermissions
+    action: Literal["create", "update"] = "create"
+    installed_ref: str = ""
+    default_storage_root: str = ""
+
+
+@dataclass
+class GrantFile(Wire):
+    """A file a person uses to create the grant by hand.
+
+    Attributes:
+        name: The file name (``"3lc-connection.json"``).
+        content: Its text.
+        media_type: Its media type.
+    """
+
+    name: str
+    content: str
+    media_type: str = "application/json"
+
+
+@dataclass
+class Grant(Wire):
+    """What a person runs in their own account, and what it creates. Never applied by 3LC.
+
+    Attributes:
+        summary: What the grant is, in a sentence.
+        action: ``create`` or ``update``; an update never answers a create link.
+        link: An https link that opens the provider's console with everything filled in.
+        link_label: What the link says (``"Open AWS CloudFormation"``).
+        steps: What to do, in order, waiting included.
+        creates: Per purpose, plain sentences for what is created.
+        trusts: What the grant trusts, for display.
+        files: For creating it by hand.
+        command: A ready-to-paste command using ``files``.
+        permissions: The request's permissions in canonical form: what is stored and later
+            compared with an observation.
+        access: The access fields to store on the Connection before the person follows the link.
+        version: The grant template's version.
+        console_url: Where the installed grant can be inspected.
+        notes: Everything else: revoking, verifying.
+    """
+
+    summary: str
+    action: Literal["create", "update"] = "create"
+    link: str = ""
+    link_label: str = ""
+    steps: list[str] = field(default_factory=list)
+    creates: dict[str, list[str]] = field(default_factory=dict)
+    trusts: str = ""
+    files: list[GrantFile] = field(default_factory=list)
+    command: str = ""
+    permissions: ConnectionPermissions = field(default_factory=ConnectionPermissions)
+    access: dict[str, str] = field(default_factory=dict)
+    version: str = ""
+    console_url: str = ""
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GrantObservation(Wire):
+    """The installed grant as read back from the account. Evidence, not a copy of what was asked.
+
+    Attributes:
+        permissions: What the installed grant allows.
+        account: The account the grant was found in.
+        resource_ref: The provider's opaque reference to it (a stack ARN, an ARM deployment id).
+        status: ``complete``, ``in_progress`` or ``failed``; an unreadable one reads as ``failed``.
+        version: The grant template's version.
+    """
+
+    permissions: ConnectionPermissions
+    account: dict[str, str]
+    resource_ref: str
+    status: Literal["complete", "in_progress", "failed"]
+    version: str = ""
+    _unreadable: ClassVar[dict[str, str]] = {"status": "failed"}
+
+
+@dataclass
+class GrantUpdateRequest(Wire):
+    """What ``prepare_grant_update`` is asked: the change from what is installed to what is pending.
+
+    Attributes:
+        installed: The grant as last observed.
+        pending: The permissions the person asked for.
+        revision: The revision of the installed permissions.
+        pending_revision: The revision of the pending ones.
+    """
+
+    installed: GrantObservation
+    pending: ConnectionPermissions
+    revision: int
+    pending_revision: int
+
+
+@dataclass
+class GrantUpdate(Wire):
+    """Where a reviewed change to the grant stands. Prepared by 3LC, applied by the customer.
+
+    Attributes:
+        status: ``pending``, ``ready``, ``applied``, ``no_changes`` or ``failed``; an unreadable
+            one reads as ``failed``.
+        detail: The provider's own sentence for the state.
+        review_url: Where the customer reviews and applies the change; ``ready`` only.
+        revision: The revision of the installed permissions.
+        pending_revision: The revision the change brings.
+    """
+
+    status: GrantUpdateStatus
+    detail: str = ""
+    review_url: str = ""
+    revision: int = 0
+    pending_revision: int = 0
+    _unreadable: ClassVar[dict[str, str]] = {"status": "failed"}
+
+
+@dataclass
+class StorageRoot(Wire):
+    """A storage location the host points a provider at: a hint for what to reach, never a boundary.
+
+    Attributes:
+        url: The location.
+        access: ``read`` or ``read_write``.
+        role: ``project_root``, a ``scan`` folder or a ``data`` location.
+    """
+
+    url: str
+    access: Literal["read", "read_write"] = "read_write"
+    role: Literal["project_root", "scan", "data"] = "project_root"
+
+
+@dataclass
+class VerifyRequest(Wire):
+    """What ``verify_connection`` is asked.
+
+    Attributes:
+        storage_roots: Sample targets; ``[]`` samples none. Probe targets, not an authorization.
+    """
+
+    storage_roots: list[StorageRoot] = field(default_factory=list)
+
+
+@dataclass
+class ConnectionVerification(Wire):
+    """What verifying the request's Connection found.
+
+    Reaching the handler already means the binding resolved; a provider adds what it asked its
+    own API. A step that fails raises; a sample that could not be confirmed is a ``warn`` check;
+    a refused operation is an ``error`` check, which the host records as a failed verification.
+
+    Attributes:
+        identity: Who the Connection acts as, in the provider's words.
+        account: The account the provider's API says the credential is in, as account fields.
+        account_label: What a person calls that account.
+        checked: The verification steps that succeeded, in order.
+        checks: Diagnostic samples.
+        observation: The installed grant as read back, or ``None`` when there is none to read.
+        facts: Labelled rows the Hub shows under the check.
+    """
+
+    identity: str
+    account: dict[str, str]
+    account_label: str = ""
+    checked: list[str] = field(default_factory=lambda: ["resolve"])
+    checks: list[PreflightCheck] = field(default_factory=list)
+    observation: GrantObservation | None = None
+    facts: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class StorageCandidate(Wire):
+    """A storage location the rule editor can offer.
+
+    Attributes:
+        location: A rule location.
+        label: What a person reads; ``""`` shows the location.
+    """
+
+    location: str
+    label: str = ""
+
+
+@dataclass
+class StorageCandidates(Wire):
+    """The answer of ``GET /infra/storage/candidates``: names, never contents.
+
+    Attributes:
+        items: At most 2000.
+        truncated: Whether the account holds more.
+    """
+
+    items: list[StorageCandidate] = field(default_factory=list)
+    truncated: bool = False
+
+
+@dataclass
+class NodeAccessRequest(Wire):
+    """What ``connection_node_access`` is asked.
+
+    Attributes:
+        storage_roots: The host's storage roots when the request is made. A provider must not
+            substitute its own configuration for them.
+        storage_access: Setup only: the rules an administrator reviewed, for the setup to apply
+            exactly. ``None`` applies the active setup unchanged.
+        expected_revision: Setup only: the ``revision`` the review was based on. A provider
+            applying ``storage_access`` raises ``Conflict`` when its active setup has moved on.
+    """
+
+    storage_roots: list[StorageRoot] = field(default_factory=list)
+    storage_access: dict[str, Any] | None = None
+    expected_revision: str = ""
+
+
+# ── Nodes ──────────────────────────────────────────────────────────────────────
 
 
 def _idle_ttl(value: Any) -> float:
@@ -382,99 +869,155 @@ def _idle_ttl(value: Any) -> float:
     return parsed if parsed is not None and math.isfinite(parsed) else 1800.0
 
 
+def _node_kind(value: Any) -> NodeKind:
+    return "cpu" if _stripped(value).lower() == "cpu" else "gpu"
+
+
+def _pricing(value: Any) -> Literal["", "on_demand", "spot"]:
+    text = _stripped(value).lower()
+    if text == "on_demand":
+        return "on_demand"
+    if text == "spot":
+        return "spot"
+    return ""
+
+
+def _storage_access(value: Any) -> NodeStorageAccess:
+    text = _stripped(value).lower()
+    if text == "identity":
+        return "identity"
+    if text == "ambient":
+        return "ambient"
+    return "none"
+
+
+def _roots(value: Any) -> list[StorageRoot]:
+    return [StorageRoot.from_dict(v) for v in value if isinstance(v, Mapping)] if isinstance(value, list) else []
+
+
 @dataclass
 class CreateNodeRequest:
     """What the host sends when it asks a provider to create a node.
 
-    ``compute_spec`` is the pip requirement for the node agent's own distribution, matched to
-    the host's version — an exact pin (``3lc-compute==1.2.0``) or a range
-    (``3lc-compute>=1.2,<1.3``): a provider that installs the agent as part of creating the node
-    installs exactly this, as one requirement. It is ``""`` when the host has none.
-    ``project_storage`` is the deployment's node-reachable project storage
-    (:class:`ProjectStorage`).
+    ``create_node`` is idempotent on ``node_id``: a repeat returns the resource the first call
+    created. Every resource a provider creates for the node carries the tags ``3lc`` = ``node``,
+    ``3lc-id`` = ``node_id``, ``3lc-owner`` = ``owner`` and ``3lc-host`` = ``host_id``.
 
-    ``agent_port`` is where the node agent listens; ``ports`` are the browser-facing app ports
-    (a notebook server, for example) the provider exposes besides ``agent_port``. Workers on the
-    node are loopback-only: the host reaches them through the agent, so no worker port is ever
-    exposed or listed here.
-
-    ``idle_ttl_s`` is how long the node may sit idle before its agent turns it off; ``0`` (or
-    less) means never. Only a finite number is read: a missing or unreadable value, and ``inf``,
-    read as the 1800 s default.
-
-    ``storage_id`` names the provider storage to attach (a network volume; ``""`` for the
-    provider's default or none). ``workspace`` is filled for ``flavor == "workspace"`` and empty
-    for a GPU node. ``pricing`` is ``""`` when the host leaves the choice to the provider's
-    configured default.
+    Attributes:
+        node_id: The host's id for the node.
+        node_type: One of ``capabilities.nodes.types``.
+        token: The node agent's token; scrubbed from error answers.
+        kind: ``gpu`` or ``cpu``.
+        location: Where the node goes, an id from ``CatalogFacet.locations``; ``""`` is the
+            Connection's default, else the plugin's.
+        env: Environment for the node agent. A credential variable in it is dropped by the provider.
+        agent_port: Where the node agent listens.
+        ports: The browser-facing app ports the provider exposes besides ``agent_port``. Workers
+            are loopback-only and never listed.
+        idle_ttl_s: How long the node may sit idle before its agent turns it off; ``0`` or less
+            means never. Only a finite number is read: anything else is the 1800 s default.
+        owner: Who the node is for.
+        host_id: The creating host's service id.
+        pricing: ``on_demand``, ``spot``, or ``""`` to leave the choice to the provider.
+        compute_spec: The pip requirement for the node agent's own distribution, as one
+            requirement (``3lc-compute==1.3.0``), or ``""``.
+        storage_roots: What the node's identity should at least reach. A hint, never a boundary.
+        storage_id: Provider storage to attach (a network volume), or ``""``.
+        flavor: Transitional. ``"workspace"`` asks for a deployment; ``""`` for a node.
+        workspace: Transitional. The deployment asked for, when ``flavor == "workspace"``.
     """
 
     node_id: str
     node_type: str
     token: str
+    kind: NodeKind = "gpu"
+    location: str = ""
     env: dict[str, str] = field(default_factory=dict)
     agent_port: int = 8800
     ports: list[int] = field(default_factory=list)
     idle_ttl_s: float = 1800.0
-    flavor: str = "gpu"
     owner: str = ""
-    pricing: str = ""
+    host_id: str = ""
+    pricing: Literal["", "on_demand", "spot"] = ""
     compute_spec: str = ""
-    project_storage: ProjectStorage = field(default_factory=ProjectStorage)
+    storage_roots: list[StorageRoot] = field(default_factory=list)
     storage_id: str = ""
+    # ── transitional ──
+    flavor: str = ""
     workspace: WorkspaceRequest = field(default_factory=WorkspaceRequest)
+    # ── end transitional ──
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> CreateNodeRequest:
+    def from_dict(cls, data: Any) -> CreateNodeRequest:
         """Parse from the JSON body the host sends; keys it does not know are ignored."""
+        d = _mapping(data)
         return cls(
-            node_id=_stripped(data.get("node_id")),
-            node_type=_str(data.get("node_type") or data.get("gpu_type")),
-            token=_str(data.get("token")),
-            env=_str_dict(data.get("env")),
-            agent_port=_int(data.get("agent_port"), 8800) or 8800,
-            ports=_int_list(data.get("ports")),
-            idle_ttl_s=_idle_ttl(data.get("idle_ttl_s")),
-            flavor=_str(data.get("flavor")) or "gpu",
-            owner=_str(data.get("owner")),
-            pricing=_str(data.get("pricing")),
-            compute_spec=_stripped(data.get("compute_spec")),
-            project_storage=ProjectStorage.from_dict(data.get("project_storage")),
-            storage_id=_str(data.get("storage_id")),
-            workspace=WorkspaceRequest.from_dict(data.get("workspace")),
+            node_id=_stripped(d.get("node_id")),
+            node_type=_str(d.get("node_type")),
+            token=_str(d.get("token")),
+            kind=_node_kind(d.get("kind")),
+            location=_stripped(d.get("location")),
+            env=_str_dict(d.get("env")),
+            agent_port=_int(d.get("agent_port"), 8800) or 8800,
+            ports=_int_list(d.get("ports")),
+            idle_ttl_s=_idle_ttl(d.get("idle_ttl_s")),
+            owner=_str(d.get("owner")),
+            host_id=_str(d.get("host_id")),
+            pricing=_pricing(d.get("pricing")),
+            compute_spec=_stripped(d.get("compute_spec")),
+            storage_roots=_roots(d.get("storage_roots")),
+            storage_id=_str(d.get("storage_id")),
+            # ── transitional ──
+            flavor="workspace" if _stripped(d.get("flavor")) == "workspace" else "",
+            workspace=WorkspaceRequest.from_dict(d.get("workspace")),
+            # ── end transitional ──
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to the body the host sends: ``node_type`` and its ``gpu_type`` alias; ``pricing`` only when set."""
+        """Serialize to the body the host sends."""
         d: dict[str, Any] = {
             "node_id": self.node_id,
             "node_type": self.node_type,
-            "gpu_type": self.node_type,
             "token": self.token,
+            "kind": self.kind,
+            "location": self.location,
             "env": dict(self.env),
             "agent_port": self.agent_port,
             "ports": list(self.ports),
             "idle_ttl_s": self.idle_ttl_s,
-            "flavor": self.flavor,
-            "workspace": self.workspace.to_dict() if self.flavor == "workspace" else {},
             "owner": self.owner,
-            "storage_id": self.storage_id,
-            "project_storage": self.project_storage.to_dict(),
+            "host_id": self.host_id,
+            "pricing": self.pricing,
             "compute_spec": self.compute_spec,
+            "storage_roots": [root.to_dict() for root in self.storage_roots],
+            "storage_id": self.storage_id,
         }
-        if self.pricing:
-            d["pricing"] = self.pricing
+        # ── transitional ──
+        if self.flavor == "workspace":
+            d["flavor"] = self.flavor
+            d["workspace"] = self.workspace.to_dict()
+        # ── end transitional ──
         return d
 
 
 @dataclass
 class CreateNodeResponse:
-    """What a provider returns after successfully creating a node.
+    """What a provider returns after creating a node.
 
-    ``agent_url`` is the one address the host needs for a GPU node: it talks to the node agent
-    there and reaches the node's workers through the agent's proxy. A workspace has no agent:
-    it answers ``services`` (``object_service_url``, ``compute_service_url``) instead.
-    ``managed_by`` is ``"owner"`` when the node lives in the requester's own account (only the
-    keys that created it can terminate it); ``""`` reads as ``"creator"`` to the host.
+    Attributes:
+        provider_id: The provider's id for the node, used for every later call.
+        agent_url: The one address the host needs: it talks to the node agent there and reaches
+            the node's workers through the agent's proxy.
+        token: The agent token in force, when the provider changed it.
+        pricing: How the node is paid for.
+        detail: A sentence about the create.
+        hourly_rate: The provider's hourly quote in USD, or ``None`` for no quote.
+        location: Where the node lives, in the provider's words.
+        identity: The node identity attached, for display.
+        storage_access: How the node reaches the request's storage roots.
+        services: Transitional. A deployment's ``object_service_url`` and ``compute_service_url``.
+        placement: Transitional. Where a deployment actually went.
+        ingress: Transitional. A deployment's ingress record.
     """
 
     provider_id: str
@@ -482,39 +1025,40 @@ class CreateNodeResponse:
     token: str = ""
     pricing: str = ""
     detail: str = ""
-    #: The provider's hourly quote for this node in USD, when it knows one (an on-demand list
-    #: price, or the spot bid it placed). The host saves it on the node record and the Hub shows
-    #: it as the node's cost; ``None`` means "no quote" and the Hub says so.
     hourly_rate: float | None = None
-    services: dict[str, str] = field(default_factory=dict)
-    managed_by: str = ""
-    #: Where the node lives, in the provider's own words: a cloud region (``eu-west-1``), a zone,
-    #: a site. The host saves it on the node record and in its history, and the Hub shows it beside
-    #: the node's type; ``""`` shows nothing.
     location: str = ""
+    identity: str = ""
+    storage_access: NodeStorageAccess = "none"
+    # ── transitional ──
+    services: dict[str, str] = field(default_factory=dict)
     placement: dict[str, str] = field(default_factory=dict)
     ingress: dict[str, Any] = field(default_factory=dict)
+    # ── end transitional ──
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> CreateNodeResponse:
+    def from_dict(cls, data: Any) -> CreateNodeResponse:
         """Parse a provider's answer (for the host)."""
+        d = _mapping(data)
         return cls(
-            provider_id=_str(data.get("provider_id")),
-            agent_url=_str(data.get("agent_url")),
-            token=_str(data.get("token")),
-            pricing=_str(data.get("pricing")),
-            detail=_str(data.get("detail")),
-            hourly_rate=_opt_float(data.get("hourly_rate")),
-            services={k: v for k, v in _mapping(data.get("services")).items() if isinstance(v, str)},
-            managed_by=_str(data.get("managed_by")),
-            location=_str(data.get("location")),
-            placement=_str_dict(data.get("placement")),
-            ingress=_any_dict(data.get("ingress")),
+            provider_id=_str(d.get("provider_id")),
+            agent_url=_str(d.get("agent_url")),
+            token=_str(d.get("token")),
+            pricing=_str(d.get("pricing")),
+            detail=_str(d.get("detail")),
+            hourly_rate=_opt_float(d.get("hourly_rate")),
+            location=_str(d.get("location")),
+            identity=_str(d.get("identity")),
+            storage_access=_storage_access(d.get("storage_access")),
+            # ── transitional ──
+            services={k: v for k, v in _mapping(d.get("services")).items() if isinstance(v, str)},
+            placement=_str_dict(d.get("placement")),
+            ingress=_any_dict(d.get("ingress")),
+            # ── end transitional ──
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to the JSON body the host expects; optional keys only when set."""
-        d: dict[str, Any] = {"provider_id": self.provider_id}
+        """``provider_id`` and ``storage_access`` always; every other key only when set."""
+        d: dict[str, Any] = {"provider_id": self.provider_id, "storage_access": self.storage_access}
         if self.agent_url:
             d["agent_url"] = self.agent_url
         if self.token:
@@ -525,16 +1069,18 @@ class CreateNodeResponse:
             d["detail"] = self.detail
         if self.hourly_rate is not None:
             d["hourly_rate"] = float(self.hourly_rate)
+        if self.location:
+            d["location"] = self.location
+        if self.identity:
+            d["identity"] = self.identity
+        # ── transitional ──
         if self.services:
             d["services"] = dict(self.services)
-        if self.managed_by:
-            d["managed_by"] = self.managed_by
         if self.placement:
             d["placement"] = dict(self.placement)
         if self.ingress:
             d["ingress"] = dict(self.ingress)
-        if self.location:
-            d["location"] = self.location
+        # ── end transitional ──
         return d
 
 
@@ -679,7 +1225,7 @@ class ConnectionNodeAccess:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ConnectionNodeAccess:
-        """Parse a provider response, including older providers' absent fields."""
+        """Parse a provider's answer."""
         checks = data.get("checks")
         return cls(
             supported=_bool(data.get("supported")),
@@ -709,279 +1255,565 @@ class ConnectionNodeAccess:
 
 
 @dataclass
-class ConnectionCheckRequest:
-    """Host context for a Connection diagnostic, read afresh for each request.
+class NodeCheckRequest(Wire):
+    """What ``check_node`` is asked: whether a node of this shape could start now.
 
     Attributes:
-        project_root_url: The host's effective project root at verification time. ``None`` means
-            unavailable or omitted by an older host; ``""`` means explicitly no root. A provider
-            must not substitute its worker-local configuration for this value. This is a probe
-            target, not an authorization grant or a change to any job's destination.
-        storage_access: Node-access setup only (``POST``): the rules an administrator reviewed, in
-            the Connection ``storage_access`` shape, for the setup to apply exactly. ``None`` applies
-            the active setup unchanged. The host forwards it only after its administration check.
-        expected_revision: Node-access setup only: the ``revision`` the review was based on. A
-            provider applying ``storage_access`` refuses (:class:`Conflict`) when its active setup
-            has moved on, so concurrent edits never replace each other.
-    """
-
-    project_root_url: str | None = None
-    storage_access: dict[str, Any] | None = None
-    expected_revision: str = ""
-
-
-@dataclass
-class ConnectionCheckResponse:
-    """What checking the request's Connection found (``GET /infra/connection/check``).
-
-    Reaching the handler already means the binding resolved (a ``KEYLESS`` role was assumed);
-    a provider adds what it asked its own API.
-
-    Attributes:
-        identity: Who the Connection acts as (an ARN), or ``""`` when the provider did not ask.
-        checked: The verification steps that succeeded, in order
-            (``["resolve", "get_caller_identity"]``). A step that fails raises instead of being
-            listed, so the host records a failed check with none; diagnostic samples, which may
-            fail without failing the check, go in ``checks``.
-        checks: Optional diagnostic samples. A false result with level ``warn`` is inconclusive;
-            ``error`` means refused. These do not change whether the Connection identity resolved.
-        metadata: Non-secret binding facts the provider read back from the account, for the host to
-            record on the Connection; a provider that reads none sends none.
-    """
-
-    identity: str = ""
-    checked: list[str] = field(default_factory=lambda: ["resolve"])
-    checks: list[PreflightCheck] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> ConnectionCheckResponse:
-        """Parse a provider's answer."""
-        checked = data.get("checked")
-        checks = data.get("checks")
-        metadata = data.get("metadata")
-        return cls(
-            identity=_str(data.get("identity")),
-            checked=[_str(c) for c in checked if _str(c)] if isinstance(checked, (list, tuple)) else [],
-            checks=[PreflightCheck.from_dict(c) for c in checks] if isinstance(checks, (list, tuple)) else [],
-            metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to the JSON body the host reads."""
-        out: dict[str, Any] = {"identity": self.identity, "checked": list(self.checked)}
-        if self.checks:
-            out["checks"] = [check.to_dict() for check in self.checks]
-        if self.metadata:
-            out["metadata"] = dict(self.metadata)
-        return out
-
-
-def preflight_query(node_type: str = "", datacenter: str = "") -> dict[str, str]:
-    """The query parameters of ``GET /infra/preflight`` (for the host): ``node_type`` with its alias.
-
-    Args:
         node_type: The node type to check, or ``""`` for the provider's default.
-        datacenter: A datacenter to check stock in, or ``""``.
-
-    Returns:
-        The parameters to send; empty ones are left out.
+        pricing: ``on_demand``, ``spot`` or ``""``.
+        location: A location to check stock in, or ``""``.
+        storage_roots: The host's storage roots, for a check of what the node would reach.
     """
-    query: dict[str, str] = {}
-    if node_type:
-        query["node_type"] = node_type
-        query["gpu_type"] = node_type
-    if datacenter:
-        query["datacenter"] = datacenter
-    return query
+
+    node_type: str = ""
+    pricing: str = ""
+    location: str = ""
+    storage_roots: list[StorageRoot] = field(default_factory=list)
+
+
+# ── Catalog ────────────────────────────────────────────────────────────────────
 
 
 @dataclass
-class StorageCapabilities:
-    """What the storage a provider offers can do: the ``storage`` object of capabilities, and the header of a listing.
+class Offer(Wire):
+    """One node type or deployment size on offer.
 
     Attributes:
-        kind: ``"bucket"`` or ``"volume"``.
-        label: What the Hub calls one (``"S3 bucket"``, ``"RunPod network volume"``).
-        creatable: ``POST /infra/storage`` works.
-        upload: ``POST /infra/storage/presign`` (mode ``upload``) works.
-        browse: ``GET /infra/storage/list`` works.
-        download: ``POST /infra/storage/presign`` (mode ``download``) works.
-        bundle: ``POST /infra/storage/bundle`` works.
-        delete: ``POST /infra/storage/delete`` works.
-        transfer: ``POST /infra/storage/transfer`` works.
-        rename: A transfer of one item with ``rename_to`` works.
-        default_id: The storage a node gets when the request names none (``""`` for none).
-        upload_hint: Why the browser cannot fill this storage right now, in a sentence.
+        id: The node type or deployment size to send back.
+        label: What a person reads; ``""`` shows the id.
+        description: A sentence about it.
+        vcpus: Virtual CPUs.
+        memory_gb: Memory.
+        gpu_name: The GPU model, or ``""``.
+        gpu_count: How many.
+        gpu_memory_gb: Memory per GPU.
+        hourly: The on-demand price in USD.
+        hourly_spot: The spot price in USD.
+        available: Whether it can be started now; ``None`` when the provider cannot tell.
+        unavailable_reason: Why not (quota, not offered here).
+        capacity: The provider's words for stock, ``""`` when unknown.
+        recommended: Whether the provider suggests it.
     """
 
-    kind: str
-    label: str
-    creatable: bool = True
-    upload: bool = True
-    browse: bool = True
-    download: bool = True
-    bundle: bool = True
-    delete: bool = True
-    transfer: bool = True
-    rename: bool = True
-    default_id: str = ""
-    upload_hint: str = ""
-
-    @classmethod
-    def from_dict(cls, data: Any) -> StorageCapabilities:
-        """Parse the ``storage`` object of capabilities or the header of a listing."""
-        d = _mapping(data)
-        return cls(
-            kind=_str(d.get("kind")),
-            label=_str(d.get("label")),
-            creatable=_bool(d.get("creatable"), True),
-            upload=_bool(d.get("upload"), True),
-            browse=_bool(d.get("browse"), True),
-            download=_bool(d.get("download"), True),
-            bundle=_bool(d.get("bundle"), True),
-            delete=_bool(d.get("delete"), True),
-            transfer=_bool(d.get("transfer"), True),
-            rename=_bool(d.get("rename"), True),
-            default_id=_str(d.get("default_id")),
-            upload_hint=_str(d.get("upload_hint")),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Every flag; ``default_id`` and ``upload_hint`` only when non-empty."""
-        d: dict[str, Any] = {
-            "kind": self.kind,
-            "label": self.label,
-            "creatable": self.creatable,
-            "upload": self.upload,
-            "browse": self.browse,
-            "download": self.download,
-            "bundle": self.bundle,
-            "delete": self.delete,
-            "transfer": self.transfer,
-            "rename": self.rename,
-        }
-        if self.default_id:
-            d["default_id"] = self.default_id
-        if self.upload_hint:
-            d["upload_hint"] = self.upload_hint
-        return d
+    id: str
+    label: str = ""
+    description: str = ""
+    vcpus: int | None = None
+    memory_gb: float | None = None
+    gpu_name: str = ""
+    gpu_count: int = 0
+    gpu_memory_gb: float | None = None
+    hourly: float | None = None
+    hourly_spot: float | None = None
+    available: bool | None = None
+    unavailable_reason: str = ""
+    capacity: str = ""
+    recommended: bool = False
 
 
 @dataclass
-class CapabilitiesResponse:
-    """What a provider returns for a capabilities query.
+class CatalogRequest(Wire):
+    """What ``catalog`` is asked.
 
-    ``node_types`` lists the node kinds this provider can create — instance types for a cloud
-    provider, machine names for a static-machine provider; the host's create-node dialog offers
-    these. ``flavors`` is what it makes (``["gpu"]``, or ``["gpu", "workspace"]``); ``pricing``
-    how a node may be paid for (``["on_demand", "spot"]``; the host assumes ``["on_demand"]``
-    when absent). ``missing_fields`` describe what to ask a person for before a node can be
-    created; ``workspace_fields`` what a workspace's own copy of this provider needs.
-
-    ``storage`` and ``facets`` are filled by the SDK from the facets the plugin implements — an
-    author-set value is overwritten. ``lists_workspaces`` reads ``True`` when the plugin has the
-    workspaces facet. ``extra`` carries provider-specific data for the plugin's own fragment and
-    is passed through unchanged.
-
-    ``requires_connection`` says a node from this provider acts on an external account the
-    request must name (a Connection): without one, the plugin would act as the deployment's own
-    identity. A host that takes its Connections from the Config Service refuses to create such a
-    node without one. A provider that reaches machines by other means (ssh to a known host)
-    leaves it ``False``.
-
-    ``node_type_connections`` names the Connection a node of a given type acts on
-    (``{node_type: connection_id}``), for a provider whose node types each have a credential of
-    their own (a machine and its ssh key). The host creates and preflights a node of that type on
-    the named Connection when the request names none, under a grant for the person asking: naming
-    a Connection lends nobody its use. A node type left out acts on the request's Connection.
+    Attributes:
+        purpose: ``gpu_node``, ``cpu_node`` or ``deployment``.
+        location: Where to price; ``""`` prices in the Connection's default location.
     """
 
-    provider: str
-    node_types: list[str] = field(default_factory=list)
-    flavors: list[str] = field(default_factory=lambda: ["gpu"])
-    ready: bool = False
-    missing: list[str] = field(default_factory=list)
-    missing_fields: list[SettingsField] = field(default_factory=list)
-    pricing: list[str] = field(default_factory=list)
-    node_type_label: str = ""
-    region: str = ""
-    workspace_fields: list[SettingsField] = field(default_factory=list)
-    storage: StorageCapabilities | None = None
-    facets: list[str] = field(default_factory=list)
-    lists_workspaces: bool = False
-    requires_connection: bool = False
-    node_type_connections: dict[str, str] = field(default_factory=dict)
-    extra: dict[str, Any] = field(default_factory=dict)
-    #: Whether the answer carried a ``facets`` key at all (``from_dict`` sets it): a host tells
-    #: "no facets" from "a provider that predates facets" by this.
-    facets_reported: bool = field(default=True, compare=False, repr=False)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> CapabilitiesResponse:
-        """Parse a provider's answer (for the host); ``node_types`` or its ``gpu_types`` alias."""
-        node_types = data.get("node_types")
-        if node_types is None:
-            node_types = data.get("gpu_types")
-        storage = data.get("storage")
-        return cls(
-            provider=_str(data.get("provider")),
-            node_types=_str_list(node_types),
-            flavors=_str_list(data.get("flavors")) or ["gpu"],
-            ready=_bool(data.get("ready")),
-            missing=_str_list(data.get("missing")),
-            missing_fields=_fields_from(data.get("missing_fields")),
-            pricing=_str_list(data.get("pricing")),
-            node_type_label=_str(data.get("node_type_label")),
-            region=_str(data.get("region")),
-            workspace_fields=_fields_from(data.get("workspace_fields")),
-            storage=StorageCapabilities.from_dict(storage) if isinstance(storage, Mapping) else None,
-            facets=[f for f in _str_list(data.get("facets")) if f in FACETS],
-            lists_workspaces=_bool(data.get("lists_workspaces")),
-            requires_connection=_bool(data.get("requires_connection")),
-            node_type_connections=_str_map(data.get("node_type_connections")),
-            facets_reported="facets" in data,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to the JSON body the host expects.
-
-        ``extra`` first, typed keys over it; ``facets`` always (``[]`` for none); ``pricing``,
-        ``node_type_label``, ``region``, ``workspace_fields``, ``storage`` only when set;
-        ``lists_workspaces`` and ``requires_connection`` only when true; ``node_type_connections``
-        only when it names one.
-        """
-        d: dict[str, Any] = dict(self.extra)
-        d.update({
-            "provider": self.provider,
-            "node_types": list(self.node_types),
-            "gpu_types": list(self.node_types),
-            "flavors": list(self.flavors),
-            "ready": self.ready,
-            "missing": list(self.missing),
-            "missing_fields": [f.to_dict() for f in self.missing_fields],
-            "facets": list(self.facets),
-        })
-        if self.pricing:
-            d["pricing"] = list(self.pricing)
-        if self.node_type_label:
-            d["node_type_label"] = self.node_type_label
-        if self.region:
-            d["region"] = self.region
-        if self.workspace_fields:
-            d["workspace_fields"] = [f.to_dict() for f in self.workspace_fields]
-        if self.storage is not None:
-            d["storage"] = self.storage.to_dict()
-        if self.lists_workspaces or FACET_WORKSPACES in self.facets:
-            d["lists_workspaces"] = True
-        if self.requires_connection:
-            d["requires_connection"] = True
-        if self.node_type_connections:
-            d["node_type_connections"] = dict(self.node_type_connections)
-        return d
+    purpose: CatalogPurpose
+    location: str = ""
 
 
-# ── Storage facet ──────────────────────────────────────────────────────────────
+@dataclass
+class Catalog(Wire):
+    """The answer of ``POST /infra/catalog``.
+
+    Attributes:
+        offers: At most 500.
+        location: Where the offers were priced.
+        error: Why the list is short: a failed lookup is an empty list with the reason.
+    """
+
+    offers: list[Offer] = field(default_factory=list)
+    location: str = ""
+    error: str = ""
+
+
+@dataclass
+class Location(Wire):
+    """A place a node or a deployment can go.
+
+    Attributes:
+        id: The value sent back as ``location``.
+        label: What a person reads; ``""`` shows the id.
+        available: Whether the node type asked about can start there; ``None`` when the
+            provider cannot tell.
+        capacity: The provider's words for stock there, ``""`` when unknown.
+    """
+
+    id: str
+    label: str = ""
+    available: bool | None = None
+    capacity: str = ""
+
+
+@dataclass
+class Locations(Wire):
+    """The answer of ``GET /infra/catalog/locations``.
+
+    Attributes:
+        locations: The places, in the order to offer them.
+        node_type: The node type stock was checked for, or ``""``.
+        default: The location a request that names none goes to, or ``""`` when the provider
+            chooses per request.
+        error: Why the list is short.
+    """
+
+    locations: list[Location] = field(default_factory=list)
+    node_type: str = ""
+    default: str = ""
+    error: str = ""
+
+
+# ── Deployments ────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class PlacementChoice(Wire):
+    """One value of a placement field.
+
+    Attributes:
+        id: The value sent back.
+        label: What a person reads; ``""`` shows the id.
+    """
+
+    id: str
+    label: str = ""
+
+
+@dataclass
+class PlacementField(Wire):
+    """One thing a person chooses about where a deployment goes.
+
+    Attributes:
+        key: The key sent back in ``placement``.
+        label: What a person reads (``"Region"``, ``"Virtual network"``).
+        choices: The values valid for what is selected so far.
+        default: The value a new form starts with.
+        required: Whether a launch needs it.
+    """
+
+    key: str
+    label: str
+    choices: list[PlacementChoice] = field(default_factory=list)
+    default: str = ""
+    required: bool = True
+
+
+@dataclass
+class CostNote(Wire):
+    """One line of what a deployment costs.
+
+    Attributes:
+        label: What is paid for.
+        description: A sentence about it.
+        hourly: The hourly price, or ``None`` when unknown.
+        currency: The price's currency.
+        reused: Whether an existing shared resource would be used; ``None`` when not applicable.
+    """
+
+    label: str
+    description: str = ""
+    hourly: float | None = None
+    currency: str = "USD"
+    reused: bool | None = None
+
+
+@dataclass
+class DeploymentOptionsRequest(Wire):
+    """What ``deployment_options`` is asked.
+
+    Attributes:
+        selected: The placement chosen so far, by field key.
+    """
+
+    selected: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DeploymentOptions(Wire):
+    """Where a deployment can go under the request's Connection, given what is selected so far.
+
+    Attributes:
+        placement: The fields, in the order they are chosen.
+        costs: What a deployment there costs.
+        warnings: Sentences a person should read before launching.
+        blockers: Sentences for why a launch there cannot work.
+    """
+
+    placement: list[PlacementField] = field(default_factory=list)
+    costs: list[CostNote] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DeploymentStorage(Wire):
+    """Where a deployment keeps and finds its data.
+
+    Attributes:
+        root: The project root; ``""`` keeps projects on the machine's disk.
+        scan: Read-only folders to index.
+        data: Read-only dataset locations.
+        create_root: Create the root's container when it does not exist.
+    """
+
+    root: str = ""
+    scan: list[str] = field(default_factory=list)
+    data: list[str] = field(default_factory=list)
+    create_root: bool = False
+
+
+@dataclass
+class DnsZone(Wire):
+    """A launcher's DNS zone.
+
+    Attributes:
+        id: The zone's id, opaque to the host and to every provider but the DNS plugin.
+        name: The zone's name (``"deploy.example.com"``).
+    """
+
+    id: str
+    name: str
+
+
+@dataclass
+class DeploymentHostnames(Wire):
+    """The names a launcher allocated for a deployment in its zone. The provider derives no name.
+
+    Attributes:
+        hostname: The deployment's own name; ``""`` in the shared shape.
+        object_service: The Object Service's fully qualified name.
+        compute_service: The Compute Service's fully qualified name.
+        namespace: The shared shape's parent name; ``""`` otherwise.
+    """
+
+    hostname: str
+    object_service: str
+    compute_service: str
+    namespace: str = ""
+
+
+@dataclass
+class DeploymentBootstrap(Wire):
+    """How the machine becomes its deployment record at the Config Service.
+
+    Attributes:
+        record_id: The deployment record the machine becomes.
+        config_service_url: Where it redeems its token.
+        token: The single-use bootstrap token; scrubbed from error answers and never in a repr.
+        launcher_service_id: The launcher's service id.
+    """
+
+    record_id: str
+    config_service_url: str
+    token: str = field(default="", repr=False)
+    launcher_service_id: str = ""
+
+
+@dataclass
+class DeploymentCheckRequest(Wire):
+    """What ``check_deployment`` is asked before a launch.
+
+    Attributes:
+        label: The DNS label the launcher derived from the deployment's name.
+        size: The size asked for, or ``""`` for the default.
+        placement: The placement chosen, by field key.
+        storage: Where the deployment would keep and find its data.
+        zone: The launcher's zone, or ``None`` when it names deployments by address.
+    """
+
+    label: str
+    size: str = ""
+    placement: dict[str, str] = field(default_factory=dict)
+    storage: DeploymentStorage = field(default_factory=DeploymentStorage)
+    zone: DnsZone | None = None
+
+
+@dataclass
+class DeploymentCheck(Wire):
+    """Whether a deployment of this shape can be launched.
+
+    Attributes:
+        ok: Whether it can.
+        reason: The sentence when it cannot.
+        ingress_key: Opaque to the launcher: the same key means the same shared ingress, ``""``
+            means the deployment gets its own address.
+        checks: What was checked.
+    """
+
+    ok: bool
+    reason: str = ""
+    ingress_key: str = ""
+    checks: list[PreflightCheck] = field(default_factory=list)
+
+
+@dataclass
+class DeploymentPrepareRequest(Wire):
+    """What ``prepare_deployment`` is asked, repeatedly, until it is ready. Carries no token.
+
+    Attributes:
+        deployment_id: The launcher's durable id.
+        placement: The placement chosen.
+        namespace: The parent name every answered DNS record must be under.
+        size: The size asked for.
+        ingress_key: As ``check_deployment`` answered it.
+    """
+
+    deployment_id: str
+    placement: dict[str, str] = field(default_factory=dict)
+    namespace: str = ""
+    size: str = ""
+    ingress_key: str = ""
+
+
+@dataclass
+class DnsRecord(Wire):
+    """One DNS record set.
+
+    Attributes:
+        name: The fully qualified name, lower case, no trailing dot.
+        type: ``A``, ``AAAA``, ``CNAME`` or ``TXT``; an unreadable one reads as ``TXT``.
+        values: The record's values.
+        ttl: Its time to live in seconds.
+    """
+
+    name: str
+    type: Literal["A", "AAAA", "CNAME", "TXT"]
+    values: list[str]
+    ttl: int = 60
+    _unreadable: ClassVar[dict[str, str]] = {"type": "TXT"}
+
+
+@dataclass
+class DeploymentPrepared(Wire):
+    """Where what deployments share stands.
+
+    Attributes:
+        state: ``ready``, ``pending`` or ``failed``; an unreadable one reads as ``failed``.
+        detail: The provider's sentence for the state.
+        dns_records: The records that must exist for ``ready`` to be reached; the launcher
+            writes them.
+        retry_after_s: When to ask again.
+    """
+
+    state: Literal["ready", "pending", "failed"]
+    detail: str = ""
+    dns_records: list[DnsRecord] = field(default_factory=list)
+    retry_after_s: float = 5.0
+    _unreadable: ClassVar[dict[str, str]] = {"state": "failed"}
+
+
+@dataclass
+class DeploymentRequest(Wire):
+    """What ``create_deployment`` is asked. Idempotent on ``deployment_id``.
+
+    Every resource the provider creates carries the tags ``3lc`` = ``deployment`` and ``3lc-id`` =
+    ``deployment_id``.
+
+    Attributes:
+        deployment_id: The launcher's durable id.
+        name: The name as the person typed it, for display and tags.
+        bootstrap: How the machine becomes its record.
+        hostnames: The names the launcher allocated, or ``None`` to name the deployment by its
+            address.
+        ingress_key: As ``check_deployment`` answered it.
+        size: An ``Offer.id`` of ``catalog(purpose="deployment")``; ``""`` is the default.
+        placement: The placement chosen.
+        storage: Where the deployment keeps and finds its data.
+        compute_spec: The pip requirement for the Compute Service to install.
+        env: Environment for the deployment's services.
+        plugins: Install sources; ``[]`` installs the default roster.
+        owner: Who the deployment is for.
+        mode: ``full`` or ``demo``.
+        detailed_diagnostics: Whether the detailed diagnostics collector is granted.
+    """
+
+    deployment_id: str
+    name: str
+    bootstrap: DeploymentBootstrap
+    hostnames: DeploymentHostnames | None = None
+    ingress_key: str = ""
+    size: str = ""
+    placement: dict[str, str] = field(default_factory=dict)
+    storage: DeploymentStorage = field(default_factory=DeploymentStorage)
+    compute_spec: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    plugins: list[str] = field(default_factory=list)
+    owner: str = ""
+    mode: Literal["full", "demo"] = "full"
+    detailed_diagnostics: bool = False
+
+
+@dataclass
+class Address(Wire):
+    """Where a deployment answers.
+
+    Attributes:
+        type: ``ipv4``, ``ipv6`` or ``hostname``; an unreadable one reads as ``hostname``.
+        value: The address.
+    """
+
+    type: Literal["ipv4", "ipv6", "hostname"]
+    value: str
+    _unreadable: ClassVar[dict[str, str]] = {"type": "hostname"}
+
+
+@dataclass
+class DeploymentResponse(Wire):
+    """What a provider returns once a deployment's machine exists.
+
+    Attributes:
+        provider_id: The provider's id for the deployment.
+        addresses: What the launcher points the hostnames at.
+        endpoints: ``object_service_url`` and ``compute_service_url``, https.
+        location: Where it lives, in the provider's words.
+        placement: Where it actually went.
+        hourly_rate: The provider's hourly quote in USD, or ``None``.
+        resource_ref: The provider's opaque reference to what it created.
+        failure: Set when resources exist but the launch failed; the launcher records it, then
+            deletes.
+    """
+
+    provider_id: str
+    addresses: list[Address]
+    endpoints: dict[str, str]
+    location: str = ""
+    placement: dict[str, str] = field(default_factory=dict)
+    hourly_rate: float | None = None
+    resource_ref: str = ""
+    failure: str = ""
+
+
+@dataclass
+class DeploymentInstance(Wire):
+    """One deployment the account runs, tracked by the launcher or not.
+
+    Attributes:
+        provider_id: The provider's id, what ``delete_deployment`` takes.
+        deployment_id: The launcher's id from the ``3lc-id`` tag, or ``""`` when it carries none.
+        name: The name it was given.
+        owner: Who it is for.
+        size: Its size, an ``Offer.id``.
+        state: Its state.
+        location: Where it lives.
+        addresses: Where it answers.
+    """
+
+    provider_id: str
+    deployment_id: str = ""
+    name: str = ""
+    owner: str = ""
+    size: str = ""
+    state: NodeProviderState = "unknown"
+    location: str = ""
+    addresses: list[Address] = field(default_factory=list)
+
+
+@dataclass
+class DeploymentListing(Wire):
+    """The answer of ``GET /infra/deployments``.
+
+    Attributes:
+        deployments: At most 500.
+    """
+
+    deployments: list[DeploymentInstance] = field(default_factory=list)
+
+
+@dataclass
+class SweepItem(Wire):
+    """A deployment the launcher knows.
+
+    Attributes:
+        deployment_id: The launcher's id.
+        provider_id: The provider's id, when the launcher learned it.
+    """
+
+    deployment_id: str
+    provider_id: str = ""
+
+
+@dataclass
+class SweepRequest(Wire):
+    """What ``sweep_deployments`` is asked: release what no live deployment owns.
+
+    Attributes:
+        keep: Alive or mid-launch: never touched.
+        gone: Dead: what they left may be removed.
+        locations: Where to look; the provider adds the Connection's default location.
+        grace_s: How old an unowned resource must be before it is released.
+    """
+
+    keep: list[SweepItem] = field(default_factory=list)
+    gone: list[SweepItem] = field(default_factory=list)
+    locations: list[str] = field(default_factory=list)
+    grace_s: float = 600.0
+
+
+@dataclass
+class SweepReport(Wire):
+    """What a sweep did. It never touches DNS.
+
+    Attributes:
+        complete: Whether every location was swept.
+        released: What was removed, for the log.
+        held_addresses: The addresses live deployments hold, so the launcher can tell which
+            names in its zone point at nothing.
+        pending: Candidates still inside the grace period.
+        problems: What could not be done.
+    """
+
+    complete: bool
+    released: list[str] = field(default_factory=list)
+    held_addresses: list[str] = field(default_factory=list)
+    pending: list[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+
+# ── DNS ────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class DnsChange(Wire):
+    """One atomic change of at most 100 records in a launcher's zone.
+
+    Attributes:
+        zone: The zone.
+        create: Records to create. One that exists with the same values succeeds; with other
+            values the whole change is refused with ``Conflict``.
+        delete: Records to delete, each only when it matches exactly; a missing one is success.
+    """
+
+    zone: DnsZone
+    create: list[DnsRecord] = field(default_factory=list)
+    delete: list[DnsRecord] = field(default_factory=list)
+
+
+@dataclass
+class DnsRecords(Wire):
+    """One page of a zone's records.
+
+    Attributes:
+        records: At most 300.
+        next_cursor: Continues the listing; ``""`` on the last page.
+    """
+
+    records: list[DnsRecord] = field(default_factory=list)
+    next_cursor: str = ""
+
+
+# ── Storage ────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -990,7 +1822,7 @@ class StorageItem:
 
     ``url`` is what the Data page browses and uploads to (``s3://…``, ``abfs://…``,
     ``volume://<id>``); ``default`` is whether a node gets this storage when the request names
-    none (``None`` when the provider has no such notion). ``extra`` is emit-only passthrough.
+    none (``None`` when the provider has no such notion).
     """
 
     id: str
@@ -1001,7 +1833,6 @@ class StorageItem:
     size_gb: int | None = None
     default: bool | None = None
     managed_by: str = ""
-    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Any) -> StorageItem:
@@ -1020,8 +1851,13 @@ class StorageItem:
 
     def to_dict(self) -> dict[str, Any]:
         """``id``, ``name``, ``url``, ``region``, ``size_gb`` always; ``kind``, ``default``, ``managed_by`` when set."""
-        d: dict[str, Any] = dict(self.extra)
-        d.update({"id": self.id, "name": self.name, "url": self.url, "region": self.region, "size_gb": self.size_gb})
+        d: dict[str, Any] = {
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "region": self.region,
+            "size_gb": self.size_gb,
+        }
         if self.kind:
             d["kind"] = self.kind
         if self.default is not None:
@@ -1033,12 +1869,11 @@ class StorageItem:
 
 @dataclass
 class Region:
-    """A place storage can be created in. ``extra`` is emit-only passthrough (a ``country``, for example)."""
+    """A place storage can be created in."""
 
     id: str
     name: str = ""
     location: str = ""
-    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Any) -> Region:
@@ -1047,9 +1882,8 @@ class Region:
         return cls(id=_str(d.get("id")), name=_str(d.get("name")), location=_str(d.get("location")))
 
     def to_dict(self) -> dict[str, Any]:
-        """``extra`` first; ``id`` and ``name`` always; ``location`` when set."""
-        d: dict[str, Any] = dict(self.extra)
-        d.update({"id": self.id, "name": self.name})
+        """``id`` and ``name`` always; ``location`` when set."""
+        d: dict[str, Any] = {"id": self.id, "name": self.name}
         if self.location:
             d["location"] = self.location
         return d
@@ -1057,12 +1891,11 @@ class Region:
 
 @dataclass
 class StorageListing:
-    """The answer of ``GET /infra/storage`` (and of a legacy discover): the header flags plus the items.
+    """The answer of ``GET /infra/storage``: the header flags plus the items.
 
     ``to_dict`` flattens: the :class:`StorageCapabilities` keys at the top level, then
-    ``storage`` and ``regions``, then ``account`` and ``region`` when set — the shape the host
-    splits into per-provider meta and items. ``extra`` is emit-only passthrough, merged first (an
-    ``account`` answered even when empty, the ``subscription`` a discover listed).
+    ``storage`` and ``regions``, then ``account`` and ``region`` when set, the shape the host
+    splits into per-provider meta and items.
     """
 
     capabilities: StorageCapabilities
@@ -1070,7 +1903,6 @@ class StorageListing:
     regions: list[Region] = field(default_factory=list)
     account: str = ""
     region: str = ""
-    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> StorageListing:
@@ -1086,9 +1918,8 @@ class StorageListing:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """The flattened answer; ``extra`` first, typed keys over it."""
-        d: dict[str, Any] = dict(self.extra)
-        d.update(self.capabilities.to_dict())
+        """The flattened answer."""
+        d: dict[str, Any] = self.capabilities.to_dict()
         d["storage"] = [i.to_dict() for i in self.storage]
         d["regions"] = [r.to_dict() for r in self.regions]
         if self.account:
@@ -1102,8 +1933,7 @@ class StorageListing:
 class CreateStorageRequest:
     """The body of ``POST /infra/storage``: ``{name, region?, size_gb?, make_default?, owner?}``.
 
-    ``owner`` is the caller the host acts for (an identity, not a credential); a transient
-    ``credentials`` object goes to the legacy context, not here.
+    ``owner`` is the caller the host acts for (an identity, not a credential).
     """
 
     name: str
@@ -1114,7 +1944,7 @@ class CreateStorageRequest:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CreateStorageRequest:
-        """Parse the body (``credentials`` goes to the legacy context, not here)."""
+        """Parse the body."""
         return cls(
             name=_stripped(data.get("name")),
             region=_stripped(data.get("region")),
@@ -1177,9 +2007,9 @@ class PresignRequest:
 class PresignResponse:
     """Presigned URLs for the browser.
 
-    The item dicts are browser-facing and provider-shaped; only the envelope is typed. ``extra`` is
-    emit-only passthrough for the keys a provider's answer adds (``bucket``, ``account``, ``volume``,
-    ``cors``); a ``None`` value in it is emitted as ``null``.
+    The item dicts are browser-facing and provider-shaped; only the envelope is typed. ``cors`` is
+    whether the storage accepts the browser's cross-origin upload: ``False`` when the provider
+    could not arrange it, ``None`` (the key left out) when it has nothing to say.
     """
 
     expires_s: int = 0
@@ -1187,7 +2017,7 @@ class PresignResponse:
     downloads: list[dict[str, Any]] = field(default_factory=list)
     refused: list[dict[str, Any]] = field(default_factory=list)
     region: str = ""
-    extra: dict[str, Any] = field(default_factory=dict)
+    cors: bool | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> PresignResponse:
@@ -1198,19 +2028,21 @@ class PresignResponse:
             downloads=_dict_list(data.get("downloads")),
             refused=_dict_list(data.get("refused")),
             region=_str(data.get("region")),
+            cors=_opt_bool(data.get("cors")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``extra`` first; ``expires_s``, ``uploads``, ``downloads`` and ``refused`` always; ``region`` when set."""
-        d: dict[str, Any] = dict(self.extra)
-        d.update({
+        """``expires_s``, ``uploads``, ``downloads`` and ``refused`` always; ``region`` and ``cors`` when set."""
+        d: dict[str, Any] = {
             "expires_s": self.expires_s,
             "uploads": [dict(u) for u in self.uploads],
             "downloads": [dict(u) for u in self.downloads],
             "refused": [dict(r) for r in self.refused],
-        })
+        }
         if self.region:
             d["region"] = self.region
+        if self.cors is not None:
+            d["cors"] = self.cors
         return d
 
 
@@ -1322,321 +2154,6 @@ class BundleRequest:
         return {"url": self.url, "name": self.name}
 
 
-# ── Catalog facet ──────────────────────────────────────────────────────────────
-
-
-@dataclass
-class GpuCatalog:
-    """The answer of ``GET /infra/gpu-catalog``: rows for the catalogue table; ``error`` says why a list is short.
-
-    ``placement`` is where the provider looked for stock: ``{}`` means anywhere and is emitted;
-    ``None`` (the default) means the provider did not say, and the key is left out.
-    """
-
-    gpus: list[dict[str, Any]] = field(default_factory=list)
-    placement: dict[str, Any] | None = None
-    error: str = ""
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> GpuCatalog:
-        """Parse the answer."""
-        return cls(
-            gpus=_dict_list(data.get("gpus")), placement=_opt_dict(data.get("placement")), error=_str(data.get("error"))
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """``gpus`` always; ``placement`` when set (``{}`` included); ``error`` when non-empty."""
-        d: dict[str, Any] = {"gpus": [dict(g) for g in self.gpus]}
-        if self.placement is not None:
-            d["placement"] = dict(self.placement)
-        if self.error:
-            d["error"] = self.error
-        return d
-
-
-@dataclass
-class CpuCatalog:
-    """The answer of ``GET /infra/cpu-catalog``: workspace sizes with prices, for one region."""
-
-    sizes: list[dict[str, Any]] = field(default_factory=list)
-    region: str = ""
-    error: str = ""
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> CpuCatalog:
-        """Parse the answer."""
-        return cls(sizes=_dict_list(data.get("sizes")), region=_str(data.get("region")), error=_str(data.get("error")))
-
-    def to_dict(self) -> dict[str, Any]:
-        """``sizes`` always; ``region`` and ``error`` when non-empty."""
-        d: dict[str, Any] = {"sizes": [dict(s) for s in self.sizes]}
-        if self.region:
-            d["region"] = self.region
-        if self.error:
-            d["error"] = self.error
-        return d
-
-
-@dataclass
-class Datacenters:
-    """The answer of ``GET /infra/datacenters``: sites with stock of ``node_type``, and the placement in force.
-
-    ``placement`` is the setting as saved (``"auto"``, ``"dc:US-NC-1"``); ``placement_effective`` what
-    it resolves to: ``{}`` means anywhere and is emitted; ``None`` (the default) leaves the key out.
-    """
-
-    datacenters: list[dict[str, Any]] = field(default_factory=list)
-    node_type: str = ""
-    placement: str = ""
-    placement_effective: dict[str, Any] | None = None
-    error: str = ""
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> Datacenters:
-        """Parse the answer; ``node_type`` or its ``gpu_type`` alias."""
-        return cls(
-            datacenters=_dict_list(data.get("datacenters")),
-            node_type=_str(data.get("node_type") or data.get("gpu_type")),
-            placement=_str(data.get("placement")),
-            placement_effective=_opt_dict(data.get("placement_effective")),
-            error=_str(data.get("error")),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """``datacenters`` always; ``placement_effective`` when set (``{}`` included); the rest when non-empty.
-
-        ``node_type`` is emitted with its ``gpu_type`` alias.
-        """
-        d: dict[str, Any] = {"datacenters": [dict(x) for x in self.datacenters]}
-        if self.node_type:
-            d["node_type"] = self.node_type
-            d["gpu_type"] = self.node_type
-        if self.placement:
-            d["placement"] = self.placement
-        if self.placement_effective is not None:
-            d["placement_effective"] = dict(self.placement_effective)
-        if self.error:
-            d["error"] = self.error
-        return d
-
-
-# ── Workspace facet ────────────────────────────────────────────────────────────
-
-
-@dataclass
-class WorkspaceInstance:
-    """One workspace instance a provider reports (tracked by the host or not). ``extra`` is emit-only passthrough."""
-
-    provider_id: str
-    name: str = ""
-    owner: str = ""
-    instance_type: str = ""
-    state: str = ""
-    public_ip: str = ""
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Any) -> WorkspaceInstance:
-        """Parse one listed instance."""
-        d = _mapping(data)
-        return cls(
-            provider_id=_str(d.get("provider_id")),
-            name=_str(d.get("name")),
-            owner=_str(d.get("owner")),
-            instance_type=_str(d.get("instance_type")),
-            state=_str(d.get("state")),
-            public_ip=_str(d.get("public_ip")),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize one instance."""
-        d: dict[str, Any] = dict(self.extra)
-        d.update({
-            "provider_id": self.provider_id,
-            "name": self.name,
-            "owner": self.owner,
-            "instance_type": self.instance_type,
-            "state": self.state,
-            "public_ip": self.public_ip,
-        })
-        return d
-
-
-@dataclass
-class WorkspaceListing:
-    """The answer of ``GET /infra/workspaces``."""
-
-    workspaces: list[WorkspaceInstance] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> WorkspaceListing:
-        """Parse the answer."""
-        items = data.get("workspaces")
-        return cls(
-            workspaces=[WorkspaceInstance.from_dict(i) for i in items] if isinstance(items, (list, tuple)) else []
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize the answer."""
-        return {"workspaces": [w.to_dict() for w in self.workspaces]}
-
-
-# ── Legacy owner-credentials facet (LEGACY) ────────────────────────────────────
-
-
-@dataclass
-class LoginDescriptor:
-    """A provider sign-in a person can use instead of pasting keys (``capabilities.workspace_login``)."""
-
-    kind: str
-    label: str
-    help: str = ""
-    fields: list[dict[str, Any]] = field(default_factory=list)
-    credential_keys: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(cls, data: Any) -> LoginDescriptor:
-        """Parse the descriptor."""
-        d = _mapping(data)
-        return cls(
-            kind=_str(d.get("kind")),
-            label=_str(d.get("label")),
-            help=_str(d.get("help")),
-            fields=_dict_list(d.get("fields")),
-            credential_keys=_str_list(d.get("credential_keys")),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize the descriptor."""
-        return {
-            "kind": self.kind,
-            "label": self.label,
-            "help": self.help,
-            "fields": [dict(f) for f in self.fields],
-            "credential_keys": list(self.credential_keys),
-        }
-
-
-@dataclass
-class RoleDescriptor:
-    """A cross-account role a person can grant (``capabilities.workspace_role``)."""
-
-    kind: str
-    label: str
-    help: str = ""
-    setup: str = ""
-    field: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Any) -> RoleDescriptor:
-        """Parse the descriptor."""
-        d = _mapping(data)
-        return cls(
-            kind=_str(d.get("kind")),
-            label=_str(d.get("label")),
-            help=_str(d.get("help")),
-            setup=_str(d.get("setup")),
-            field=_any_dict(d.get("field")),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize the descriptor."""
-        return {
-            "kind": self.kind,
-            "label": self.label,
-            "help": self.help,
-            "setup": self.setup,
-            "field": dict(self.field),
-        }
-
-
-@dataclass
-class OwnerCredentialsDescriptor:
-    """What the legacy facet adds to capabilities: the keys a request's ``credentials`` must carry, and how a
-    person supplies them.
-
-    Emitted into the capabilities answer as ``credential_keys``, ``workspace_credentials``,
-    ``workspace_login`` and ``workspace_role``, each only when set.
-    """
-
-    credential_keys: list[str] = field(default_factory=list)
-    workspace_credentials: list[SettingsField] = field(default_factory=list)
-    login: LoginDescriptor | None = None
-    role: RoleDescriptor | None = None
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> OwnerCredentialsDescriptor:
-        """Parse the descriptor keys out of a capabilities answer."""
-        login = data.get("workspace_login")
-        role = data.get("workspace_role")
-        return cls(
-            credential_keys=_str_list(data.get("credential_keys")),
-            workspace_credentials=_fields_from(data.get("workspace_credentials")),
-            login=LoginDescriptor.from_dict(login) if isinstance(login, Mapping) else None,
-            role=RoleDescriptor.from_dict(role) if isinstance(role, Mapping) else None,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """The capabilities keys, each only when set."""
-        d: dict[str, Any] = {}
-        if self.credential_keys:
-            d["credential_keys"] = list(self.credential_keys)
-        if self.workspace_credentials:
-            d["workspace_credentials"] = [f.to_dict() for f in self.workspace_credentials]
-        if self.login is not None:
-            d["workspace_login"] = self.login.to_dict()
-        if self.role is not None:
-            d["workspace_role"] = self.role.to_dict()
-        return d
-
-
 def is_node_state(value: Any) -> bool:
     """Whether ``value`` is one of :data:`NodeProviderState` (for tests and the conformance kit)."""
     return isinstance(value, str) and value in _NODE_STATES
-
-
-@dataclass
-class WorkspacePlacement:
-    """Provider-neutral placement choices under the current Connection.
-
-    Choice rows contain ``id`` and ``name``; subnets additionally identify ``zone_id`` and
-    ``network_id``. Defaults use WorkspaceRequest keys. Cost rows under ``shared`` and
-    ``deployment`` contain label, hourly, currency, description and reused when known.
-    An empty answer means no selectable placement, never permission to use another account.
-    """
-
-    regions: list[dict[str, Any]] = field(default_factory=list)
-    networks: list[dict[str, Any]] = field(default_factory=list)
-    zones: list[dict[str, Any]] = field(default_factory=list)
-    subnets: list[dict[str, Any]] = field(default_factory=list)
-    defaults: dict[str, str] = field(default_factory=dict)
-    costs: dict[str, Any] = field(default_factory=dict)
-    warnings: list[str] = field(default_factory=list)
-    blockers: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> WorkspacePlacement:
-        """Read discovery without retaining unknown fields."""
-        return cls(
-            regions=_dict_list(data.get("regions")),
-            networks=_dict_list(data.get("networks")),
-            zones=_dict_list(data.get("zones")),
-            subnets=_dict_list(data.get("subnets")),
-            defaults=_str_dict(data.get("defaults")),
-            costs=_any_dict(data.get("costs")),
-            warnings=_str_list(data.get("warnings")),
-            blockers=_str_list(data.get("blockers")),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize discovery, including empty lists and absent quotes."""
-        return {
-            "regions": [dict(row) for row in self.regions],
-            "networks": [dict(row) for row in self.networks],
-            "zones": [dict(row) for row in self.zones],
-            "subnets": [dict(row) for row in self.subnets],
-            "defaults": dict(self.defaults),
-            "costs": dict(self.costs),
-            "warnings": list(self.warnings),
-            "blockers": list(self.blockers),
-        }

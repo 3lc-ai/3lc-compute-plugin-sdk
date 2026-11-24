@@ -873,7 +873,8 @@ def serve(
     bind: dict[str, Any] = {"uds": socket_path} if socket_path is not None else {"host": host, "port": port}
     target = f"uds={socket_path}" if socket_path is not None else f"{host}:{port}"
     logger.info("Plugin worker '%s' serving on %s", plugin_id, target)
-    uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="on", **bind)).run()
+    config = uvicorn.Config(app, log_level="warning", lifespan="on", h11_max_incomplete_event_size=64 * 1024, **bind)
+    uvicorn.Server(config).run()
 
 
 def main(argv: list[str] | None = None) -> None:
