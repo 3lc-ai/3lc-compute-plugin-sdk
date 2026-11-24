@@ -779,8 +779,9 @@ class Offer:
     gpu_name: str = ""
     gpu_count: int = 0
     gpu_memory_gb: float | None = None
-    hourly: float | None = None        # on demand, USD
+    hourly: float | None = None        # on demand, in `currency`
     hourly_spot: float | None = None
+    currency: str = "USD"              # ISO 4217 code of both prices
     available: bool | None = None      # None: the provider cannot tell
     unavailable_reason: str = ""       # quota, not offered here
     capacity: str = ""                 # the provider's words for stock, "" when unknown

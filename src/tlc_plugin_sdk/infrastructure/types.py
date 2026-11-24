@@ -1300,8 +1300,9 @@ class Offer(Wire):
         gpu_name: The GPU model, or ``""``.
         gpu_count: How many.
         gpu_memory_gb: Memory per GPU.
-        hourly: The on-demand price in USD.
-        hourly_spot: The spot price in USD.
+        hourly: The on-demand price, in ``currency``.
+        hourly_spot: The spot price, in ``currency``.
+        currency: The ISO 4217 code of both prices.
         available: Whether it can be started now; ``None`` when the provider cannot tell.
         unavailable_reason: Why not (quota, not offered here).
         capacity: The provider's words for stock, ``""`` when unknown.
@@ -1318,6 +1319,7 @@ class Offer(Wire):
     gpu_memory_gb: float | None = None
     hourly: float | None = None
     hourly_spot: float | None = None
+    currency: str = "USD"
     available: bool | None = None
     unavailable_reason: str = ""
     capacity: str = ""
