@@ -600,3 +600,14 @@ def test_a_private_route_answers_the_same_error_body_with_the_handlers() -> None
         plain = h.get("/without")
         assert plain.status_code == 404 and plain.json()["detail"] == "no machine by that name"
         assert plain.json()["extra"]["code"] == "not_found"
+
+
+def test_a_storage_item_carries_typed_access_and_omits_it_when_unsaid() -> None:
+    from tlc_plugin_sdk.infrastructure import StorageAccess, StorageGrant, StorageItem
+
+    item = StorageItem(id="b", access=StorageAccess(browse=True, grants=[StorageGrant(url="s3://b/p", read=True)]))
+    wire = item.to_dict()
+    assert wire["access"]["grants"] == [{"url": "s3://b/p", "read": True, "write": False, "delete": False}]
+    assert StorageItem.from_dict(wire) == item
+    assert "access" not in StorageItem(id="b").to_dict()
+    assert StorageItem.from_dict({"id": "b", "access": "all"}).access is None

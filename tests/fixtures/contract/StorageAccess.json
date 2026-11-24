@@ -1,0 +1,17 @@
+{
+  "type": "StorageAccess",
+  "route": "StorageItem.access",
+  "example": {
+    "browse": true,
+    "delete_location": false,
+    "bundle": true,
+    "grants": [
+      {
+        "url": "fake://fake-data/projects",
+        "read": true,
+        "write": true,
+        "delete": true
+      }
+    ]
+  }
+}

@@ -139,7 +139,8 @@ def refuse_unknown(name: str, value: Any, allowed: tuple[Any, ...]) -> None:
     if text is None or text == "" or text in allowed:
         return
     choices = ", ".join(repr(a) for a in allowed if a != "")
-    raise InvalidRequest(f"Unknown {name} {value!r}", remedy=f"Use one of {choices}.")
+    msg = f"Unknown {name} {value!r}"
+    raise InvalidRequest(msg, remedy=f"Use one of {choices}.")
 
 
 def _is_message(tp: Any) -> bool:

@@ -8,6 +8,19 @@
     "region": "fake-1",
     "size_gb": null,
     "kind": "bucket",
-    "default": true
+    "default": true,
+    "access": {
+      "browse": true,
+      "delete_location": false,
+      "bundle": true,
+      "grants": [
+        {
+          "url": "fake://fake-data/projects",
+          "read": true,
+          "write": true,
+          "delete": true
+        }
+      ]
+    }
   }
 }

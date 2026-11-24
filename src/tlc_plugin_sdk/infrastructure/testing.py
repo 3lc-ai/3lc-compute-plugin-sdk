@@ -130,10 +130,12 @@ from tlc_plugin_sdk.infrastructure.types import (
     PresignRequest,
     PresignResponse,
     Region,
+    StorageAccess,
     StorageCandidate,
     StorageCandidates,
     StorageCapabilities,
     StorageDeleted,
+    StorageGrant,
     StorageItem,
     StorageListing,
     StorageLocationSchema,
@@ -1656,11 +1658,37 @@ class FakeProvider(
         return StorageListing(
             capabilities=self.storage_capabilities(),
             storage=[
-                StorageItem(id=b, name=b, url=f"fake://{b}", kind="bucket", region="fake-1", default=b == default)
+                StorageItem(
+                    id=b,
+                    name=b,
+                    url=f"fake://{b}",
+                    kind="bucket",
+                    region="fake-1",
+                    default=b == default,
+                    access=self._storage_access(f"fake://{b}"),
+                )
                 for b in sorted(self.buckets)
             ],
             regions=[Region(id="fake-1", name="Fake region 1")],
         )
+
+    @staticmethod
+    def _storage_access(url: str) -> StorageAccess | None:
+        """What the Connection's installed storage rules allow in ``url``; ``None`` without rules."""
+        binding = current_connection()
+        if binding is None or binding.permissions is None or not binding.permissions.storage:
+            return None
+        grants = [
+            StorageGrant(
+                url=rule.location,
+                read=True,
+                write=rule.access != "read",
+                delete=rule.access == "read_write",
+            )
+            for rule in binding.permissions.storage
+            if rule.location == url or rule.location.startswith(url + "/")
+        ]
+        return StorageAccess(browse=bool(grants), delete_location=False, bundle=bool(grants), grants=grants)
 
     def create_storage(self, request: CreateStorageRequest) -> StorageItem:
         if request.name in self.buckets:

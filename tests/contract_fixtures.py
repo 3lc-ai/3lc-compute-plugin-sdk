@@ -361,6 +361,9 @@ def _fake_examples(root: Path) -> dict[str, dict[str, Any]]:
         ("WorkspaceListing", "workspaces", "WorkspaceInstance"),
     ):
         r.keep(name, f"{parent}.{key}[]", r.examples[parent]["example"][key][0])
+    listed = r.examples["StorageItem"]["example"]
+    r.keep("StorageAccess", "StorageItem.access", listed["access"])
+    r.keep("StorageGrant", "StorageAccess.grants[]", listed["access"]["grants"][0])
     options = r.examples["DeploymentOptions"]["example"]
     r.keep("PlacementChoice", "PlacementField.choices[]", options["placement"][0]["choices"][0])
     for parent, key, name in (

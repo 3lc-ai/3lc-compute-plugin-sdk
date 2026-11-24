@@ -1421,6 +1421,34 @@ The host calls an operation only when it is listed; an unlisted one is never pro
 route that is not mounted answers 404. An operation with nothing to say (a provider with no
 checks) is simply not implemented.
 
+Each listed `StorageItem` may say what the request's Connection may do in it, so the Hub's Data
+page offers only what works without reading a cloud policy
+(`hub:templates/data/index.html:285-300`):
+
+```python
+@dataclass
+class StorageGrant:
+    url: str                    # covers this location and everything under it
+    read: bool = False
+    write: bool = False
+    delete: bool = False
+
+
+@dataclass
+class StorageAccess:
+    browse: bool = False        # names may be listed
+    delete_location: bool = False   # the storage itself may be deleted
+    bundle: bool = False        # a bundle may be built from it
+    grants: list[StorageGrant] = field(default_factory=list)
+
+
+# StorageItem gains:  access: StorageAccess | None = None
+```
+
+`access` is `None` when the provider does not project its policies (a Connection with no
+installed storage rules, a provider without rules): the provider's `StorageCapabilities` then say
+what works, and the storage routes still authorize every call. `to_dict` omits it when `None`.
+
 ### 3.3 The fate of `extra`
 
 `CapabilitiesResponse.extra`, `StorageItem.extra`, `Region.extra`, `StorageListing.extra`,
@@ -1431,7 +1459,8 @@ of the transitional surface (6.2) and keeps its `extra` until that surface goes.
 host or the Hub needs is a typed field: the one such value the removed maps carried is whether a
 storage accepts the browser's cross-origin upload, which the Hub's Data page reads from a
 presign answer (`hub:templates/data/index.html:1291`), so it is `PresignResponse.cors:
-bool | None`. A value only the plugin's own page needs is served by the plugin's own
+bool | None`. What a Connection may do in each listed storage is the typed
+`StorageItem.access` (2.7), not a provider's subclass. A value only the plugin's own page needs is served by the plugin's own
 routes (`sdk:infrastructure/plugin.py:66-70`), which the host proxies and never calls. The one
 labelled-rows map left is `ConnectionVerification.facts`, whose consumer is the Hub's
 verification panel.

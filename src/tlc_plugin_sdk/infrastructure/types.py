@@ -126,11 +126,13 @@ __all__ = [
     "Purpose",
     "Region",
     "SettingsField",
+    "StorageAccess",
     "StorageAccessMode",
     "StorageCandidate",
     "StorageCandidates",
     "StorageCapabilities",
     "StorageDeleted",
+    "StorageGrant",
     "StorageItem",
     "StorageListing",
     "StorageLocationSchema",
@@ -1830,12 +1832,51 @@ class DnsRecords(Wire):
 
 
 @dataclass
+class StorageGrant(Wire):
+    """What the request's Connection may do under one location of a storage.
+
+    Attributes:
+        url: The location the grant covers: it and everything under it.
+        read: Objects may be read.
+        write: Objects may be written.
+        delete: Objects may be deleted.
+    """
+
+    url: str
+    read: bool = False
+    write: bool = False
+    delete: bool = False
+
+
+@dataclass
+class StorageAccess(Wire):
+    """What the request's Connection may do in one storage, as the Data page offers it.
+
+    The provider projects its own policies into these, so the Hub never reads a cloud policy.
+
+    Attributes:
+        browse: Names may be listed.
+        delete_location: The storage itself may be deleted.
+        bundle: A bundle may be built from it.
+        grants: The locations where objects may be read, written or deleted. A location no grant
+            covers allows nothing beyond ``browse``.
+    """
+
+    browse: bool = False
+    delete_location: bool = False
+    bundle: bool = False
+    grants: list[StorageGrant] = field(default_factory=list)
+
+
+@dataclass
 class StorageItem:
     """One bucket, container or volume as the Data page lists it.
 
     ``url`` is what the Data page browses and uploads to (``s3://…``, ``abfs://…``,
     ``volume://<id>``); ``default`` is whether a node gets this storage when the request names
-    none (``None`` when the provider has no such notion).
+    none (``None`` when the provider has no such notion). ``access`` is what the request's
+    Connection may do in it, or ``None`` when the provider does not say: the provider's storage
+    capabilities then say what works, and the storage routes still authorize each call.
     """
 
     id: str
@@ -1846,6 +1887,7 @@ class StorageItem:
     size_gb: int | None = None
     default: bool | None = None
     managed_by: str = ""
+    access: StorageAccess | None = None
 
     @classmethod
     def from_dict(cls, data: Any) -> StorageItem:
@@ -1860,10 +1902,11 @@ class StorageItem:
             size_gb=_opt_int(d.get("size_gb")),
             default=_opt_bool(d.get("default")),
             managed_by=_str(d.get("managed_by")),
+            access=StorageAccess.from_dict(d["access"]) if isinstance(d.get("access"), Mapping) else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """``id``, ``name``, ``url``, ``region``, ``size_gb`` always; ``kind``, ``default``, ``managed_by`` when set."""
+        """``id``, ``name``, ``url``, ``region``, ``size_gb`` always; the rest when set."""
         d: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
@@ -1877,6 +1920,8 @@ class StorageItem:
             d["default"] = self.default
         if self.managed_by:
             d["managed_by"] = self.managed_by
+        if self.access is not None:
+            d["access"] = self.access.to_dict()
         return d
 
 
