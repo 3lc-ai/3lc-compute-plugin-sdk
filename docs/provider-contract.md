@@ -2087,7 +2087,7 @@ infrastructure and Connections surfaces exist only on the unreleased 0.5 to 0.7 
 `storage_candidates` as typed operations; `ProviderCredential`, `ResolveRequest`,
 `credential_as`, `SecretToken.fields`; `PermissionDenied`, `CredentialExpired`, `RateLimited`,
 `ErrorAnswer`; `OPERATIONS`, `provided_operations`, `capabilities_problems`,
-`InfrastructurePlugin.readiness`; `FakeProvider` for every operation, `connection_headers`, and
+`InfrastructurePlugin.readiness`; `FakeProvider` for every operation, `connection_headers`, `acting_as`, and
 the conformance groups `connect`, `check`, `deployments` and `dns`;
 `CreateNodeRequest.kind`, `.location`, `.host_id`; `CapabilitiesResponse.contract`,
 `operations`, `account`, `access_methods`, `host`, `permissions`, `nodes`, `deployments`.

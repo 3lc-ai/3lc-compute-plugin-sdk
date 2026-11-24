@@ -42,10 +42,12 @@ import re
 import sys
 import tempfile
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tlc_plugin_sdk import connections as _connections
 from tlc_plugin_sdk.connections import (
     AMBIENT_ONLY_PATHS,
     AMBIENT_ONLY_PREFIXES,
@@ -56,6 +58,7 @@ from tlc_plugin_sdk.connections import (
     ConnectionBinding,
     ConnectionUse,
     CredentialUnavailable,
+    ResolvedCredential,
     ResolveRequest,
     SecretToken,
     current_connection,
@@ -154,6 +157,7 @@ __all__ = [
     "FakeCredential",
     "FakeProvider",
     "FakeSettings",
+    "acting_as",
     "assert_conformant",
     "check_provider",
     "connection_headers",
@@ -179,6 +183,41 @@ GROUPS: tuple[str, ...] = (
 _MADE_UP_ID = "deadbeef0000"
 _ERROR_KEYS = {"detail", "code", "remedy", "retry_after_s"}
 _DNS_PAGE = 300
+
+
+@contextmanager
+def acting_as(
+    binding: ConnectionBinding | None,
+    credential: ResolvedCredential | None = None,
+    use: ConnectionUse | None = None,
+) -> Iterator[None]:
+    """Act on ``binding`` in code a unit test calls directly, as a request through the routes would.
+
+    Inside the block :func:`~tlc_plugin_sdk.connections.current_connection`,
+    :func:`~tlc_plugin_sdk.connections.current_credential` and
+    :func:`~tlc_plugin_sdk.connections.current_use` answer what is given here; on exit they
+    answer what they did before, also when the block raises. Nothing is resolved: pass the
+    credential the handler should see (an ``Ambient``, the plugin's own session, a
+    ``SecretToken``), or leave it ``None`` for a call made without one. To go through the
+    routes instead, send :func:`connection_headers`.
+
+    Args:
+        binding: The Connection the call acts on, or ``None`` for a call that names none.
+        credential: The credential bound for the call.
+        use: What the call uses the Connection for.
+
+    Yields:
+        Nothing; the context is set for the block.
+    """
+    connection_token = _connections._CONNECTION.set(binding)
+    credential_token = _connections._CREDENTIAL.set(credential)
+    use_token = _connections._USE.set(use)
+    try:
+        yield
+    finally:
+        _connections._USE.reset(use_token)
+        _connections._CREDENTIAL.reset(credential_token)
+        _connections._CONNECTION.reset(connection_token)
 
 
 def connection_headers(

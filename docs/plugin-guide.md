@@ -1204,6 +1204,21 @@ headers = connection_headers(binding, credential=SecretToken("myprovider", "test
 assert_conformant(MyProvider(), plugin_id="myprovider", headers=headers, create_nodes=True)
 ```
 
+To call a provider method directly in a unit test, without the routes, set the same context with
+`acting_as(binding, credential=None, use=None)`. Inside the block `current_connection()`,
+`current_credential()` and `current_use()` answer what you pass; on exit they answer what they
+did before, also when the block raises. Nothing is resolved, so pass the credential the method
+should see:
+
+```python
+from tlc_plugin_sdk.connections import Ambient, ConnectionBinding, ConnectionUse
+from tlc_plugin_sdk.infrastructure.testing import acting_as
+
+binding = ConnectionBinding("conn-1", "myprovider", "AMBIENT")
+with acting_as(binding, Ambient("myprovider"), use=ConnectionUse("node-1", "ada")):
+    created = MyProvider().create_node(request)
+```
+
 Settings are read and written under `config_root`, a temporary directory when none is given, so
 a run never touches `~/.3lc-plugin-configs`. The CLI is `python -m
 tlc_plugin_sdk.infrastructure.testing src/my_provider [--config-root DIR] [--create-nodes]

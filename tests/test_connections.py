@@ -29,6 +29,9 @@ from tlc_plugin_sdk.connections import (
     SecretToken,
     StorageRule,
     credential_as,
+    current_connection,
+    current_credential,
+    current_use,
     encode_binding,
     encode_credential,
     encode_use,
@@ -37,6 +40,7 @@ from tlc_plugin_sdk.connections import (
 from tlc_plugin_sdk.contract import HubPlugin
 from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.infrastructure import RateLimited
+from tlc_plugin_sdk.infrastructure.testing import acting_as
 
 _ERROR_KEYS = {"detail", "code", "remedy", "retry_after_s"}
 
@@ -282,13 +286,23 @@ def test_what_a_resolver_raises_is_a_worded_answer_never_a_500(harness: PluginHa
 def test_credential_as_hands_back_the_plugins_own_class() -> None:
     with pytest.raises(CredentialUnavailable, match="needs a _Session and the request carries no credential"):
         credential_as(_Session)
-    token = connections._CREDENTIAL.set(_Session("session-1"))
-    try:
+    with acting_as(ConnectionBinding("conn-1", "aws", "KEYLESS"), _Session("session-1")):
         assert credential_as(_Session).token == "session-1"
         with pytest.raises(CredentialUnavailable, match="carries a _Session"):
             credential_as(Ambient)
-    finally:
-        connections._CREDENTIAL.reset(token)
+
+
+def test_acting_as_sets_the_connection_credential_and_use_and_resets_them() -> None:
+    binding = ConnectionBinding("conn-1", "aws", "AMBIENT")
+    use = ConnectionUse("node-1", "ada")
+    with pytest.raises(RuntimeError), acting_as(binding, Ambient("aws"), use=use):
+        assert current_connection() == binding and current_use() == use
+        assert current_credential() == Ambient("aws")
+        with acting_as(None):
+            assert current_connection() is None and current_credential() is None and current_use() is None
+        assert current_connection() == binding, "an inner block restores the outer one"
+        raise RuntimeError
+    assert current_connection() is None and current_credential() is None and current_use() is None
 
 
 # ── the use ──────────────────────────────────────────────────────────────────
