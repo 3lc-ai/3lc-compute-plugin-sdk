@@ -473,8 +473,8 @@ _AWS_METHODS = [
                 label="Role name",
                 help="The name of the role the grant creates.",
                 example="3lc-connection",
-                pattern=r"^[\w+=,.@-]{1,48}$",
-                max_length=48,
+                pattern=r"^[\w+=,.@-]{1,53}$",
+                max_length=53,
                 default="3lc-connection",
             )
         ],
@@ -489,12 +489,42 @@ _AWS_METHODS = [
 _AWS_PERMISSIONS = PermissionSchema(
     options=[
         PermissionOption(
-            key="deployment_nodes",
-            label="Deployments may start their own nodes",
+            key="allow_shared_ingress",
+            label="Create shared HTTPS access for deployments",
+            purpose="deployments",
+            help="Allows a shared load balancer and certificate.",
+            default=True,
+        ),
+        PermissionOption(
+            key="allow_diagnostics",
+            label="Allow detailed startup diagnostics",
+            purpose="deployments",
+            help="Allows a fixed command to read startup logs on opted-in deployments.",
+        ),
+        PermissionOption(
+            key="deployments_start_nodes",
+            label="Deployments start their own GPU nodes",
             purpose="deployments",
             default=True,
             operations=["node.create", "node.describe", "node.terminate"],
-        )
+        ),
+        PermissionOption(
+            key="node_storage", label="Give GPU nodes the Connection's storage access", purpose="nodes", default=True
+        ),
+        PermissionOption(
+            key="discover_buckets",
+            label="List the names of the account's buckets",
+            purpose="storage",
+            help="Names only, never contents.",
+            operations=["storage.discover"],
+        ),
+        PermissionOption(
+            key="allow_bucket_creation",
+            label="Create buckets in the account",
+            purpose="storage",
+            help="Creating a bucket grants no access to its objects.",
+            operations=["storage.create"],
+        ),
     ],
     storage=StorageLocationSchema(
         scheme="s3",
@@ -509,7 +539,7 @@ _AWS_NODES = NodeCapabilities(
     types=["g5.xlarge", "g6.2xlarge"],
     type_label="Instance type",
     pricing=["on_demand", "spot"],
-    storage_access=["identity", "ambient"],
+    storage_access=["identity"],
 )
 _AWS_HOST = HostIdentity(
     display="arn:aws:iam::111122223333:role/3lc-launcher",
@@ -555,7 +585,7 @@ class _AwsDeployments(_StorageDeclared, NodeProvider, DeploymentProvider, Catalo
 
 
 class _Azure(_StorageDeclared, NodeProvider, CatalogFacet):
-    flags = StorageCapabilities(kind="container", label="Azure storage container")
+    flags = StorageCapabilities(kind="container", label="Azure storage container", bundle=False)
     caps = CapabilitiesResponse(
         provider="azure",
         display_name="Azure",
@@ -612,13 +642,14 @@ class _Azure(_StorageDeclared, NodeProvider, CatalogFacet):
             types=["Standard_NC4as_T4_v3", "Standard_NC24ads_A10_v5"],
             type_label="VM size",
             pricing=["on_demand", "spot"],
-            storage_access=["identity", "ambient"],
+            storage_access=["identity"],
         ),
     )
 
 
 _connect(
     _AwsNow,
+    "node_diagnostics",
     "describe_grant",
     "prepare_grant_update",
     "verify_connection",
@@ -627,6 +658,7 @@ _connect(
 )
 _connect(
     _AwsDeployments,
+    "node_diagnostics",
     "describe_grant",
     "prepare_grant_update",
     "verify_connection",
@@ -639,7 +671,7 @@ _connect(
     "list_deployments",
     "sweep_deployments",
 )
-_connect(_Azure, "verify_connection", "connection_node_access", "storage_candidates")
+_connect(_Azure, "node_diagnostics", "verify_connection", "connection_node_access", "storage_candidates")
 
 
 class _RunPod(_StorageDeclared, NodeProvider, CatalogFacet):

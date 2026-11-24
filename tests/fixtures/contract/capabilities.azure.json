@@ -148,8 +148,7 @@
         "spot"
       ],
       "storage_access": [
-        "identity",
-        "ambient"
+        "identity"
       ],
       "type_connections": {}
     },
@@ -160,7 +159,7 @@
       "upload": true,
       "browse": true,
       "download": true,
-      "bundle": true,
+      "bundle": false,
       "delete": true,
       "transfer": true,
       "rename": true
@@ -173,6 +172,7 @@
       "node.state",
       "node.delete",
       "node.check",
+      "node.diagnostics",
       "catalog",
       "catalog.locations",
       "storage"
