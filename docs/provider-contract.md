@@ -1167,9 +1167,9 @@ declare `deployments.sslip`, and nothing of the DNS facet is used. Everything be
 what cannot be one: lower case, runs of other characters become one hyphen, at most 63
 characters, not a punycode label, not a reserved label, and not a shared ingress's namespace
 label: `i-` followed by 20 lowercase hexadecimal characters, or `i-` and the ingress key of the
-launch (a deployment so labelled would be named inside that ingress's namespace). A provider's
-`ingress_key` takes that shape (the AWS plugin's is a SHA-256 prefix) so the rule is exact; any
-other label starting with `i-`, such as `i-love-it`, is an ordinary name. These rules and the reserved list move
+launch (a deployment so labelled would be named inside that ingress's namespace). The AWS plugin's
+`ingress_key` has that shape (a SHA-256 prefix); for a key of another shape only the launch's own
+key is refused. Any other label starting with `i-`, such as `i-love-it`, is an ordinary name. These rules and the reserved list move
 from the AWS plugin to the host unchanged (`aws:hostnames.py:54-179`). The names are the two
 shapes that exist today, unchanged, so a deployment that is running keeps its name:
 
