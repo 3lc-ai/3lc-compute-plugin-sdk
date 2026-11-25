@@ -1155,7 +1155,9 @@ declare `deployments.sslip`, and nothing of the DNS facet is used. Everything be
 
 **Hostname allocation.** The launcher turns a deployment's name into a DNS label and refuses
 what cannot be one: lower case, runs of other characters become one hyphen, at most 63
-characters, not a punycode label, not a reserved label. These rules and the reserved list move
+characters, not a punycode label, not a reserved label, and not a label that starts with `i-`
+(the shape of a shared ingress's namespace below: a deployment so labelled would be named inside
+another ingress's namespace). These rules and the reserved list move
 from the AWS plugin to the host unchanged (`aws:hostnames.py:54-179`). The names are the two
 shapes that exist today, unchanged, so a deployment that is running keeps its name:
 
