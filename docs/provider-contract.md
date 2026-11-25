@@ -1245,6 +1245,18 @@ holds through a long prepare, and deleted last, with the names. The deployment r
 list of records written, so a delete does not need to search the zone. A launcher without a
 Config Service keeps the list on its own node record (`compute:infra/manager.py:3800-3801`).
 
+**The launcher id is never empty and never guessed.** A host with a launcher key uses its Config
+Service identity; while the Config Service has not said which launcher the key belongs to, the
+host refuses to launch or delete a deployment (503 with `Retry-After`) and does not sweep,
+rather than act under another id: a delete would find none of the deployment's names and free
+the address they point at. Which ledger a host uses follows its configuration (a launcher key,
+a zone), never what the Config Service last answered. A host without a launcher key claims
+names with a random id it creates once in its state directory, so two such hosts on one zone
+never take each other's names for their own. An owner record is not written without a launcher
+id, and one that carries the digest of an empty id is no launcher's: every sweep leaves it.
+A delete removes the records first and stops there when they cannot be read or removed: the
+machine stays, the record says why, and the delete can be repeated.
+
 **The zone sweep reports, and removes only what it can prove gone.** A name whose owner record
 is this launcher's and whose deployment the launcher does not track is a candidate, and the sweep
 reports every candidate. It removes a candidate's records only when it can prove the deployment
