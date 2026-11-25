@@ -46,6 +46,7 @@ __all__ = [
     "JOURNAL_WATCH_PATH",
     "JOURNAL_WATCH_UNIT",
     "OBJECT_SERVICE_PORT",
+    "REDACT_FUNCTION",
     "SERVICE_UNITS",
     "STAGING_CATALOG_ENV",
     "TLS_HOSTNAMES_FROM_IP",
@@ -394,13 +395,37 @@ SERVICE_UNITS = ("3lc-object-service", "3lc-compute")
 JOURNAL_WATCH_PATH = "/usr/local/bin/3lc-journal-watch"
 JOURNAL_WATCH_UNIT = "3lc-journal-watch"
 _WATCH_EOF = "__3LC_WATCH__"
-#: Shell function that masks secrets in journal lines before they reach the console.
-_REDACT_FN = r"""redact() {
-  sed -E -e 's/tlc_svc_[A-Za-z0-9_-]+/tlc_svc_REDACTED/g' \
-    -e 's/([A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*=)[^[:space:]]*/\1REDACTED/gI' \
-    -e 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1REDACTED/gI'
+
+
+def _any_case(word: str) -> str:
+    return "".join(f"[{c.upper()}{c.lower()}]" for c in word)
+
+
+# A name that says its value is a secret, in any case. Spelled out per letter: the script runs
+# wherever ``sed -E`` does, with no case-insensitive flag.
+_SECRET_NAME = "(" + "|".join(_any_case(w) for w in ("key", "token", "secret", "password", "credential")) + ")"
+# A single quote inside the single-quoted sed programs below.
+_Q = "'\"'\"'"
+
+#: Shell function ``redact``: a filter that masks secrets in log lines before they reach the console.
+#: Every boot script pipes what it prints of a log through it. In order: a 3LC token of any kind
+#: (``tlc_<kind>_…``, twenty characters or more: service keys, bootstrap tokens), a ``Bearer`` value,
+#: a quoted ``"…key…": "value"`` pair (JSON, or a Python repr), a ``NAME_WITH_KEY=value`` assignment,
+#: and a run of 24 or more base64, hex or URL-safe characters within two words after a name that says secret. The
+#: names are ``key``, ``token``, ``secret``, ``password`` and ``credential``, anywhere in a name.
+REDACT_FUNCTION = (
+    r"""redact() {
+  sed -E -e 's/(tlc_[A-Za-z0-9]+_)[A-Za-z0-9_-]{12,}/\1REDACTED/g' \
+    -e 's/(@BEARER@ +)[A-Za-z0-9._~+\/=-]+/\1REDACTED/g' \
+    -e 's/(["@Q@][A-Za-z0-9_.-]*@NAME@[A-Za-z0-9_.-]*["@Q@] *: *["@Q@])[^"@Q@]*/\1REDACTED/g' \
+    -e 's/([A-Za-z0-9_]*@NAME@[A-Za-z0-9_]*=)[^[:space:]]*/\1REDACTED/g' \
+    -e 's/(@NAME@[^[:space:]]*( +[A-Za-z]+){0,2}[ :=]+["@Q@]?)[A-Za-z0-9+\/=_-]{24,}/\1REDACTED/g'
 }
 """
+    .replace("@BEARER@", _any_case("bearer"))
+    .replace("@NAME@", _SECRET_NAME)
+    .replace("@Q@", _Q)
+)
 # Plain text (not an f-string): the shell's ``$`` and braces stay as written. Bounds, so a restart
 # loop cannot flood the console (which keeps only its last 64 KB anyway): at most MAX_DUMPS
 # dumps per unit of TAIL_LINES lines each, a unit's next dump only after RESTARTS_BETWEEN further
@@ -450,7 +475,7 @@ while [ $((SECONDS - start)) -lt $WATCH_SECONDS ]; do
   [ "$active" = 1 ] || break
   sleep 10
 done
-""".replace("@UNITS@", " ".join(SERVICE_UNITS)).replace("@REDACT@", _REDACT_FN)
+""".replace("@UNITS@", " ".join(SERVICE_UNITS)).replace("@REDACT@", REDACT_FUNCTION)
 
 _JOURNAL_WATCH_UNIT = """[Unit]
 Description=3LC service journal watcher (boot console diagnostics)
@@ -701,6 +726,7 @@ command -v uv >/dev/null 2>&1 || ({UV_INSTALL})
 export PATH="$HOME/.local/bin:$PATH"
 uv venv /opt/3lc --python 3.12
 {install}mkdir -p /etc/3lc /srv/3lc/projects
+install -m 600 /dev/null /etc/3lc/env
 cat > /etc/3lc/env <<'{_ENV_EOF}'
 {_env_file_lines(service_env)}
 {_ENV_EOF}
@@ -786,7 +812,7 @@ for port in {OBJECT_SERVICE_PORT} {COMPUTE_SERVICE_PORT}; do
 done
 if [ -n "$unanswered" ]; then
   echo "health=failed: nothing answered on port(s)$unanswered in 300s" >> {BOOT_STATUS_FILE}
-{_REDACT_FN}  for u in {units}; do
+{REDACT_FUNCTION}  for u in {units}; do
     {{
       printf '3LC_JOURNAL_BEGIN %s unanswered\\n' "$u"
       journalctl -u "$u" -n 40 --no-pager -o short-iso 2>&1 | redact | cut -c1-200 | sed "s/^/3LC_JOURNAL $u /"

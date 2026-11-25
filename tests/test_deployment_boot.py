@@ -355,3 +355,53 @@ def test_services_that_answer_finish_the_boot(tmp_path: Path) -> None:
     assert code == 0
     assert console.endswith("3LC_BOOT boot finished\n")
     assert "3LC_JOURNAL" not in console
+
+
+def _redacted(text: str) -> str:
+    from tlc_plugin_sdk.infrastructure.deployment_boot import REDACT_FUNCTION
+
+    done = subprocess.run(
+        ["bash", "-c", REDACT_FUNCTION + "redact"], input=text, capture_output=True, text=True, check=True
+    )
+    return done.stdout
+
+
+def test_one_masking_function_covers_every_shape_a_secret_takes_in_a_log() -> None:
+    secrets = {
+        "service key": "tlc_svc_AbC123-xyz_9",
+        "boot token": "tlc_boot_0123456789abcdefABCDEF",
+        "bearer": "eyJhbGciOiJSUzI1NiJ9.payload-part.sig_nature",
+        "json": "s3cr3t value, with spaces",
+        "repr": "another-secret",
+        "env": "supersecretvalue",
+        "setting": "hunter2",
+        "password": "p4ss",
+        "credential": "cred-value",
+        "base64": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=",
+        "hex": "0123456789abcdef0123456789abcdef",
+    }
+    log = f"""auth failed for {secrets["service key"]}
+redeeming {secrets["boot token"]} failed
+Authorization: bearer {secrets["bearer"]}
+body {{"api_key": "{secrets["json"]}", "name": "kept"}}
+config {{'clientSecret': '{secrets["repr"]}', 'region': 'kept'}}
+env TLC_API_KEY={secrets["env"]} loaded
+client_secret={secrets["setting"]} rejected
+{{"Password" : "{secrets["password"]}"}} and node_credential="{secrets["credential"]}"
+the token was {secrets["base64"]} today
+api key: {secrets["hex"]}
+an ordinary line about tlc_compute.infra.manager and a keyboard stays as it is
+"""
+    out = _redacted(log)
+    for what, secret in secrets.items():
+        assert secret not in out, what
+    assert "tlc_svc_REDACTED" in out and "tlc_boot_REDACTED" in out and "TLC_API_KEY=REDACTED" in out
+    assert '"api_key": "REDACTED", "name": "kept"' in out and "'region': 'kept'" in out
+    assert "an ordinary line about tlc_compute.infra.manager and a keyboard stays as it is\n" in out
+    assert out.count("\n") == log.count("\n")
+
+
+def test_the_environment_file_is_never_readable_by_others_while_it_is_written() -> None:
+    script = _render()
+    created = script.index("install -m 600 /dev/null /etc/3lc/env\n")
+    assert created < script.index("cat > /etc/3lc/env <<")
