@@ -34,6 +34,7 @@ from litestar.types import ExceptionHandlersMap
 
 from tlc_plugin_sdk.connections import (
     CONNECTION_HEADER,
+    LAUNCHER_ZONE_HEADER,
     CredentialUnavailable,
     current_connection,
     current_credential,
@@ -631,6 +632,23 @@ def _deployment_sweep_handlers(plugin: InfrastructurePlugin) -> list[Any]:
 # ── DNS ────────────────────────────────────────────────────────────────────────
 
 
+def _require_launcher_zone(request: Request[Any, Any, Any], zone_id: str) -> None:
+    """Refuse a zone other than the one the host says it is configured with.
+
+    The DNS routes act with the host's own identity, and a worker cannot tell the host's manager
+    from any other caller. The host names its zone in :data:`LAUNCHER_ZONE_HEADER`, which it strips
+    from every request it forwards for someone else: a call without it, or for another zone, is
+    not the launcher's.
+    """
+    named = request.headers.get(LAUNCHER_ZONE_HEADER, "").strip()
+    if not named or named != zone_id.strip():
+        msg = (
+            f"The zone {zone_id[:64]} is not the one this launcher is configured with: the DNS routes act "
+            f"only on the zone the host names in {LAUNCHER_ZONE_HEADER}"
+        )
+        raise InvalidRequest(msg)
+
+
 def _dns_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     if not isinstance(plugin, DnsFacet):
         msg = "DNS routes need a DnsFacet plugin"
@@ -638,18 +656,21 @@ def _dns_handlers(plugin: InfrastructurePlugin) -> list[Any]:
     facet: DnsFacet = plugin
 
     @http_get("/infra/dns/records", sync_to_thread=True, exception_handlers=_ERRORS)
-    def _list_records(zone_id: str = "", zone_name: str = "", under: str = "", cursor: str = "") -> dict[str, Any]:
+    def _list_records(
+        request: Request[Any, Any, Any], zone_id: str = "", zone_name: str = "", under: str = "", cursor: str = ""
+    ) -> dict[str, Any]:
         def run() -> dict[str, Any]:
             if not zone_id:
                 msg = "Name the zone to list: zone_id and zone_name"
                 raise InvalidRequest(msg)
+            _require_launcher_zone(request, zone_id)
             zone = DnsZone(id=zone_id, name=zone_name)
             return facet.list_records(zone, under=under, cursor=cursor).to_dict()
 
         return answer(plugin, run)
 
     @http_post("/infra/dns/changes", status_code=200, sync_to_thread=True, exception_handlers=_ERRORS)
-    def _change_records(data: dict[str, Any]) -> dict[str, Any]:
+    def _change_records(request: Request[Any, Any, Any], data: dict[str, Any]) -> dict[str, Any]:
         def run() -> dict[str, Any]:
             raw = [r for key in ("create", "delete") for r in (data.get(key) or []) if isinstance(r, dict)]
             if any(r.get("type") not in _DNS_TYPES for r in raw):
@@ -659,6 +680,7 @@ def _dns_handlers(plugin: InfrastructurePlugin) -> list[Any]:
             if not change.zone.id:
                 msg = "Name the zone to change"
                 raise InvalidRequest(msg)
+            _require_launcher_zone(request, change.zone.id)
             if len(change.create) + len(change.delete) > _MAX_DNS_CHANGE:
                 msg = f"One change holds at most {_MAX_DNS_CHANGE} records"
                 raise InvalidRequest(msg)

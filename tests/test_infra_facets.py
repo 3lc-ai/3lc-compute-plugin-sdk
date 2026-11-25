@@ -12,7 +12,14 @@ from typing import Any
 
 import pytest
 
-from tlc_plugin_sdk.connections import ConnectionBinding, ConnectionPermissions, ConnectionUse, SecretToken, StorageRule
+from tlc_plugin_sdk.connections import (
+    LAUNCHER_ZONE_HEADER,
+    ConnectionBinding,
+    ConnectionPermissions,
+    ConnectionUse,
+    SecretToken,
+    StorageRule,
+)
 from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.infrastructure import (
     CapabilitiesResponse,
@@ -400,6 +407,24 @@ def test_a_storage_method_left_at_its_default_answers_501(tmp_path: Path) -> Non
 # ── Deployments and the launcher's zone ──────────────────────────────────────
 
 
+_LAUNCHER = {LAUNCHER_ZONE_HEADER: _ZONE.id}
+
+
+def test_the_dns_routes_act_only_on_the_zone_the_host_names(fake: Any) -> None:
+    provider, h = fake
+    record = DnsRecord(name="a.deploy.example.com", type="A", values=["203.0.113.1"])
+    body = DnsChange(zone=_ZONE, create=[record]).to_dict()
+    query = {"zone_id": _ZONE.id, "zone_name": _ZONE.name}
+    # No header is what a request that did not come from the host's manager looks like.
+    for headers in (None, {LAUNCHER_ZONE_HEADER: "ZOTHER"}, {LAUNCHER_ZONE_HEADER: ""}):
+        refused = h.post("/infra/dns/changes", json_body=body, headers=headers)
+        assert refused.status_code == 400 and "not the one this launcher is configured with" in refused.text
+        assert h.get("/infra/dns/records", params=query, headers=headers).status_code == 400
+    assert not provider.zones.get(_ZONE.id)
+    assert h.post("/infra/dns/changes", json_body=body, headers=_LAUNCHER).status_code == 200
+    assert h.get("/infra/dns/records", params=query, headers=_LAUNCHER).status_code == 200
+
+
 def _records(h: PluginHarness, under: str = "") -> list[DnsRecord]:
     found: list[DnsRecord] = []
     cursor = ""
@@ -408,6 +433,7 @@ def _records(h: PluginHarness, under: str = "") -> list[DnsRecord]:
             h.get(
                 "/infra/dns/records",
                 params={"zone_id": _ZONE.id, "zone_name": _ZONE.name, "under": under, "cursor": cursor},
+                headers=_LAUNCHER,
             ).json()
         )
         found += page.records
@@ -417,7 +443,11 @@ def _records(h: PluginHarness, under: str = "") -> list[DnsRecord]:
 
 
 def _change(h: PluginHarness, create: list[DnsRecord], delete: list[DnsRecord] | None = None) -> Any:
-    return h.post("/infra/dns/changes", json_body=DnsChange(zone=_ZONE, create=create, delete=delete or []).to_dict())
+    return h.post(
+        "/infra/dns/changes",
+        json_body=DnsChange(zone=_ZONE, create=create, delete=delete or []).to_dict(),
+        headers=_LAUNCHER,
+    )
 
 
 def test_a_launch_runs_options_check_prepare_create_with_the_launcher_writing_the_zone(fake: Any) -> None:
@@ -655,14 +685,14 @@ def test_dns_listing_pages_and_changes_are_bounded_and_never_see_a_connection(fa
     for start in range(0, 350, 100):
         assert _change(h, many[start : start + 100]).status_code == 200
     first = DnsRecords.from_dict(
-        h.get("/infra/dns/records", params={"zone_id": _ZONE.id, "zone_name": _ZONE.name}).json()
+        h.get("/infra/dns/records", params={"zone_id": _ZONE.id, "zone_name": _ZONE.name}, headers=_LAUNCHER).json()
     )
     assert len(first.records) == 300 and first.next_cursor
     assert len(_records(h, under="many.deploy.example.com")) == 350
     assert _records(h, under="other.deploy.example.com") == []
     assert _change(h, many[:101]).status_code == 400, "one change holds at most 100 records"
     mx = {"zone": _ZONE.to_dict(), "create": [{"name": "a.deploy.example.com", "type": "MX", "values": ["x"]}]}
-    assert h.post("/infra/dns/changes", json_body=mx).status_code == 400
+    assert h.post("/infra/dns/changes", json_body=mx, headers=_LAUNCHER).status_code == 400
     elsewhere = DnsRecord(name="a.elsewhere.example.org", type="A", values=["203.0.113.1"])
     assert _change(h, [elsewhere]).status_code == 400
     assert h.get("/infra/dns/records").status_code == 400

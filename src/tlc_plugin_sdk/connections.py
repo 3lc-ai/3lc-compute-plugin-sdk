@@ -81,6 +81,7 @@ __all__ = [
     "CREDENTIAL_KEY",
     "ENV_VARS_FROM_JSON_BY_PROVIDER",
     "ENV_VAR_BY_PROVIDER",
+    "LAUNCHER_ZONE_HEADER",
     "MAX_BINDING_BYTES",
     "MAX_CREDENTIAL_BYTES",
     "MAX_STORAGE_RULES",
@@ -156,6 +157,10 @@ MAX_STORAGE_RULES = 20
 
 MAX_STORAGE_RULE_LENGTH = 256
 """How long one storage rule's location is at most."""
+
+LAUNCHER_ZONE_HEADER = "x-3lc-launcher-zone"
+"""The request header naming the DNS zone id the host is configured with (host-owned): the DNS routes
+act only on the zone it names, so a request that did not come from the host's own manager reaches no zone."""
 
 AMBIENT_ONLY_PATHS: frozenset[str] = frozenset({"/infra/capabilities", "/infra/connection/grant"})
 """Routes that read this host's own identity: a request carrying any Connection header is refused."""

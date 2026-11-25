@@ -56,6 +56,7 @@ from tlc_plugin_sdk.connections import (
     CONNECTION_HEADER,
     CONNECTION_TOKEN_HEADER,
     CONNECTION_USE_HEADER,
+    LAUNCHER_ZONE_HEADER,
     Ambient,
     ConnectionBinding,
     ConnectionUse,
@@ -356,6 +357,12 @@ class _Run:
         """One request. The Connection headers go on every route that may carry them, and on no other."""
         headers = None if bare or _ambient_only(path) else self.headers
         response = self.h.call(method, path, json_body=json_body, headers=headers)
+        self.responses.append((method, path, response.status_code, response.text))
+        return response
+
+    def launcher_call(self, method: str, path: str, zone: DnsZone, *, json_body: Any = None) -> HarnessResponse:
+        """One DNS request as the host sends it: no Connection, and the zone it is configured with."""
+        response = self.h.call(method, path, json_body=json_body, headers={LAUNCHER_ZONE_HEADER: zone.id})
         self.responses.append((method, path, response.status_code, response.text))
         return response
 
@@ -1032,9 +1039,10 @@ class _Run:
         self.check(
             "dns: the DNS routes refuse a Connection header with 400", r.status_code == 400, self.status_detail(r)
         )
-        r = self.call(
+        r = self.launcher_call(
             "POST",
             "/infra/dns/changes",
+            DnsZone(id="z", name="z.invalid"),
             json_body={
                 "zone": {"id": "z", "name": "z.invalid"},
                 "create": [{"name": "a.z.invalid", "type": "MX", "values": ["x"]}],
@@ -1043,6 +1051,18 @@ class _Run:
         self.check(
             "dns: a record type other than A, AAAA, CNAME, TXT answers 400", r.status_code == 400, self.status_detail(r)
         )
+        for named in ("", "another-zone"):
+            r = self.h.call(
+                "GET",
+                "/infra/dns/records?zone_id=conformance&zone_name=conformance.invalid",
+                headers={LAUNCHER_ZONE_HEADER: named} if named else None,
+            )
+            self.responses.append(("GET", "/infra/dns/records", r.status_code, r.text))
+            self.check(
+                f"dns: a request naming {'another zone' if named else 'no zone'} as the launcher's answers 400",
+                r.status_code == 400,
+                self.status_detail(r),
+            )
         zone = self.dns_zone
         if zone is None:
             return
@@ -1052,16 +1072,17 @@ class _Run:
         clash = DnsRecord(name=one.name, type="TXT", values=["two"])
 
         def change(create: list[DnsRecord], delete: list[DnsRecord]) -> HarnessResponse:
-            return self.call(
-                "POST", "/infra/dns/changes", json_body=DnsChange(zone=zone, create=create, delete=delete).to_dict()
-            )
+            body = DnsChange(zone=zone, create=create, delete=delete).to_dict()
+            return self.launcher_call("POST", "/infra/dns/changes", zone, json_body=body)
 
         def names() -> set[tuple[str, tuple[str, ...]]]:
             found: set[tuple[str, tuple[str, ...]]] = set()
             cursor = ""
             for _ in range(50):
-                r = self.call(
-                    "GET", f"/infra/dns/records?zone_id={zone.id}&zone_name={zone.name}&under={base}&cursor={cursor}"
+                r = self.launcher_call(
+                    "GET",
+                    f"/infra/dns/records?zone_id={zone.id}&zone_name={zone.name}&under={base}&cursor={cursor}",
+                    zone,
                 )
                 page = DnsRecords.from_dict(self.body(r))
                 found |= {(x.name, tuple(x.values)) for x in page.records}

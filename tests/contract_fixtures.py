@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from tlc_plugin_sdk.connections import (
+    LAUNCHER_ZONE_HEADER,
     ConnectionBinding,
     ConnectionPermissions,
     ConnectionUse,
@@ -130,7 +131,8 @@ class _Recorder:
     def call(
         self, method: str, path: str, answer: str, *, body: Any = None, request: str = "", bare: bool = False
     ) -> dict[str, Any]:
-        response = self.h.call(method, path, json_body=body, headers=None if bare else self.headers)
+        launcher = {LAUNCHER_ZONE_HEADER: _ZONE.id} if path.startswith("/infra/dns/") else None
+        response = self.h.call(method, path, json_body=body, headers=launcher if bare else self.headers)
         data: dict[str, Any] = response.json()
         route = f"{method} {path.split('?', 1)[0]}"
         if request:

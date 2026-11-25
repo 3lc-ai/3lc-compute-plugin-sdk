@@ -1207,6 +1207,18 @@ when a Connection header is present: the zone is the launcher's, and the custome
 no say over it (`aws:provider.py:210-220`). `list_records` pages with a cursor because a zone
 holds every deployment the launcher ever named.
 
+**Whose zone, and who may call.** The DNS routes act only on the zone the host names at call
+time: the host sends the id of the zone it is configured with in the host-owned header
+`x-3lc-launcher-zone`, and the SDK's routes answer 400 for a request without the header or for
+any other zone, before the facet runs. A provider never takes a zone from the request alone.
+
+A worker cannot tell the host's manager from another caller. Every route that can act with the
+host's own identity (the DNS routes, and the deployment and node routes when no Connection is
+sent) MUST therefore be reachable only through the host's manager: the host's custom-route
+proxy for plugin pages refuses every `/infra/` path of an infrastructure plugin except the
+reads and settings calls a page makes, removes every host-owned header from what it forwards,
+and denies by default, so a route a later SDK mounts is closed until the host lists it.
+
 The DNS plugin and the deployment provider are independent: an Azure deployment gets its name
 in a Route 53 zone because the launcher's DNS plugin is the AWS one.
 

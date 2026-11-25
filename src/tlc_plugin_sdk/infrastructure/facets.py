@@ -481,7 +481,9 @@ class DnsFacet(ABC):
     """The plugin writes a launcher's DNS zone (operation ``dns``).
 
     Both methods act with the launcher's own identity and never a Connection: the routes refuse a
-    request that carries one. The DNS plugin and a deployment's provider are independent.
+    request that carries one. They act only on the zone the host names at call time, in the
+    host-owned ``x-3lc-launcher-zone`` header: the routes refuse a request without it or for
+    another zone before a method here runs. The DNS plugin and a deployment's provider are independent.
     """
 
     @abstractmethod
