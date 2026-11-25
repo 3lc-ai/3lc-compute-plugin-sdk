@@ -2014,8 +2014,10 @@ operations, no `WorkspaceFacet`) and is what a host tests the typed path against
 
 And one rule for the binding, because the Config Service is unchanged: in milestone 1 the host
 builds the generation 2 binding from today's grant by copying `metadata` into `access` as
-strings, key for key, leaving `account` and `defaults` empty and `permissions` unset, and
-passing `configuration` through. The AWS plugin reads the same keys from `access` that it reads
+strings, key for key, leaving `account` empty and `permissions` unset, and passing
+`configuration` through. `defaults` holds each key the provider's `account.defaults` declares,
+read from the `metadata` key of the same name, and `location` also from `region`, the one rename
+the back-fill makes (4.4); a key the provider does not declare is never filled. The AWS plugin reads the same keys from `access` that it reads
 from `metadata` now, so nothing in it changes when the Config Service starts sending `access`
 itself; it derives the account from `role_arn` when `account` is empty.
 
