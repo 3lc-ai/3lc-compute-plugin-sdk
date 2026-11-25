@@ -51,11 +51,15 @@ __all__ = [
     "TLS_HOSTNAMES_FROM_IP",
     "UV_INSTALL",
     "UV_VERSION",
+    "VERIFY_WHEEL_FUNCTION",
+    "WHEEL_DIGEST_MARK",
     "InvalidBootInput",
     "caddy_block",
     "core_spec",
     "index_install_flags",
     "object_service_allowed_urls",
+    "pin_wheel",
+    "pinned_wheel",
     "render_deployment_script",
     "tls_hostnames_for_ip",
 ]
@@ -63,6 +67,56 @@ __all__ = [
 
 class InvalidBootInput(ValueError):
     """A value that cannot go into the boot script; the message says what to change."""
+
+
+#: What joins a wheel's storage URL to the SHA-256 of the file the host built: ``<url>#sha256=<hex>``.
+#: A wheel address always carries one. The wheel is installed as root on the machine, and whoever
+#: can write the storage it is downloaded from could otherwise replace it.
+WHEEL_DIGEST_MARK = "#sha256="
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+#: ``verify_wheel <file> <sha256>``: ends the boot, with a ``3LC_BOOT`` line, when the downloaded file
+#: is not the one the host built. Never a reason to install from the index instead: a file that
+#: differs was replaced or corrupted, and the index would hide it. Needs the script's ``report``.
+VERIFY_WHEEL_FUNCTION = """verify_wheel() {
+  local got
+  got=$(sha256sum "$1" | cut -d' ' -f1)
+  if [ "$got" != "$2" ]; then
+    report "failed: wheel ${1##*/} is not the file the host built (sha256 $got, expected $2)"
+    exit 1
+  fi
+}"""
+
+
+def pin_wheel(url: str, sha256: str) -> str:
+    """``url`` with the digest of the file it must hold: ``<url>#sha256=<hex>``.
+
+    Raises:
+        InvalidBootInput: When ``sha256`` is not 64 hex characters.
+    """
+    digest = sha256.strip().lower()
+    if not _SHA256_RE.match(digest):
+        msg = "A wheel's digest is the 64 hex characters of its SHA-256"
+        raise InvalidBootInput(msg)
+    return f"{url}{WHEEL_DIGEST_MARK}{digest}"
+
+
+def pinned_wheel(address: str) -> tuple[str, str]:
+    """The URL and the SHA-256 a wheel address names.
+
+    Raises:
+        InvalidBootInput: When the address carries no ``#sha256=<hex>`` or a malformed one.
+    """
+    url, mark, digest = address.strip().rpartition(WHEEL_DIGEST_MARK)
+    digest = digest.lower()
+    if not mark or not url or not _SHA256_RE.match(digest):
+        name = address.strip().split("#", 1)[0].rsplit("/", 1)[-1][:120]
+        msg = (
+            f"The wheel {name!r} has no digest: a wheel address ends in {WHEEL_DIGEST_MARK}<the SHA-256 of the "
+            "file>, so the machine can tell the file it downloads is the one that was built"
+        )
+        raise InvalidBootInput(msg)
+    return url, digest
 
 
 _ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -499,8 +553,9 @@ def render_deployment_script(
             derive from the address, and for ``wait_for_dns``.
         download_command: Shell that downloads the storage URL ``$1`` into the directory ``$2`` with the
             machine's identity. Needed with ``wheel_urls``.
-        wheel_urls: Storage URLs of wheels installed in place of the ``3lc-compute`` requirement; when a
-            download fails the requirement is installed from the index instead.
+        wheel_urls: Storage URLs of wheels installed in place of the ``3lc-compute`` requirement, each
+            ``<url>#sha256=<hex>`` (:func:`pinned_wheel`). When a download fails the requirement is
+            installed from the index instead; a downloaded file with another digest fails the boot.
         before_install: Shell lines run before the first package install (a mirror choice, say).
         after_services: Shell lines run once the services are started (enabling a cloud's agent, say).
         tls: ``machine``: Caddy obtains the certificates on the machine and serves 443. ``load_balancer``:
@@ -673,21 +728,29 @@ def _wheels_block(urls: Sequence[str], download_command: str, *, fallback: str) 
     """Shell that downloads ``urls`` into a temp directory and sets ``INSTALL`` to the wheels, else to ``fallback``.
 
     Each URL gets three tries; one that still fails sends the install back to the index requirement, with
-    a ``3LC_BOOT`` line saying so.
+    a ``3LC_BOOT`` line saying so. A file that arrives with another digest than its address names ends
+    the boot (:data:`VERIFY_WHEEL_FUNCTION`).
+
+    Raises:
+        InvalidBootInput: When an address carries no digest.
     """
-    quoted = " ".join(shlex.quote(url) for url in urls)
+    pins = [pinned_wheel(address) for address in urls]
+    quoted = " ".join(shlex.quote(f"{digest} {url}") for url, digest in pins)
     return f"""fetch_wheel() {{ {download_command.strip()}; }}
+{VERIFY_WHEEL_FUNCTION}
 stage="downloading service wheels"
 report "$stage"
 wheel_dir=$(mktemp -d)
 wheels_ok=1
-for url in {quoted}; do
+for pin in {quoted}; do
+  url=${{pin#* }}
   fetched=0
   for attempt in 1 2 3; do
     if fetch_wheel "$url" "$wheel_dir/"; then fetched=1; break; fi
     sleep $((attempt * 2))
   done
   if [ "$fetched" != 1 ]; then wheels_ok=0; break; fi
+  verify_wheel "$wheel_dir/${{url##*/}}" "${{pin%% *}}"
 done
 if [ "$wheels_ok" = 1 ] && compgen -G "$wheel_dir/*.whl" >/dev/null; then
   INSTALL=("$wheel_dir"/*.whl)

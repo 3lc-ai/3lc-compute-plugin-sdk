@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from tlc_plugin_sdk.infrastructure.deployment_boot import (
     BOOT_STATUS_FILE,
     InvalidBootInput,
     object_service_allowed_urls,
+    pin_wheel,
     render_deployment_script,
     tls_hostnames_for_ip,
 )
@@ -253,16 +255,51 @@ def test_provider_snippets_run_before_the_install_and_after_the_services() -> No
 def test_wheels_are_downloaded_with_the_providers_command_and_fall_back_to_the_spec() -> None:
     script = _render(
         _request(compute_spec="3lc-compute>=1.2"),
-        wheel_urls=["s3://bucket/a b.whl", "s3://bucket/c.whl"],
+        wheel_urls=[pin_wheel("s3://bucket/a b.whl", "a" * 64), pin_wheel("s3://bucket/c.whl", "B" * 64)],
         download_command='aws s3 cp "$1" "$2"',
     )
     assert 'fetch_wheel() { aws s3 cp "$1" "$2"; }' in script
-    assert "for url in 's3://bucket/a b.whl' s3://bucket/c.whl; do" in script
+    assert f"for pin in '{'a' * 64} s3://bucket/a b.whl' '{'b' * 64} s3://bucket/c.whl'; do" in script
+    assert 'verify_wheel "$wheel_dir/${url##*/}" "${pin%% *}"' in script
     assert "INSTALL=('3lc-compute>=1.2')" in script
     assert 'uv pip install --python /opt/3lc/bin/python 3lc "${INSTALL[@]}"\n' in script
     _assert_bash(script)
     with pytest.raises(InvalidBootInput, match="downloads"):
-        _render(wheel_urls=["s3://bucket/c.whl"])
+        _render(wheel_urls=[pin_wheel("s3://bucket/c.whl", "a" * 64)])
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["s3://bucket/c.whl", "s3://bucket/c.whl#sha256=abc", "s3://bucket/c.whl#md5=" + "a" * 32, "#sha256=" + "a" * 64],
+)
+def test_a_wheel_without_a_digest_is_refused(address: str) -> None:
+    with pytest.raises(InvalidBootInput, match="no digest"):
+        _render(wheel_urls=[address], download_command='cp "$1" "$2"')
+    with pytest.raises(InvalidBootInput, match="64 hex"):
+        pin_wheel("s3://bucket/c.whl", "abc")
+
+
+def _run_wheel_block(tmp_path: Path, payload: bytes, digest: str) -> tuple[int, str]:
+    """Run the wheel block alone, with ``cp`` as the download and ``report`` printing to stdout."""
+    from tlc_plugin_sdk.infrastructure.deployment_boot import _wheels_block
+
+    source = tmp_path / "agent-1.0-py3-none-any.whl"
+    source.write_bytes(payload)
+    block = _wheels_block([pin_wheel(str(source), digest)], 'cp "$1" "$2"', fallback="3lc-compute")
+    script = "set -e\nreport() { printf '3LC_BOOT %s\\n' \"$1\"; }\n" + block + 'echo "INSTALL=${INSTALL[*]}"\n'
+    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    return done.returncode, done.stdout
+
+
+@pytest.mark.skipif(shutil.which("sha256sum") is None, reason="needs sha256sum, as the machine has")
+def test_a_wheel_with_another_digest_fails_the_boot_and_never_falls_back(tmp_path: Path) -> None:
+    payload = b"the wheel the host built"
+    code, out = _run_wheel_block(tmp_path, payload, hashlib.sha256(payload).hexdigest())
+    assert code == 0 and "agent-1.0-py3-none-any.whl" in out.splitlines()[-1]
+    code, out = _run_wheel_block(tmp_path, b"another file", hashlib.sha256(payload).hexdigest())
+    assert code == 1
+    assert "3LC_BOOT failed: wheel agent-1.0-py3-none-any.whl is not the file the host built" in out
+    assert "INSTALL=" not in out and "installing from the index" not in out
 
 
 def test_the_health_wait_is_opt_in() -> None:

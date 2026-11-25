@@ -1083,7 +1083,12 @@ The launch, as the launcher runs it:
    (nothing redeemed when `record_id` and `token` are empty), the two service units with their
    environment, and Caddy for the hostnames. A provider supplies what its cloud decides: the
    identity environment, its storage schemes, the command that prints the machine's public
-   address, the command that downloads a storage URL with the machine's identity, lines of its
+   address, the command that downloads a storage URL with the machine's identity (for wheels a
+   host run from a checkout uploaded: each address is `<url>#sha256=<hex>`, in
+   `TLC_NODE_AGENT_WHEEL_URLS` for a node and a deployment alike, and a boot script MUST verify
+   the digest of every file it downloads before installing it and fail the boot, with a `3LC_BOOT`
+   line, when it differs, never installing from the index instead; an address without a digest
+   is refused when the script is rendered), lines of its
    own before the install and after the services start, and whether TLS ends on the machine
    (waiting for its names to resolve to it before the first certificate request) or at a load
    balancer in front of it.
