@@ -369,6 +369,7 @@ def _redacted(text: str) -> str:
 def test_one_masking_function_covers_every_shape_a_secret_takes_in_a_log() -> None:
     secrets = {
         "service key": "tlc_svc_AbC123-xyz_9",
+        "short service key": "tlc_svc_leaked123",
         "boot token": "tlc_boot_0123456789abcdefABCDEF",
         "bearer": "eyJhbGciOiJSUzI1NiJ9.payload-part.sig_nature",
         "json": "s3cr3t value, with spaces",
@@ -380,7 +381,7 @@ def test_one_masking_function_covers_every_shape_a_secret_takes_in_a_log() -> No
         "base64": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=",
         "hex": "0123456789abcdef0123456789abcdef",
     }
-    log = f"""auth failed for {secrets["service key"]}
+    log = f"""auth failed for {secrets["service key"]} and {secrets["short service key"]}
 redeeming {secrets["boot token"]} failed
 Authorization: bearer {secrets["bearer"]}
 body {{"api_key": "{secrets["json"]}", "name": "kept"}}

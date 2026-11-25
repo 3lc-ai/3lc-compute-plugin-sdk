@@ -408,14 +408,16 @@ _SECRET_NAME = "(" + "|".join(_any_case(w) for w in ("key", "token", "secret", "
 _Q = "'\"'\"'"
 
 #: Shell function ``redact``: a filter that masks secrets in log lines before they reach the console.
-#: Every boot script pipes what it prints of a log through it. In order: a 3LC token of any kind
-#: (``tlc_<kind>_…``, twenty characters or more: service keys, bootstrap tokens), a ``Bearer`` value,
+#: Every boot script pipes what it prints of a log through it. In order: a service key of any length
+#: (``tlc_svc_…``), a 3LC token of any other kind (``tlc_<kind>_…``, twenty characters or more: a
+#: bootstrap token, a personal key), a ``Bearer`` value,
 #: a quoted ``"…key…": "value"`` pair (JSON, or a Python repr), a ``NAME_WITH_KEY=value`` assignment,
 #: and a run of 24 or more base64, hex or URL-safe characters within two words after a name that says secret. The
 #: names are ``key``, ``token``, ``secret``, ``password`` and ``credential``, anywhere in a name.
 REDACT_FUNCTION = (
     r"""redact() {
-  sed -E -e 's/(tlc_[A-Za-z0-9]+_)[A-Za-z0-9_-]{12,}/\1REDACTED/g' \
+  sed -E -e 's/tlc_svc_[A-Za-z0-9_-]+/tlc_svc_REDACTED/g' \
+    -e 's/(tlc_[A-Za-z0-9]+_)[A-Za-z0-9_-]{12,}/\1REDACTED/g' \
     -e 's/(@BEARER@ +)[A-Za-z0-9._~+\/=-]+/\1REDACTED/g' \
     -e 's/(["@Q@][A-Za-z0-9_.-]*@NAME@[A-Za-z0-9_.-]*["@Q@] *: *["@Q@])[^"@Q@]*/\1REDACTED/g' \
     -e 's/([A-Za-z0-9_]*@NAME@[A-Za-z0-9_]*=)[^[:space:]]*/\1REDACTED/g' \
