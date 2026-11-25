@@ -197,7 +197,7 @@ Pricing = Literal["on_demand", "spot"]
 #: has, or not at all.
 NodeStorageAccess = Literal["identity", "ambient", "none"]
 CatalogPurpose = Literal["gpu_node", "cpu_node", "deployment"]
-GrantUpdateStatus = Literal["pending", "ready", "applied", "no_changes", "failed"]
+GrantUpdateStatus = Literal["pending", "ready", "applied", "no_changes", "permission_required", "failed"]
 
 
 # ── Errors ─────────────────────────────────────────────────────────────────────
@@ -783,10 +783,12 @@ class GrantUpdate(Wire):
     """Where a reviewed change to the grant stands. Prepared by 3LC, applied by the customer.
 
     Attributes:
-        status: ``pending``, ``ready``, ``applied``, ``no_changes`` or ``failed``; an unreadable
-            one reads as ``failed``.
+        status: ``pending``, ``ready``, ``applied``, ``no_changes``, ``permission_required`` (an
+            administrator must allow the Connection to prepare updates before one can be prepared;
+            ``detail`` says what to do) or ``failed``; an unreadable one reads as ``failed``.
         detail: The provider's own sentence for the state.
-        review_url: Where the customer reviews and applies the change; ``ready`` only.
+        review_url: Where the customer reviews and applies the change when ``ready``; in another
+            state, where the grant itself can be inspected, when the provider has such a page.
         revision: The revision of the installed permissions.
         pending_revision: The revision the change brings.
     """

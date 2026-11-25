@@ -713,9 +713,11 @@ One JSON example per type, as `FakeProvider` emits it, is in the SDK repository 
   Connection before the person follows the link. With `action="update"`, answer a link or files
   that change the existing grant in place, never a create link. 3LC never applies a grant.
 - **`prepare_grant_update(request)`** is for a cloud with a reviewed change (a change set). It
-  runs under the Connection and prepares, never executes; it answers one of five states
-  (`pending`, `ready`, `applied`, `no_changes`, `failed`) with your own sentence in `detail` and
-  the `review_url` where the customer applies it. Without a reviewed change, do not implement
+  runs under the Connection and prepares, never executes; it answers one of six states
+  (`pending`, `ready`, `applied`, `no_changes`, `permission_required`, `failed`) with your own
+  sentence in `detail` and the `review_url` where the customer applies it (in another state, where
+  the grant can be inspected). `permission_required` means an administrator must first allow the
+  Connection to prepare updates. Without a reviewed change, do not implement
   it: your update is `describe_grant(action="update")`.
 - **`verify_connection(request)`** runs under the Connection, after the SDK resolved it. Answer
   who the credential is (`identity`), the `account` your cloud's API says it is in (as your

@@ -382,7 +382,7 @@ class Grant:
     notes: list[str] = field(default_factory=list)            # everything else: revoking, verifying
 
 
-GrantUpdateStatus = Literal["pending", "ready", "applied", "no_changes", "failed"]
+GrantUpdateStatus = Literal["pending", "ready", "applied", "no_changes", "permission_required", "failed"]
 
 
 @dataclass
@@ -408,7 +408,7 @@ class GrantUpdateRequest:
 class GrantUpdate:
     status: GrantUpdateStatus
     detail: str = ""                   # the provider's own sentence for the state
-    review_url: str = ""               # where the customer reviews and applies the change; `ready` only
+    review_url: str = ""               # `ready`: where the change is reviewed and applied; else the grant's page, if any
     revision: int = 0
     pending_revision: int = 0
 
@@ -476,9 +476,11 @@ def storage_candidates(self) -> StorageCandidates: ...
   person follows the link (on AWS: `role_arn`, `node_instance_profile`).
 - **`prepare_grant_update`** is for a provider whose cloud has a reviewed change (a change set).
   It runs under the Connection and prepares, never executes (`aws:connection_updates.py:42-174`).
-  The five states are the ones any provider can produce; a provider says more in `detail`
-  (the AWS plugin's eight states collapse as `waiting`, `preparing`, `applying` into `pending`,
-  and `permission_required` into `failed`). A provider without a reviewed change does not
+  The six states are the ones any provider can produce; a provider says more in `detail`
+  (the AWS plugin's eight collapse as `waiting`, `preparing`, `applying` into `pending`).
+  `permission_required` is a person's to act on: an administrator must first allow the
+  Connection to prepare updates, and `detail` says so. In a state other than `ready`,
+  `review_url` is where the grant itself can be inspected (on AWS, the stack). A provider without a reviewed change does not
   implement it; its update is `describe_grant(action="update")`.
 - **`verify_connection`** runs under the Connection, after the SDK resolved it. A step that fails
   raises; a sample that could not be confirmed is a `warn` check; a refused operation is an
