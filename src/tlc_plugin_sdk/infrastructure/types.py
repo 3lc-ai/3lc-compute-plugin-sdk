@@ -1798,10 +1798,13 @@ class SweepItem(Wire):
     Attributes:
         deployment_id: The launcher's id.
         provider_id: The provider's id, when the launcher learned it.
+        name: The deployment's name as the person gave it; a provider matches records an older
+            release of it wrote by name.
     """
 
     deployment_id: str
     provider_id: str = ""
+    name: str = ""
 
 
 @dataclass
@@ -1813,17 +1816,21 @@ class SweepRequest(Wire):
         gone: Dead: what they left may be removed.
         locations: Where to look; the provider adds the Connection's default location.
         grace_s: How old an unowned resource must be before it is released.
+        zone: The launcher's zone, when it has one. The provider reads it only for records an
+            older release of the provider wrote there itself, in the shape and with the owner
+            values that release used; records the launcher wrote are never the provider's.
     """
 
     keep: list[SweepItem] = field(default_factory=list)
     gone: list[SweepItem] = field(default_factory=list)
     locations: list[str] = field(default_factory=list)
     grace_s: float = 600.0
+    zone: DnsZone | None = None
 
 
 @dataclass
 class SweepReport(Wire):
-    """What a sweep did. It never touches DNS.
+    """What a sweep did. It touches no DNS record the launcher wrote.
 
     Attributes:
         complete: Whether every location was swept.

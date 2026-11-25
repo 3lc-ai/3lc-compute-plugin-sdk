@@ -994,6 +994,7 @@ class DeploymentResponse:
 class SweepItem:
     deployment_id: str
     provider_id: str = ""
+    name: str = ""                     # the name as given; matches records an older release wrote
 
 
 @dataclass
@@ -1002,6 +1003,7 @@ class SweepRequest:
     gone: list[SweepItem] = field(default_factory=list)   # dead: what they left may be removed
     locations: list[str] = field(default_factory=list)
     grace_s: float = 600.0
+    zone: DnsZone | None = None        # the launcher's zone, when it has one
 
 
 @dataclass
@@ -1122,6 +1124,12 @@ Afterwards:
   from `DeploymentResponse.location` of the deployments it tracks on that Connection, as it does
   today (`compute:infra/manager.py:690-693`, `:3357`); the provider adds the Connection's
   default location. A location no tracked deployment was ever in is not swept.
+  The one exception to "never touches DNS" is what an older release of the provider wrote in
+  the zone itself, before the launcher owned the names: the launcher sends its `zone` and the
+  items' `name`, and the provider sweeps those records by the rules that release used, matching
+  only that release's name shapes and owner values. It never touches a record whose owner value
+  is the launcher's, and the launcher never deletes a record whose owner value it cannot read
+  (2.6). The AWS plugin's legacy zone pass is the instance of this (`aws:sweep.py`).
 
 **How a deployment starts its own nodes.** A deployment's Compute Service asks the Config
 Service for grants on the Connection it was launched through, like any Compute Service of that

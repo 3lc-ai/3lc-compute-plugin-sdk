@@ -5,18 +5,24 @@
     "keep": [
       {
         "deployment_id": "dep-1",
-        "provider_id": "fake-dep-dep-1"
+        "provider_id": "fake-dep-dep-1",
+        "name": "Apollo"
       }
     ],
     "gone": [
       {
         "deployment_id": "dep-0",
-        "provider_id": ""
+        "provider_id": "",
+        "name": "Gemini"
       }
     ],
     "locations": [
       "fake-1"
     ],
-    "grace_s": 600.0
+    "grace_s": 600.0,
+    "zone": {
+      "id": "Z0FAKE",
+      "name": "deploy.example.com"
+    }
   }
 }

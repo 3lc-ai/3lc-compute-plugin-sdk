@@ -302,9 +302,10 @@ def _fake_examples(root: Path) -> dict[str, dict[str, Any]]:
         )
         r.call("GET", "/infra/deployments", "DeploymentListing")
         sweep = SweepRequest(
-            keep=[SweepItem(deployment_id="dep-1", provider_id="fake-dep-dep-1")],
-            gone=[SweepItem(deployment_id="dep-0")],
+            keep=[SweepItem(deployment_id="dep-1", provider_id="fake-dep-dep-1", name="Apollo")],
+            gone=[SweepItem(deployment_id="dep-0", name="Gemini")],
             locations=["fake-1"],
+            zone=_ZONE,
         )
         fake.leftovers.append("fake:address/203.0.113.250")
         r.call("POST", "/infra/deployments/sweep", "SweepReport", body=sweep.to_dict(), request="SweepRequest")

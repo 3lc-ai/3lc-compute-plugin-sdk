@@ -3,6 +3,7 @@
   "route": "SweepRequest.keep",
   "example": {
     "deployment_id": "dep-1",
-    "provider_id": "fake-dep-dep-1"
+    "provider_id": "fake-dep-dep-1",
+    "name": "Apollo"
   }
 }
