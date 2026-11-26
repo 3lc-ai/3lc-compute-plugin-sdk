@@ -637,6 +637,7 @@
           .then(function (now) { mirrorAddress(now); return now; });
       };
     }
+    if (has('automations')) api.automations = { configure: function (options) { return call('automations.configure', [options]); } };
     if (has('assistant')) api.assistant = { open: function () { return call('assistant.open', []); } };
     if (has('identity:name')) api.identity = { name: function () { return call('identity.name', []); } };
     // The page's actions, offered to the Hub's registry so the deployment's MCP and the chat can drive the

@@ -401,6 +401,8 @@ export interface PluginApi {
     confirmCancel(jobId: string): Promise<{ status?: string; deleted?: boolean; [key: string]: unknown }>;
   };
   pickers?: { table(): Promise<string | null> };
+  /** Open a durable template setup in Hub. Does not enable or execute an automation. */
+  automations?: { configure(options: { templateId: string; project?: { name: string; rootUrl: string }; settings: Record<string, string | number | boolean | string[]> }): Promise<{ opened: boolean; id: string }> };
   /** Open Hub Assistant without sending a message or replacing a draft. */
   assistant?: { open(): Promise<{ opened: boolean }> };
   /** Read-only directory for this deployment's verified organization; requires organization:directory. */

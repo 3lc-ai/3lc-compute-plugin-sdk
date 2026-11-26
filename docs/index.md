@@ -36,6 +36,7 @@ implement.
 
 plugin-guide
 browser-runtime
+automation-ready-plugins
 agent-guide
 api
 ```

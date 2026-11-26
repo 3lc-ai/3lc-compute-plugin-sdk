@@ -71,6 +71,19 @@ test suite. Both are on the 0.6 line, the contract the Hub and Compute Service 1
 
 ---
 
+## Manual work → automation → results
+
+Build plugins so a successful manual task can become a reviewable recurring
+workflow using the same native configuration and execution path. The
+[automation-ready plugin guide](automation-ready-plugins.md) covers saved recipes,
+the optional `PLUGIN_API.automations.configure` handoff (SDK 0.7.19), template
+ownership, durable observation, progress, human-review gates, result/share links,
+recovery and the end-to-end acceptance checks.
+
+This is the authoring contract for tools that participate in Flow; merely adding
+an “Automate this” button is insufficient. Manual plugin use must remain available
+when Flow is unavailable. Do not add plugin-specific behavior to the Hub.
+
 ## Plugin Types
 
 | `display_mode` | Where it appears | Example |

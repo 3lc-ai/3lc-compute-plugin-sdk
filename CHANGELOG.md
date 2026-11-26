@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.19
+
+- Add the automation-ready plugin authoring guide: saved recipes, declared handoffs, durable input observation, progress/review/result contracts, and integrated acceptance checks.
+
+- Add the optional `automations` browser capability and `PLUGIN_API.automations.configure({templateId, settings})`. It opens a declared automation template for review using the host's current project and compute destination. It does not enable or run an automation.
+- Setup returns `{opened, id}`. The host persists owner-scoped, expiring prefill; plugin code passes connection identifiers rather than secrets. Feature-detect the optional API on older hosts.
+- Runtime, TypeScript declaration, browser-runtime guide and agent guide are updated together. `tests/test_frame_runtime.py` verifies capability gating and message forwarding; the nine runtime tests pass.
+
 ## 0.7.14
 
 - Expose exact table parent URLs and original-table status through the shared project catalog.

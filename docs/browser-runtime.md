@@ -240,3 +240,25 @@ must not mark an automation step complete from a matching link or a successful U
 request. Use the host's verified continuation preview and confirmation. Preserve
 the old attempt and all later review/publication approvals. Closing the plugin
 frame must never cancel a resumed remote job.
+
+### Automation setup handoff (SDK 0.7.19)
+
+Declare the optional `automations` UI capability and feature-detect
+`PLUGIN_API.automations`. `await API.automations.configure({templateId, settings})`
+opens a Hub-owned template setup for the current project and compute destination.
+The template must be offered by this plugin in the host's template catalog; settings
+must match its declared fields. Pass connection identifiers, never credentials.
+
+The host stores an owner-scoped setup intent for 48 hours, so refresh does not lose
+its inputs. The user can change them, review the native steps, save the automation
+and explicitly enable it. Calling `configure` never starts a job or grants ongoing
+authority. A missing capability or unavailable template must produce an actionable
+message; do not silently substitute a one-off job or a browser-only timer.
+
+See [Build a plugin that works manually and in Flow](automation-ready-plugins.md)
+for the implementation sequence, complete handoff example and release checks.
+
+For a tool opened without a project launch context, `automations.configure` accepts
+optional `project: {name, rootUrl}` from its saved result or explicit form selection.
+Conflicts with an existing launch context are refused. This only prefills reviewed
+setup; it does not grant access or authorize execution.

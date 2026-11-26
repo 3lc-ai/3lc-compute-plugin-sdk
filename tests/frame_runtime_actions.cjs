@@ -31,8 +31,15 @@ async function main() {
   await directoryPage.context.PLUGIN_API.organization.directory();
   assert.equal(directoryPage.posted.at(-1).method, 'organization.directory');
   assert.deepEqual(Array.from(directoryPage.posted.at(-1).args), []);
+  const automationPage = page(['automations']);
+  await new Promise(setImmediate);
+  const options = {templateId: 'observe_image_folder', settings: {input_folder: 's3://data/new'}};
+  await automationPage.context.PLUGIN_API.automations.configure(options);
+  assert.equal(automationPage.posted.at(-1).method, 'automations.configure');
+  assert.equal(JSON.stringify(automationPage.posted.at(-1).args), JSON.stringify([options]));
   const older = page([]);
   await new Promise(setImmediate);
+  assert.equal(older.context.PLUGIN_API.automations, undefined);
   assert.equal(older.context.PLUGIN_API.actions, undefined, 'no registry on an older Hub: pages feature-detect');
 
   const {context, port, posted, events} = page(['actions']);
