@@ -147,3 +147,30 @@ results; it rejects symlinks (including directory components) and hardlinks.
 Keep all credentials and network transport in trusted parent code. The existing
 `data_broker`/`data_access` modules provide read-only native 3LC access through a
 bounded parent-side RPC channel; do not pass broker credentials into generated code.
+
+### Native continuation receipts
+
+A job tool may declare `job.continuation`, an optional **GET** route using the same
+path/query rules as a read-only tool. The host supplies the original tool arguments
+and `original_operation_id` from its saved job output. The resolver must authenticate
+the caller and attest the exact persisted native operation chain; matching a UI link
+is not sufficient. Never start work, change a review, or cancel a job in this route.
+
+The version 1 response contains `version: 1`, an opaque `scope_key`, ordered
+`attempts` (each with `operation_id`, `parent_operation_id` and `job_id`),
+`completes_original_effect` and `result` in the original job tool's output schema.
+The first attempt must be the requested original operation. The last must be the
+unique current descendant. Check immutable inputs, selectors, instructions, policy,
+owner, project and target across the chain. Reject missing records, siblings, changed
+scopes and unsettled requests. Return `completes_original_effect: false` for active,
+failed or partial work. Terminal job success does not imply review, publication or
+other downstream gates are complete. Hosts independently verify authorized native
+job receipts and adopt only completed effects; the original failed attempt stays in
+history. Browser teardown still must never cancel remote work.
+
+For a wait step, a native status result may supply the generic `progress.label`
+and `subtitle` presentation fields (for example “Waiting for review” and the
+remaining count). The Hub renders these only for that execution's waiting action.
+Keep the machine-readable completion conditions independent of these labels;
+finishing an AI job is not a human-review sign-off. Supply `ui_link` for the exact
+review so users can resolve the wait directly.

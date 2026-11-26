@@ -164,6 +164,21 @@ def parse_mcp_tools(raw: object) -> tuple[McpTool, ...]:
                         }
                     ])[0]
                     prepared[key] = checked.route
+            if "continuation" in job:
+                candidate = job["continuation"]
+                if not isinstance(candidate, dict) or candidate.get("method") != "GET":
+                    msg = "Job continuation resolvers must explicitly use GET"
+                    raise ValueError(msg)
+                fields = {**dict(schema.get("properties") or {}), "original_operation_id": {"type": "string"}}
+                checked = parse_mcp_tools([
+                    {
+                        "name": name,
+                        "description": description,
+                        "input_schema": {**schema, "properties": fields},
+                        "route": candidate,
+                    }
+                ])[0]
+                prepared["continuation"] = checked.route
             job = {
                 "body": dict(job.get("body", {})),
                 "outputs": list(outputs),

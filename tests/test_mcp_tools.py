@@ -221,3 +221,47 @@ def test_typed_metadata_and_packaged_file_are_validated(tmp_path: Path) -> None:
         load_mcp_section({"tools_file": "tools.json", "tools": [tool]}, tmp_path)
     with pytest.raises(ValueError, match="table"):
         load_mcp_section("wrong", tmp_path)
+
+
+def test_native_continuation_resolver_survives_wire_roundtrip():
+    raw = [
+        {
+            "name": "assess",
+            "description": "Assess selected records",
+            "input_schema": {"type": "object", "properties": {"review_id": {"type": "string"}}},
+            "job": {
+                "body": {},
+                "continuation": {
+                    "method": "GET",
+                    "path": "/reviews/{review_id}/continuations",
+                    "query": ["original_operation_id"],
+                },
+            },
+        }
+    ]
+    tools = parse_mcp_tools(raw)
+    assert tools[0].job["continuation"] == raw[0]["job"]["continuation"]
+    assert parse_mcp_tools(mcp_tools_as_wire(tools))[0].job == tools[0].job
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        {"method": "POST", "path": "/continuations"},
+        {"path": "/continuations"},
+        {"method": "GET", "path": "/../continuations"},
+        {"method": "GET", "path": "/run"},
+        {"method": "GET", "path": "/continuations", "query": ["run_target"]},
+        {"method": "GET", "path": "/continuations", "query": ["undeclared"]},
+    ],
+)
+def test_continuation_resolver_cannot_write_or_escape_plugin_routes(route):
+    with pytest.raises(ValueError):
+        parse_mcp_tools([
+            {
+                "name": "assess",
+                "description": "Assess",
+                "input_schema": {"type": "object"},
+                "job": {"body": {}, "continuation": route},
+            }
+        ])

@@ -231,3 +231,12 @@ provisioning and disables idle shutdown. Use `purpose: "compute"` for ordinary
 batch nodes. The shared node list displays reservations and applies the caller's
 management permissions. Use the returned server permissions for controls; never
 infer them from client-side role names.
+
+### Resuming native work in Flow
+
+An optional read-only `job.continuation` resolver (see the agent guide) allows the
+host to verify that a native resume completed the original operation. A browser
+must not mark an automation step complete from a matching link or a successful UI
+request. Use the host's verified continuation preview and confirmation. Preserve
+the old attempt and all later review/publication approvals. Closing the plugin
+frame must never cancel a resumed remote job.
