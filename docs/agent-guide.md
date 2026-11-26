@@ -30,6 +30,10 @@ build configuration before edits. Do not import host internals or copy a private
    Save and explicitly restore the whole form, including tables, project and run name.
    External table/folder launches start fresh from defaults plus those inputs, visibly modified;
    they must never resume an old setup. Bare/project launches may resume their scoped draft.
+   For primary-table-driven forms, use the shared `tableContext` / `tableResolved` integration:
+   derive the project on manual table changes, retain settings within a source project, and reset
+   to defaults with Undo across projects. Return source identity through `table_project_context`
+   after opening the table with 3LC. Saved preset picks preserve explicit output overrides.
    Clear drafts only after a job is accepted. Saving a preset and submitting a job are separate actions.
 
 ## Verification required before delivery

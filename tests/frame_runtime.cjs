@@ -39,13 +39,15 @@ async function main() {
     let value;
     if (message.method === 'data.snapshot') value = {};
     else if (message.method === 'jobs.cancel') value = {cancelled: true};
+    else if (message.method === 'ui.confirm') value = true;
     else if (message.method === 'compute.request' && message.args[0].endsWith('/run')) {
       sockets[0].onevent({data: ['job_update', {id:'early', status:'completed'}]});
       value = {status:200, body:JSON.stringify({job_id:'early', namespace:'/one'}), headers:{}};
     } else return;
     queueMicrotask(() => this.onmessage({data:{v:1,type:'reply',id:message.id,ok:true,value}}));
   }};
-  const init = {data: {v:1,type:'init',pluginId:'one',config:{compute_service_url:'https://compute.test'},html:'hello'},
+  const init = {data: {v:1,type:'init',pluginId:'one',config:{compute_service_url:'https://compute.test'},html:'hello',
+    components:{nodeList:'var TlcNodeList = {mount: function (el, opts) { globalThis.nodeListOptions = opts; return {refresh: function () {}, destroy: function () {}}; }};'}},
     source:parent,origin:'https://hub.test',ports:[port]};
   events.message({...init, origin:'https://evil.test'}); assert(!context.PLUGIN_API);
   events.message({...init, source:{}}); assert(!context.PLUGIN_API);
@@ -61,6 +63,13 @@ async function main() {
   // Legacy helper cancellation cancels at once, exactly once (the dialog is jobs.confirmCancel).
   await context.PluginJobs.cancel('early');
   assert.equal(apiCalls.filter(x => x.method === 'jobs.cancel').length, 1);
+  // ui.confirm is the Hub's question; the node list a page mounts asks through it (the frame has no dialog).
+  const lastConfirm = () => JSON.stringify(apiCalls.filter(x => x.method === 'ui.confirm').at(-1).args);
+  assert.equal(await API.ui.confirm('Remove it?', 'Gone for good.', {okLabel: 'Remove', danger: true}), true);
+  assert.equal(lastConfirm(), JSON.stringify(['Remove it?', 'Gone for good.', {okLabel: 'Remove', danger: true}]));
+  API.nodes.mount({});
+  assert.equal(await context.nodeListOptions.confirm('Terminate gpu-1?', 'A running job fails.', 'Terminate', true), true);
+  assert.equal(lastConfirm(), JSON.stringify(['Terminate gpu-1?', 'A running job fails.', {okLabel: 'Terminate', danger: true}]));
   let nav = 0; const off = API.nav.onChange(() => nav++);
   port.onmessage({data:{v:1,type:'event',name:'nav',value:{}}}); off();
   port.onmessage({data:{v:1,type:'event',name:'nav',value:{}}}); assert.equal(nav, 1);

@@ -421,7 +421,18 @@ export interface PluginApi {
    */
   layout?: { mode: 'flow' | 'fill' };
   format?: { date(value: string | number, mode?: string): string };
-  ui?: { toast(message: string, kind?: string): void };
+  /**
+   * `toast` shows a Hub notification. `confirm` asks the Hub's yes/no question over the whole window,
+   * headed with the plugin's name, and resolves true when the person confirms; Cancel, Escape and a
+   * click beside it resolve false. `danger` styles the answer button as destructive. It rejects with
+   * code `busy` while another of the Hub's dialogs is open (a question, a picker, a chooser), `invalid`
+   * without a title, and `timeout` when nobody answers within 10 minutes (the dialog closes; treat it as
+   * Cancel). Framed hosts only.
+   */
+  ui?: {
+    toast(message: string, kind?: string): void;
+    confirm(title: string, body?: string, options?: { okLabel?: string; danger?: boolean }): Promise<boolean>;
+  };
   identity?: { name(): Promise<string> };
 
   /** Launch context (resource type/urls + project). */

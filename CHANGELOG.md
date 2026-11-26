@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value, or with a value granted for another Connection or service, answers 424.
   `CapabilitiesResponse.node_type_connections` names the Connection each node type acts on. Needs a
   Compute Service 1.3 or later.
+- Add primary-table project transitions to the shared preset controller: derive the output
+  project, retain same-project settings, reset defaults across projects with Undo, and preserve
+  explicit saved setups. Scope drafts to the current source project and ignore stale/failed reads.
+- Add `table_project_context` to obtain source identity from an opened 3LC table without row reads.
 
 - Linux/macOS workers support isolated job processes, with per-job cancellation and cleanup of
   child processes. The optional `prepare_job(ctx)` hook hands transient inputs from the serving
@@ -29,6 +33,8 @@ written for inline hosts need migrating.
   `PLUGIN_API.compute` cannot pass on an inline host).
 - `jobs.cancel` cancels at once and resolves the compute's `{cancelled}`; `jobs.confirmCancel`
   opens the Hub's stop dialog. Legacy `PluginJobs.cancel` cancels; `CancelJob` confirms.
+- `ui.confirm(title, body, {okLabel, danger})` asks the Hub's yes/no question over the whole
+  window and resolves true when confirmed. The node list `nodes.mount` draws asks through it.
 - `[ui] layout = "fill"`, `nav.href`, a frame address that follows the Hub's, and
   `storage.choose/remembered`.
 - The Hub's stylesheets and libraries may arrive as text (`{css}`, `{js}`): the frame's `ready`
@@ -60,8 +66,12 @@ written for inline hosts need migrating.
   to clear an accepted job's draft without changing its saved preset.
 - Open Save as in a themed naming dialog while keeping the preset bar stable, with keyboard
   dismissal, focus restoration and visible save errors.
+- `config_store.config_root()` reads the `TLC_PLUGIN_CONFIG_DIR` environment variable, per call, after
+  the in-process `CONFIG_ROOT` override and before `~/.3lc-plugin-configs`, so a host can give its
+  workers their own saved-config root. A store under that root does not migrate a `legacy_dir`.
 
 ## [Unreleased]
+
 
 ### Added
 

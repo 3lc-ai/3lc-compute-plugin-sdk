@@ -73,6 +73,7 @@ Capture `const API = window.PLUGIN_API` inside your fragment. Prefer these names
 | `identity.name` | Optional display name; requires `identity:name` capability |
 | `data` | Frame-local snapshot of the host's data catalog; load before synchronous getters |
 | `ui.toast`, `format.date`, `dashboardUrl` | Presentation helpers |
+| `ui.confirm` | The Hub's yes/no question, over the whole window; `busy` while another Hub dialog is open, `timeout` after 10 minutes (treat as Cancel) |
 | `libs` | Available shared libraries; check for null before using |
 | `getRunTarget/onRunTargetChange` | Selected execution target and changes |
 | `lifecycle.onDispose(fn)` | Register cleanup; returns unregister function |

@@ -153,6 +153,7 @@ function _tlcPluginPresets(opts) {
   var defaults = opts.defaults || function () { return {}; };
   var inputs = opts.inputs || [];
   var contextInputs = opts.contextInputs || function () { return null; };
+  var tableContext = opts.tableContext || null;
   var autoName = opts.autoName || function () { return pluginId + " preset"; };
   var summary = opts.summary || function () { return ""; };
   var draftDelay = opts.draftDelay == null ? 300 : opts.draftDelay;
@@ -192,10 +193,16 @@ function _tlcPluginPresets(opts) {
   var inList = false;                                  // the Hub's list deletes presets (TlcPicker.onRemove)
   var els = {};
   var applying = false;
+  var applyingInput;
+  var activeApply = Promise.resolve();
   var saving = false;
   var initialized = false;
   var applyChain = Promise.resolve();
   var scopeKey = "";
+  var tableIdentity = null;
+  var lastForm = null;
+  var tableUndo = null;
+  var tableNoticeTimer = null;
 
   /* ── Host access ── */
   function api() { return (typeof window !== "undefined" && window.PLUGIN_API) || {}; }
@@ -248,7 +255,9 @@ function _tlcPluginPresets(opts) {
           '<button type="button" class="btn btn-secondary btn-sm" id="' + m + '-saveas">Save as…</button>' +
           '<button type="button" class="btn btn-ghost btn-sm tlc-presets-icon" id="' + m + '-delete"' +
             ' title="Delete this preset" aria-label="Delete this preset">' + TRASH + '</button>' +
-          '<span class="tlc-presets-note" id="' + m + '-note"></span>' +
+          '<span class="tlc-presets-note" id="' + m + '-note" role="status" aria-live="polite"></span>' +
+          '<button type="button" class="btn btn-ghost btn-sm" id="' + m + '-undo-table"' +
+            ' style="display:none">Undo</button>' +
         '</span>' +
       '</div>' +
       '<dialog class="modal-box tlc-presets-dialog" id="' + m + '-save-dialog"' +
@@ -272,12 +281,13 @@ function _tlcPluginPresets(opts) {
         '</div>' +
       '</dialog>';
     ["bar", "select", "name", "mode-pick", "saveas", "update", "delete", "note", "save-dialog", "save-btn",
-     "cancel-btn", "close-btn", "save-note"].forEach(function (s) {
+     "cancel-btn", "close-btn", "save-note", "undo-table"].forEach(function (s) {
       els[s] = el(s);
     });
   }
 
   function bind() {
+    if (els["undo-table"]) els["undo-table"].addEventListener("click", function () { undoTableChange(); });
     if (els.select) els.select.addEventListener("change", function () {
       pick(els.select.value).catch(function () {}); // pick reports the error
     });
@@ -458,11 +468,18 @@ function _tlcPluginPresets(opts) {
     var was = isModified;
     var current;
     try { current = collect() || {}; } catch (e) { return; }
+    // Keep the last complete setup while a new primary input is being resolved.
+    // Partial URLs and failed reads must neither destroy it nor overwrite its draft.
+    if (tableContext && tableIdentity && contextValue(current, tableContext.input) !== tableIdentity.url) {
+      if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+    } else {
+      lastForm = clone(current);
+      scheduleDraft(current);
+    }
     isModified = originValues != null && comparable(current) !== comparable(originValues);
     if (was !== isModified) rebuildSelect();
-    scheduleDraft(current);
   }
-  function changed() { recompute(); }
+  function changed() { if (!applying) clearTableUndo(); recompute(); }
   function scheduleDraft(current) {
     if (draftTimer) clearTimeout(draftTimer);
     draftTimer = setTimeout(function () { draftTimer = null; writeDraft(current); }, draftDelay);
@@ -476,24 +493,29 @@ function _tlcPluginPresets(opts) {
       }));
     } catch (e) { /* storage may be full or blocked */ }
   }
-  function readDraft() {
+  function readDraft(key) {
     var s = storage();
     if (!s) return null;
     try {
-      var raw = s.getItem(draftKey());
+      var raw = s.getItem(key || draftKey());
       var draft = raw ? JSON.parse(raw) : null;
       return draft && draft.values && typeof draft.values === "object" ? draft : null;
     } catch (e) { return null; }
   }
   /* ── Applying ── */
-  function applyValues(values) {
+  function applyValues(values, resolvedTable) {
     applying = true;
+    applyingInput = tableContext ? contextValue(values, tableContext.input) : undefined;
+    tableIdentity = null;
     if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
     busy();
-    return Promise.resolve().then(function () { return apply(clone(values)); }).finally(function () {
+    activeApply = Promise.resolve().then(function () {
+      return apply(clone(values), resolvedTable);
+    }).finally(function () {
       applying = false;
       busy();
     });
+    return activeApply;
   }
   function settle(newOrigin) {
     origin = newOrigin;
@@ -503,6 +525,7 @@ function _tlcPluginPresets(opts) {
     recompute();
   }
   function pick(id) {
+    clearTableUndo();
     closeSave();
     var p = id ? byId(id) : null;
     var own = p ? valuesOf(p) : (defaults() || {});
@@ -513,6 +536,92 @@ function _tlcPluginPresets(opts) {
     return applyChain.catch(function (e) {
       toast("Could not open preset: " + (e && e.message ? e.message : e), "error");
       throw e;
+    });
+  }
+
+  /* The plugin calls this after reading its primary table, before updating task/model UI.
+   * During apply (initial launch, preset selection or Undo) it records identity only.
+   * A manual input change derives the destination and resets defaults only across projects.
+   * The optional second apply argument reuses this read instead of fetching the table twice. */
+  function tableResolved(url, info) {
+    if (!tableContext || !info || info.error) return Promise.resolve(false);
+    if (contextValue(collect(), tableContext.input) !== url) return Promise.resolve(false);
+    var next = {url: url, info: clone(info)};
+    // A person may enter another table while model controls from an apply are still loading.
+    // That answer is a new input, not metadata belonging to the in-progress saved setup.
+    if (applying && url !== applyingInput) {
+      return activeApply.then(function () { return tableResolved(url, info); });
+    }
+    if (applying || !initialized) {
+      tableIdentity = next;
+      if (info.project_url) scopeKey = tableScope(info.project_name, info.project_root_url);
+      return Promise.resolve(false);
+    }
+    if (tableIdentity && tableIdentity.url === url) return Promise.resolve(false);
+    // Unknown project metadata is not evidence of a different project.
+    if (!info.project_url || !info.project_name) return Promise.resolve(false);
+    applyChain = applyChain.catch(function () {}).then(function () {
+      if (contextValue(collect(), tableContext.input) !== url) return false;
+      if (tableIdentity && tableIdentity.url === url) return false;
+      return applyTableChange(url, info);
+    });
+    return applyChain;
+  }
+
+  function applyTableChange(url, info) {
+    var next = {url: url, info: clone(info)};
+    var previous = tableIdentity;
+    var reset = !!(previous && previous.info.project_url && previous.info.project_url !== info.project_url);
+    var undo = {values: clone(lastForm || collect()), origin: clone(origin), baseline: clone(originValues),
+      identity: previous, scope: scopeKey};
+    var current = clone(collect());
+    var values = reset ? clone(defaults()) : current;
+    if (reset) (tableContext.preserve || []).forEach(function (key) { values[key] = current[key]; });
+    values[tableContext.input] = url;
+    values[tableContext.project] = info.project_name;
+    // Preserve the old project's unfinished setup before moving to the new draft scope.
+    if (reset && lastForm) writeDraft(lastForm);
+    clearTableUndo();
+    return applyValues(values, next).then(function () {
+      if (contextValue(collect(), tableContext.input) !== url) {
+        tableIdentity = previous; scopeKey = undo.scope;
+        return true;
+      }
+      scopeKey = tableScope(info.project_name, info.project_root_url);
+      if (reset) {
+        origin = {kind: "defaults", id: "", name: ""};
+        originValues = originValuesFrom();
+        var d = defaults() || {};
+        originValues[tableContext.input] = d[tableContext.input] || "";
+        originValues[tableContext.project] = d[tableContext.project] || "";
+        tableUndo = undo;
+        setText(els.note, "Project changed to " + info.project_name + ". Settings reset.");
+        show(els["undo-table"]);
+        tableNoticeTimer = setTimeout(clearTableUndo, 15000);
+      }
+      rebuildSelect();
+      recompute();
+      return true;
+    });
+  }
+
+  function tableScope(project, root) {
+    return _tlcPresetStable({project: project || "", projectRoot: root || "",
+      objectService: (api().getConfig && api().getConfig("object_service_url")) || ""});
+  }
+  function clearTableUndo() {
+    if (tableNoticeTimer) { clearTimeout(tableNoticeTimer); tableNoticeTimer = null; }
+    if (tableUndo) setText(els.note, "");
+    tableUndo = null;
+    hide(els["undo-table"]);
+  }
+  function undoTableChange() {
+    if (!tableUndo || applying || saving) return Promise.resolve();
+    var undo = tableUndo;
+    clearTableUndo();
+    return applyValues(undo.values, undo.identity).then(function () {
+      origin = undo.origin; originValues = undo.baseline; scopeKey = undo.scope;
+      rebuildSelect(); recompute();
     });
   }
 
@@ -643,11 +752,14 @@ function _tlcPluginPresets(opts) {
       objectService: (api().getConfig && api().getConfig("object_service_url")) || "",
       projectRoot: (api().getConfig && api().getConfig("project_root_url")) || "",
     });
+    var legacyDraftKey = draftKey();
+    if (tableContext) scopeKey = tableScope((ctx || {}).project_name || (api().context || {}).projectName,
+      (api().getConfig && api().getConfig("project_root_url")) || "");
     return loadList().then(function () {
       // An explicit table/folder launch always means a new setup, even if those same
       // inputs were used earlier. Only a bare/project launch resumes an unfinished draft.
       var externalInputs = inputs.some(function (path) { return !!contextValue(ctx, path); });
-      var draft = externalInputs ? null : readDraft();
+      var draft = externalInputs ? null : (readDraft() || readDraft(legacyDraftKey));
       var start, newOrigin;
       if (draft) {
         start = draft.values;
@@ -665,9 +777,16 @@ function _tlcPluginPresets(opts) {
           isModified = false;
           rebuildSelect();
           recompute();
+          if (legacyDraftKey !== draftKey()) {
+            writeDraft(collect());
+            try { storage().removeItem(legacyDraftKey); } catch (e) {}
+          }
         });
       }
       start = Object.assign(clone(defaults()), clone(ctx));
+      // The opened primary table is authoritative for a fresh external launch.
+      // Saved presets and drafts keep their deliberately chosen output project.
+      if (tableContext && contextValue(ctx, tableContext.input)) start[tableContext.project] = "";
       return applyValues(start).then(function () {
         origin = {kind: "defaults", id: "", name: ""};
         originValues = originValuesFrom();
@@ -688,6 +807,7 @@ function _tlcPluginPresets(opts) {
   // The accepted job keeps its exact configuration. Reopening starts a fresh run; changing
   // fields in the still-open form creates a new draft. Never delete a draft on a failed submit.
   function submitted() {
+    clearTableUndo();
     // The plugin may have cleared its run name. Refresh the modified marker before
     // removing the draft, without saving or changing the named preset.
     recompute();
@@ -699,6 +819,8 @@ function _tlcPluginPresets(opts) {
   return {
     init: init,
     changed: changed,
+    tableResolved: tableResolved,
+    undoTableChange: undoTableChange,
     refresh: loadList,
     pick: pick,
     openSave: openSave,
