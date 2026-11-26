@@ -81,7 +81,7 @@
         ],
         "available": true,
         "unavailable_reason": "",
-        "preferred": true,
+        "preferred": false,
         "fields": [],
         "grants": false,
         "paste_back": []
@@ -97,7 +97,7 @@
         ],
         "available": true,
         "unavailable_reason": "",
-        "preferred": false,
+        "preferred": true,
         "fields": [
           {
             "key": "name_prefix",

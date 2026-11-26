@@ -636,7 +636,6 @@ class _Azure(_StorageDeclared, NodeProvider, DeploymentProvider, CatalogFacet):
                 label="Uses this machine's own sign-in",
                 summary="An az login session on this machine, or the managed identity of the VM it runs on.",
                 purposes=["deployments", "nodes", "storage"],
-                preferred=True,
             ),
             AccessMethod(
                 kind="KEYLESS",
@@ -647,6 +646,7 @@ class _Azure(_StorageDeclared, NodeProvider, DeploymentProvider, CatalogFacet):
                 ),
                 purposes=["deployments", "nodes", "storage"],
                 grants=True,
+                preferred=True,
                 fields=[
                     FormField(
                         key="name_prefix",
