@@ -13,9 +13,10 @@ import pytest
 from litestar import post
 
 from tlc_plugin_sdk import connections
-from tlc_plugin_sdk.connections import CONNECTION_HEADER, AwsSession, ConnectionBinding, encode_binding
+from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
 from tlc_plugin_sdk.contract import HubPlugin
 from tlc_plugin_sdk.harness import PluginHarness
+from tlc_plugin_sdk.infrastructure.testing import FakeCredential
 from tlc_plugin_sdk.shared import storage_transfer
 from tlc_plugin_sdk.shared.storage_transfer import TransferError, TransferRegistry, notify_storage_deletes
 
@@ -283,7 +284,7 @@ def test_a_describer_answering_a_non_str_never_strands_the_transfer() -> None:
 def _connection_seen() -> tuple[str | None, str | None]:
     binding = connections.current_connection()
     credential = connections.current_credential()
-    return (binding.id if binding else None, getattr(credential, "session_token", None))
+    return (binding.id if binding else None, getattr(credential, "access_token", None))
 
 
 class _RecordingStore(_Store):
@@ -321,7 +322,7 @@ def test_a_transfer_started_by_a_request_keeps_the_requests_connection_in_every_
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(connections, "_RESOLVERS", {})
-    connections.register_resolver("aws", "KEYLESS", lambda b: AwsSession("AKIA123", "secret", "session-1"))
+    connections.register_resolver("aws", lambda request: FakeCredential(request.binding.id, "session-1"))
     store = _RecordingStore(_OBJECTS)
     registry = _registry(store, workers=4, notify_change=lambda _u, _o: None)
 

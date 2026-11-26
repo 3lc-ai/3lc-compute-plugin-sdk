@@ -1,814 +1,700 @@
 # Copyright 2026 3LC Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Facets through the real worker app: what subclassing mounts, what the base merges, how errors answer."""
+"""The reference provider through the real worker app: every group of operations, as a host drives it."""
 
 from __future__ import annotations
 
+import json
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from litestar.exceptions import HTTPException
 
+from tlc_plugin_sdk.connections import (
+    LAUNCHER_ZONE_HEADER,
+    ConnectionBinding,
+    ConnectionPermissions,
+    ConnectionUse,
+    SecretToken,
+    StorageRule,
+)
 from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.infrastructure import (
     CapabilitiesResponse,
-    Conflict,
+    Catalog,
+    ConnectionNodeAccess,
+    ConnectionVerification,
     CreateNodeRequest,
     CreateNodeResponse,
-    CreateStorageRequest,
-    GpuCatalog,
+    DeploymentBootstrap,
+    DeploymentCheck,
+    DeploymentCheckRequest,
+    DeploymentHostnames,
+    DeploymentListing,
+    DeploymentOptions,
+    DeploymentPrepared,
+    DeploymentPrepareRequest,
+    DeploymentRequest,
+    DeploymentResponse,
+    DeploymentStorage,
+    DnsChange,
+    DnsRecord,
+    DnsRecords,
+    DnsZone,
+    Grant,
+    GrantObservation,
+    GrantRequest,
+    GrantUpdate,
+    GrantUpdateRequest,
     InfrastructurePlugin,
-    InvalidRequest,
-    LegacyOwnerCredentialsFacet,
-    LoginDescriptor,
+    Locations,
+    NodeAccessRequest,
     NodeStateResponse,
-    NotConfigured,
-    NotFound,
-    NotSupported,
-    OwnerCredentialsDescriptor,
-    ProviderError,
-    SettingsField,
+    StorageCandidates,
     StorageCapabilities,
     StorageFacet,
-    StorageItem,
     StorageListing,
-    legacy,
+    StorageRoot,
+    SweepItem,
+    SweepReport,
+    SweepRequest,
+    VerifyRequest,
 )
-from tlc_plugin_sdk.infrastructure.routes import scrub
-from tlc_plugin_sdk.infrastructure.testing import FakeProvider
+from tlc_plugin_sdk.infrastructure.testing import FakeProvider, connection_headers
+
+_ZONE = DnsZone(id="Z1", name="deploy.example.com")
+_PERMISSIONS = ConnectionPermissions(
+    deployments=True, nodes=True, storage=[StorageRule("fake://fake-data/projects/", "read_write")]
+)
 
 
-def _paths(plugin: InfrastructurePlugin) -> set[tuple[str, str]]:
-    out: set[tuple[str, str]] = set()
-    for handler in plugin.get_route_handlers():
-        for path in handler.paths:
-            for method in handler.http_methods:
-                out.add((str(method).upper(), "/" + str(path).strip("/")))
-    return out
+def _binding(kind: Any = "KEYLESS", **access: str) -> ConnectionBinding:
+    return ConnectionBinding(
+        "conn-1",
+        "fake",
+        kind,
+        account={"account_id": "123456789012"},
+        access={"role_name": "3lc-fake", "node_identity": "3lc-fake-node", **access},
+        defaults={"location": "fake-2"},
+        permissions=_PERMISSIONS,
+    )
+
+
+_KEYLESS = connection_headers(_binding(), use=ConnectionUse("node-1", "ada"))
+_AMBIENT = connection_headers(_binding("AMBIENT"))
+_SECRET = connection_headers(_binding("SECRET"), credential=SecretToken("fake", "fake-api-key-1", "conn-1"))
 
 
 @pytest.fixture
-def fake(tmp_path: Path) -> Any:
+def fake(tmp_path: Path) -> Iterator[tuple[FakeProvider, PluginHarness]]:
     plugin = FakeProvider()
     with PluginHarness(plugin, plugin_id="fake", config_root=tmp_path) as h:
-        yield h
+        h.post("/settings", json_body={"api_key": "fake-settings-key"})
+        yield plugin, h
 
 
-# ── What subclassing mounts ─────────────────────────────────────────────────
+# ── Connect an account ───────────────────────────────────────────────────────
 
 
-def test_every_facet_mounts_its_routes_and_settings_mounts_two() -> None:
-    paths = _paths(FakeProvider())
-    assert len(paths) == 8 + 12 + 3 + 4 + 2
-    assert ("GET", "/infra/connection/check") in paths
-    assert ("GET", "/infra/storage/list") in paths
-    assert ("DELETE", "/infra/storage/bundle/{bundle_id:str}") in paths
-    assert ("GET", "/infra/cpu-catalog") in paths
-    assert ("GET", "/infra/workspaces") in paths
-    assert ("POST", "/settings") in paths
-    assert ("POST", "/infra/nodes/{provider_id:str}/terminate") not in paths, "no legacy facet, no legacy route"
+def test_capabilities_declare_the_account_the_methods_and_what_is_offered(fake: Any) -> None:
+    _, h = fake
+    caps = CapabilitiesResponse.from_dict(h.get("/infra/capabilities").json())
+    assert caps.provider == "fake" and caps.contract == 2 and caps.ready
+    assert caps.account is not None and [f.key for f in caps.account.fields] == ["account_id"]
+    assert [(m.kind, m.preferred, m.grants) for m in caps.access_methods] == [
+        ("KEYLESS", True, True),
+        ("AMBIENT", False, False),
+        ("SECRET", False, False),
+    ]
+    assert caps.access_methods[1].purposes == ["nodes", "storage"], "an own sign-in cannot carry deployments"
+    assert caps.host is not None and caps.host.matches == {"setup_identity": "fake-host-principal"}
+    assert caps.nodes is not None and caps.deployments is not None and caps.storage is not None
+    assert caps.storage == StorageCapabilities(kind="bucket", label="Fake bucket", default_id="fake-data")
 
 
-def test_capabilities_carry_facets_storage_and_lists_workspaces(fake: PluginHarness) -> None:
-    d = fake.get("/infra/capabilities").json()
-    assert d["facets"] == ["storage", "catalog", "workspaces"]
-    assert d["storage"]["kind"] == "bucket"
-    assert d["storage"]["default_id"] == "fake-data"
-    assert d["lists_workspaces"] is True
-    assert d["gpu_types"] == d["node_types"] == ["fake-gpu"]
-    assert d["missing"] == ["api_key"]
-    assert [f["key"] for f in d["missing_fields"]] == ["api_key"]
-    assert CapabilitiesResponse.from_dict(d).facets_reported is True
-
-
-def test_an_author_set_facets_or_storage_is_overwritten(tmp_path: Path) -> None:
-    class Spoof(FakeProvider):
-        def capabilities(self) -> CapabilitiesResponse:
-            caps = super().capabilities()
-            caps.facets = ["catalog"]
-            caps.storage = StorageCapabilities(kind="volume", label="wrong")
-            return caps
-
-    with PluginHarness(Spoof(), plugin_id="fake", config_root=tmp_path) as h:
-        d = h.get("/infra/capabilities").json()
-    assert d["facets"] == ["storage", "catalog", "workspaces"]
-    assert d["storage"]["label"] == "Fake bucket"
-
-
-# ── Core routes ──────────────────────────────────────────────────────────────
-
-
-def test_create_answers_201_and_diagnostics_are_a_query_flag(fake: PluginHarness) -> None:
-    body = CreateNodeRequest(node_id="n1", node_type="fake-gpu", token="tok").to_dict()
-    r = fake.post("/infra/nodes", json_body=body)
-    assert r.status_code == 201, r.text
-    created = CreateNodeResponse.from_dict(r.json())
-    assert created.agent_url == "http://fake:8800"
-    assert created.hourly_rate == 1.5
-    plain = fake.get(f"/infra/nodes/{created.provider_id}").json()
-    assert plain == {"state": "running"}
-    diag = NodeStateResponse.from_dict(fake.get(f"/infra/nodes/{created.provider_id}?diagnostics=true").json())
-    assert diag.bootstrap_history == ["Starting node agent"]
-    assert diag.bootstrap_failed is False
-    assert fake.call("DELETE", f"/infra/nodes/{created.provider_id}").json()["state"] == "terminated"
-
-
-def test_a_workspace_create_answers_services_and_managed_by(fake: PluginHarness) -> None:
-    body = CreateNodeRequest(node_id="ws", node_type="fake-gpu", token="tok", flavor="workspace", owner="me").to_dict()
-    d = fake.post("/infra/nodes", json_body=body).json()
-    assert "agent_url" not in d
-    assert set(d["services"]) == {"object_service_url", "compute_service_url"}
-    assert d["managed_by"] == "creator"
-    listed = fake.get("/infra/workspaces?owner=me").json()["workspaces"]
-    assert [w["provider_id"] for w in listed] == ["fake-ws"]
-    assert fake.get("/infra/workspaces?owner=someone-else").json()["workspaces"] == []
-
-
-def test_preflight_and_catalogs_accept_the_gpu_type_alias(fake: PluginHarness) -> None:
-    assert fake.get("/infra/preflight?gpu_type=fake-gpu").json()["ok"] is True
-    assert fake.get("/infra/gpu-catalog?gpu_type=x&region=eu").json()["gpus"][0]["region"] == "eu"
-    d = fake.get("/infra/datacenters?gpu_type=fake-gpu").json()
-    assert d["node_type"] == d["gpu_type"] == "fake-gpu"
-    assert fake.get("/infra/cpu-catalog").json()["region"] == "fake-1"
-
-
-def test_credentials_on_create_are_refused_without_the_legacy_facet(fake: PluginHarness) -> None:
-    body = {
-        **CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(),
-        "credentials": {"api_key": "k"},
+def test_a_grant_is_described_without_a_connection_and_in_canonical_form(fake: Any) -> None:
+    _, h = fake
+    request = GrantRequest(
+        connection_id="conn-1",
+        kind="KEYLESS",
+        account={"account_id": "123456789012"},
+        access={"role_name": "team-role"},
+        permissions=ConnectionPermissions(
+            nodes=True,
+            storage=[
+                StorageRule("fake://b/z/", "read"),
+                StorageRule("fake://b/a", "read_write"),
+                StorageRule("fake://b/z", "read"),
+            ],
+        ),
+    )
+    grant = Grant.from_dict(h.post("/infra/connection/grant", json_body=request.to_dict()).json())
+    assert grant.action == "create" and grant.link.startswith("https://") and "create" in grant.link
+    assert [r.location for r in grant.permissions.storage] == ["fake://b/a", "fake://b/z"], (
+        "normalised and deduplicated"
+    )
+    assert grant.access == {
+        "role_name": "team-role",
+        "node_identity": "team-role-node",
+        "setup_identity": "fake-host-principal",
     }
-    r = fake.post("/infra/nodes", json_body=body)
-    assert r.status_code == 400
-    assert "Connection" in r.json()["detail"]
-    nested = CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict()
-    nested["workspace"] = {"provider_configs": {"aws": {}}}
-    assert fake.post("/infra/nodes", json_body=nested).status_code == 400
-    r = fake.post("/infra/storage", json_body={"name": "b", "credentials": {"api_key": "k"}})
-    assert r.status_code == 400
-    empty = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": {"k": ""}}
-    assert fake.post("/infra/nodes", json_body=empty).status_code == 400, "an empty object still meant 'my account'"
-    malformed = {**CreateNodeRequest(node_id="n", node_type="fake-gpu", token="t").to_dict(), "credentials": "x"}
-    r = fake.post("/infra/nodes", json_body=malformed)
-    assert r.status_code == 400, "a malformed credentials value is refused for every provider"
-    assert "object" in r.json()["detail"]
-
-
-# ── Storage routes ───────────────────────────────────────────────────────────
-
-
-def _wait(h: PluginHarness, path: str) -> dict[str, Any]:
-    for _ in range(200):
-        status = h.get(path).json()
-        if status["state"] in ("done", "failed", "cancelled"):
-            return dict(status)
-        time.sleep(0.01)
-    msg = f"{path} never finished"
-    raise AssertionError(msg)
-
-
-def test_storage_listing_create_and_delete(fake: PluginHarness) -> None:
-    listing = StorageListing.from_dict(fake.get("/infra/storage").json())
-    assert listing.capabilities.label == "Fake bucket"
-    assert [i.id for i in listing.storage] == ["fake-data"]
-    assert listing.storage[0].default is True
-    r = fake.post("/infra/storage", json_body={"name": "new"})
-    assert r.status_code == 201
-    assert r.json()["url"] == "fake://new"
-    assert fake.post("/infra/storage", json_body={"name": "new"}).status_code == 400, "exists already"
-    assert fake.post("/infra/storage", json_body={}).status_code == 400
-    assert fake.call("DELETE", "/infra/storage/new").json() == {"deleted": True, "id": "new"}
-    assert fake.call("DELETE", "/infra/storage/new").status_code == 404
-
-
-def test_browse_presign_and_delete_objects(fake: PluginHarness) -> None:
-    top = fake.get("/infra/storage/list?url=fake://fake-data").json()
-    assert [p["name"] for p in top["prefixes"]] == ["train"]
-    assert [o["name"] for o in top["objects"]] == ["readme.txt"]
-    assert "next_token" not in top
-    assert fake.get("/infra/storage/list").status_code == 400
-    r = fake.post("/infra/storage/presign", json_body={"url": "fake://fake-data/up", "files": [{"path": "x.jpg"}]})
-    assert r.json()["uploads"][0]["method"] == "PUT"
-    assert r.json()["downloads"] == []
-    r = fake.post(
-        "/infra/storage/presign",
-        json_body={"url": "fake://fake-data", "files": [{"path": "readme.txt"}], "mode": "download"},
+    assert set(grant.creates) == {"nodes", "storage"} and grant.files and grant.command and grant.steps
+    update = Grant.from_dict(
+        h.post(
+            "/infra/connection/grant",
+            json_body={**request.to_dict(), "action": "update", "installed_ref": "fake:grant/conn-1"},
+        ).json()
     )
-    assert r.json()["downloads"][0]["method"] == "GET"
+    assert update.action == "update" and "update" in update.link and "create" not in update.link
+
+    refused = h.post("/infra/connection/grant", json_body=request.to_dict(), headers=_KEYLESS)
+    assert refused.status_code == 400, "a grant is described from the host's own identity, never under a Connection"
+    assert h.post("/infra/connection/grant", json_body={**request.to_dict(), "kind": "WISHFUL"}).status_code == 400
+    wrong = h.post("/infra/connection/grant", json_body={**request.to_dict(), "kind": "AMBIENT"})
+    assert wrong.status_code == 400 and wrong.json()["remedy"]
+
+
+def test_verification_says_who_the_connection_is_and_what_is_installed(fake: Any) -> None:
+    _, h = fake
+    body = VerifyRequest(
+        storage_roots=[StorageRoot("fake://fake-data/p"), StorageRoot("fake://missing/p", "read", "scan")]
+    )
+    found = ConnectionVerification.from_dict(
+        h.post("/infra/connection/verify", json_body=body.to_dict(), headers=_KEYLESS).json()
+    )
+    assert found.identity == "fake:keyless:123456789012" and found.account == {"account_id": "123456789012"}
+    assert found.checked == ["resolve", "whoami"]
+    assert [(c.ok, c.level) for c in found.checks] == [(True, "info"), (False, "warn")]
+    assert found.observation is not None and found.observation.status == "complete"
+    assert found.observation.permissions == _PERMISSIONS and found.observation.resource_ref == "fake:grant/conn-1"
+    assert found.facts == {"Grant version": "1"}
+    ambient = ConnectionVerification.from_dict(
+        h.post("/infra/connection/verify", json_body={}, headers=_AMBIENT).json()
+    )
+    assert ambient.observation is None and ambient.identity.startswith("fake:ambient")
+    assert h.post("/infra/connection/verify", json_body={}).status_code == 400, "there is nothing to verify without one"
+    refused = h.post(
+        "/infra/connection/verify", json_body={}, headers=connection_headers(_binding(role_name="refused"))
+    )
     assert (
-        fake.post("/infra/storage/presign", json_body={"url": "fake://fake-data", "files": [], "mode": "x"}).status_code
-        == 400
+        refused.status_code == 424 and refused.json()["code"] == "credential_unavailable" and refused.json()["remedy"]
     )
-    dry = fake.post(
-        "/infra/storage/delete", json_body={"url": "fake://fake-data", "paths": ["train/"], "dry_run": True}
-    ).json()
-    assert dry["count"] == 2
-    assert fake.get("/infra/storage/list?url=fake://fake-data/train").json()["objects"], "dry run deleted nothing"
-    fake.post("/infra/storage/delete", json_body={"url": "fake://fake-data", "paths": ["train/"]})
-    assert fake.get("/infra/storage/list?url=fake://fake-data/train").json()["objects"] == []
 
 
-def test_transfers_run_over_the_plugins_registry(fake: PluginHarness) -> None:
-    body = {"src_url": "fake://fake-data", "dst_url": "fake://fake-data/copy", "items": ["train/"], "dry_run": True}
-    plan = fake.post("/infra/storage/transfer", json_body=body).json()
-    assert plan["objects"] == 2
-    started = fake.post("/infra/storage/transfer", json_body={**body, "dry_run": False}).json()
-    tid = started["transfer_id"]
-    done = _wait(fake, f"/infra/storage/transfer/{tid}")
-    assert done["state"] == "done", done
-    copied = fake.get("/infra/storage/list?url=fake://fake-data/copy/train").json()["objects"]
-    assert sorted(o["name"] for o in copied) == ["a.jpg", "b.jpg"]
-    assert fake.call("DELETE", f"/infra/storage/transfer/{tid}").json() == {"cancelled": False}
-    assert fake.get("/infra/storage/transfer/deadbeef0000").status_code == 404
-    assert fake.get("/infra/storage/transfer/NOT-AN-ID").status_code == 400
-    assert fake.call("DELETE", "/infra/storage/transfer/zz").status_code == 400
-    across = {"src_url": "fake://fake-data", "dst_url": "fake://other", "items": ["readme.txt"]}
-    fake.post("/infra/storage", json_body={"name": "other"})
-    r = fake.post("/infra/storage/transfer", json_body=across)
-    assert r.status_code == 400
-    assert "one storage" in r.json()["detail"]
-    r = fake.post("/infra/storage/transfer", json_body={**body, "dry_run": False, "items": ["../x"]})
-    assert r.status_code == 400, "the engine's TransferError is a 400"
+def test_a_grant_update_is_prepared_under_the_connection(fake: Any) -> None:
+    _, h = fake
+    installed = GrantObservation(
+        permissions=_PERMISSIONS, account={"account_id": "123456789012"}, resource_ref="r", status="complete"
+    )
+    same = GrantUpdateRequest(installed=installed, pending=_PERMISSIONS, revision=3, pending_revision=3)
+    answer = GrantUpdate.from_dict(
+        h.post("/infra/connection/grant/update", json_body=same.to_dict(), headers=_KEYLESS).json()
+    )
+    assert (answer.status, answer.review_url) == ("no_changes", "")
+    wider = GrantUpdateRequest(
+        installed=installed, pending=ConnectionPermissions(nodes=True), revision=3, pending_revision=4
+    )
+    answer = GrantUpdate.from_dict(
+        h.post("/infra/connection/grant/update", json_body=wider.to_dict(), headers=_KEYLESS).json()
+    )
+    assert answer.status == "ready" and answer.review_url.endswith("/conn-1/changes/4") and answer.pending_revision == 4
+    assert h.post("/infra/connection/grant/update", json_body=same.to_dict()).status_code == 400
 
 
-def test_bundles_run_over_the_plugins_registry(fake: PluginHarness) -> None:
-    started = fake.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}).json()
-    assert started["name"] == "train"
-    done = _wait(fake, f"/infra/storage/bundle/{started['bundle_id']}")
-    assert done["state"] == "done", done
-    assert done["download_url"] == "fake://fake-data/.downloads/train.zip"
-    assert done["files_done"] == 2
-    assert fake.get("/infra/storage/bundle/deadbeef0000").status_code == 404
-    assert fake.post("/infra/storage/bundle", json_body={}).status_code == 400
+def test_node_access_is_inspected_by_get_and_applied_only_by_post(fake: Any) -> None:
+    plugin, h = fake
+    roots = json.dumps([StorageRoot("fake://fake-data/p").to_dict()])
+    seen = ConnectionNodeAccess.from_dict(
+        h.get("/infra/connection/node-access", params={"storage_roots": roots}, headers=_AMBIENT).json()
+    )
+    assert (
+        seen.supported
+        and not seen.ready
+        and seen.action_label
+        and [c.name for c in seen.checks] == ["fake://fake-data/p"]
+    )
+    assert plugin.node_access["conn-1"]["ready"] is False, "inspection changes nothing"
+    request = NodeAccessRequest(
+        storage_roots=[StorageRoot("fake://fake-data/p")],
+        storage_access={"rules": [{"location": "fake://x"}]},
+        expected_revision="0",
+    )
+    applied = ConnectionNodeAccess.from_dict(
+        h.post("/infra/connection/node-access", json_body=request.to_dict(), headers=_AMBIENT).json()
+    )
+    assert applied.ready and applied.revision == "1" and applied.storage_access == {"rules": [{"location": "fake://x"}]}
+    stale = h.post("/infra/connection/node-access", json_body=request.to_dict(), headers=_AMBIENT)
+    assert stale.status_code == 409 and stale.json()["code"] == "conflict"
+    assert h.get("/infra/connection/node-access").status_code == 400
+    assert h.get("/infra/connection/node-access", params={"storage_roots": "{}"}, headers=_AMBIENT).status_code == 400
+    assert h.post("/infra/connection/node-access", json_body={}, headers=_AMBIENT).status_code == 400
 
 
-def test_the_bundle_route_leaves_an_unnamed_archive_to_the_registry(tmp_path: Path) -> None:
-    names: list[str] = []
-
-    class Recording(FakeProvider):
-        def bundle_registry(self, url: str) -> Any:
-            registry = super().bundle_registry(url)
-            if "start" not in vars(registry):  # the fake caches one registry per bucket
-                start = registry.start
-
-                def recorded(*, url: str, name: str = "") -> dict[str, Any]:
-                    names.append(name)
-                    return start(url=url, name=name)
-
-                registry.start = recorded
-            return registry
-
-    with PluginHarness(Recording(), plugin_id="fake", config_root=tmp_path) as h:
-        assert h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train/"}).json()["name"] == "train"
-        assert h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data", "name": "all"}).json()["name"] == (
-            "all"
-        )
-    assert names == ["", "all"]
+def test_storage_candidates_are_names_under_the_connection(fake: Any) -> None:
+    _, h = fake
+    found = StorageCandidates.from_dict(h.get("/infra/storage/candidates", headers=_KEYLESS).json())
+    assert [(c.location, c.label) for c in found.items] == [("fake://fake-data", "fake-data")] and not found.truncated
+    assert h.get("/infra/storage/candidates").status_code == 400
 
 
-class _ListOnly(InfrastructurePlugin, StorageFacet):
-    """A storage facet that overrides only the abstract methods: everything else must answer 501."""
-
-    def get_ui_fragment(self) -> str:
-        return "<div/>"
-
-    def capabilities(self) -> CapabilitiesResponse:
-        return CapabilitiesResponse(provider="listonly", node_types=["t"], ready=True)
-
-    def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
-        return CreateNodeResponse(provider_id="p", agent_url="http://x")
-
-    def node_state(self, provider_id: str) -> NodeStateResponse:
-        return NodeStateResponse(state="running")
-
-    def delete_node(self, provider_id: str) -> NodeStateResponse:
-        return NodeStateResponse(state="terminated")
-
-    def storage_capabilities(self) -> StorageCapabilities:
-        return StorageCapabilities(kind="bucket", label="B", upload=False, browse=False, transfer=False, bundle=False)
-
-    def list_storage(self, *, fallback_url: str = "") -> StorageListing:
-        return StorageListing(capabilities=self.storage_capabilities())
+# ── Nodes ────────────────────────────────────────────────────────────────────
 
 
-def test_a_default_facet_method_answers_501(tmp_path: Path) -> None:
-    with PluginHarness(_ListOnly(), plugin_id="listonly", config_root=tmp_path) as h:
-        assert h.get("/infra/storage").json()["storage"] == []
-        assert h.get("/infra/storage/list?url=x://b").status_code == 501
-        assert h.post("/infra/storage", json_body={"name": "b"}).status_code == 501
-        r = h.post("/infra/storage/transfer", json_body={"src_url": "x://a", "dst_url": "x://a", "items": ["f"]})
-        assert r.status_code == 501
-        assert "does not support" in r.json()["detail"]
-        assert h.get("/infra/storage/transfer/deadbeef0000").status_code == 404, "status needs no registry"
+def _node(node_id: str = "n1", **more: Any) -> dict[str, Any]:
+    return CreateNodeRequest(
+        node_id=node_id, node_type="fake-gpu", token="node-token-1", owner="ada", host_id="svc-1", **more
+    ).to_dict()
 
 
-# ── Errors ───────────────────────────────────────────────────────────────────
-
-
-class _Raising(InfrastructurePlugin):
-    exc: BaseException | None = None
-
-    def get_ui_fragment(self) -> str:
-        return "<div/>"
-
-    def capabilities(self) -> CapabilitiesResponse:
-        return CapabilitiesResponse(provider="raising", node_types=["t"], ready=True)
-
-    def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
-        if self.exc is not None:
-            raise self.exc
-        return CreateNodeResponse(provider_id="p", agent_url="http://x")
-
-    def node_state(self, provider_id: str) -> NodeStateResponse:
-        if self.exc is not None:
-            raise self.exc
-        return NodeStateResponse(state="running")
-
-    def delete_node(self, provider_id: str) -> NodeStateResponse:
-        return NodeStateResponse(state="terminated")
-
-    def secret_values(self) -> list[str]:
-        return ["hunter2", ""]
+def test_a_node_with_an_unknown_pricing_is_refused_not_launched(fake: Any) -> None:
+    plugin, h = fake
+    r = h.post("/infra/nodes", json_body={**_node(), "pricing": "reserved"}, headers=_KEYLESS)
+    assert r.status_code == 400 and r.json()["code"] == "invalid_request" and "on_demand" in r.json()["remedy"]
+    assert plugin.nodes == {}
 
 
 @pytest.mark.parametrize(
-    ("exc", "status"),
+    ("headers", "credential", "storage_access", "identity"),
     [
-        (ProviderError("upstream said no"), 502),
-        (InvalidRequest("bad id"), 400),
-        (NotConfigured("no key"), 409),
-        (Conflict("bucket not empty"), 409),
-        (NotFound("no such node"), 404),
-        (NotSupported("nope"), 501),
-        (ValueError("not a region"), 400),
-        (TypeError("wrong type"), 400),
-        (NotImplementedError("later"), 501),
-        (RuntimeError("boto exploded"), 502),
-        (KeyError("k"), 502),
-        (HTTPException(status_code=418, detail="teapot"), 418),
+        (_KEYLESS, "FakeCredential", "identity", "3lc-fake-node"),
+        (_AMBIENT, "Ambient", "ambient", ""),
+        (_SECRET, "SecretToken", "none", ""),
+        (None, "", "none", ""),
     ],
 )
-def test_what_a_method_raises_maps_to_a_status_with_the_sentence(exc: BaseException, status: int) -> None:
-    plugin = _Raising()
-    plugin.exc = exc
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        r = h.get("/infra/nodes/x")
-    assert r.status_code == status, r.text
-    assert isinstance(r.json()["detail"], str)
-    assert r.json()["detail"] != "Internal Server Error"
+def test_a_node_is_created_described_and_deleted_with_each_kind_of_connection(
+    fake: Any, headers: dict[str, str] | None, credential: str, storage_access: str, identity: str
+) -> None:
+    plugin, h = fake
+    r = h.post("/infra/nodes", json_body=_node(storage_roots=[StorageRoot("fake://fake-data/p")]), headers=headers)
+    assert r.status_code == 201, r.text
+    created = CreateNodeResponse.from_dict(r.json())
+    assert created.provider_id == "fake-n1" and created.agent_url == "http://fake:8800"
+    assert (created.storage_access, created.identity) == (storage_access, identity)
+    record = plugin.nodes["fake-n1"]
+    assert record["credential"] == credential and record["connection"] == ("conn-1" if headers else "")
+    assert record["kind"] == "gpu", "the node kind is not overwritten by the Connection's kind"
+    kinds = {"FakeCredential": "KEYLESS", "Ambient": "AMBIENT", "SecretToken": "SECRET"}
+    assert record["connection_kind"] == kinds.get(credential, "")
+    assert record["tags"] == {"3lc": "node", "3lc-id": "n1", "3lc-owner": "ada", "3lc-host": "svc-1"}
+    assert record["location"] == ("fake-2" if headers else "fake-1"), (
+        "the Connection's default location, else the plugin's"
+    )
+    assert h.get("/infra/nodes/fake-n1", headers=headers).json() == {"state": "running"}
+    diagnosed = NodeStateResponse.from_dict(h.get("/infra/nodes/fake-n1?diagnostics=true", headers=headers).json())
+    assert diagnosed.bootstrap_history == ["Starting node agent"] and diagnosed.bootstrap_failed is False
+    assert h.call("DELETE", "/infra/nodes/fake-n1", headers=headers).json() == {"state": "terminated"}
+    assert h.call("DELETE", "/infra/nodes/fake-n1", headers=headers).json() == {"state": "terminated"}
+    assert h.get("/infra/nodes/never-made", headers=headers).json()["state"] == "gone"
 
 
-def test_a_plugins_own_http_exception_keeps_its_status_but_is_scrubbed() -> None:
-    plugin = _Raising()
-    plugin.exc = HTTPException(status_code=418, detail="raw hunter2 in a teapot")
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        r = h.get("/infra/nodes/x")
-    assert r.status_code == 418
-    assert r.json()["detail"] == "raw *** in a teapot"
+def test_create_is_idempotent_on_the_node_id(fake: Any) -> None:
+    plugin, h = fake
+    first = h.post("/infra/nodes", json_body=_node(pricing="spot", location="fake-1"), headers=_KEYLESS).json()
+    again = h.post("/infra/nodes", json_body=_node(pricing="on_demand", location="fake-2"), headers=_KEYLESS).json()
+    assert again == first and len(plugin.nodes) == 1, "a repeat returns what the first call created"
+    assert first["pricing"] == "spot" and first["hourly_rate"] == 0.5 and first["location"] == "fake-1"
+    assert plugin.nodes["fake-n1"]["resource_id"] == "node-1" and plugin.nodes["fake-n1"]["source_identity"] == "ada"
 
 
-def test_details_are_scrubbed_of_the_plugins_secrets_and_the_request_token() -> None:
-    plugin = _Raising()
-    plugin.exc = RuntimeError("key hunter2 and token tok-123 rejected")
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        r = h.post("/infra/nodes", json_body={"node_id": "n", "node_type": "t", "token": "tok-123"})
-    assert r.status_code == 502
-    assert r.json()["detail"] == "key *** and token *** rejected"
-    assert scrub("a bbbb", ["", "bbbb"]) == "a ***"
-    assert scrub("ghost t", ["t"]) == "ghost t", "a value too short to be a secret is left alone"
+def test_a_node_request_names_one_location_and_bad_input_says_what_to_change(fake: Any) -> None:
+    _, h = fake
+    r = h.post("/infra/nodes", json_body=_node(location="mars-1"))
+    assert r.status_code == 400 and r.json()["code"] == "invalid_request" and "fake-1" in r.json()["remedy"]
+    r = h.post("/infra/nodes", json_body={**_node(), "node_type": "node-token-1 is not a type"})
+    assert r.status_code == 400 and "node-token-1" not in r.text, "the node token is scrubbed from an error"
+    check = h.post("/infra/nodes/check", json_body={"node_type": "fake-gpu", "location": "mars-1"}).json()
+    assert check["ok"] is False and [c["ok"] for c in check["checks"]] == [True, False]
+    assert h.post("/infra/nodes/check", json_body={}).json()["ok"] is True
 
 
-_ARN = "arn:aws:iam::123456789012:role/x"
+# ── Catalog ──────────────────────────────────────────────────────────────────
 
 
-def _plain(exc: Exception) -> str:
-    return "AWS refused the call." if _ARN in str(exc) else ""
+def test_one_catalog_answers_every_purpose_with_typed_offers(fake: Any) -> None:
+    _, h = fake
+    gpu = Catalog.from_dict(h.post("/infra/catalog", json_body={"purpose": "gpu_node"}, headers=_KEYLESS).json())
+    assert gpu.location == "fake-2", "priced in the Connection's default location"
+    assert [(o.id, o.available) for o in gpu.offers] == [("fake-gpu", True), ("fake-gpu-xl", False)]
+    assert gpu.offers[1].unavailable_reason and gpu.offers[0].hourly_spot == 0.5
+    sizes = Catalog.from_dict(
+        h.post("/infra/catalog", json_body={"purpose": "deployment", "location": "fake-1"}).json()
+    )
+    assert [o.id for o in sizes.offers] == ["fake-small", "fake-large"] and sizes.location == "fake-1"
+    failed = Catalog.from_dict(h.post("/infra/catalog", json_body={"purpose": "cpu_node", "location": "mars-1"}).json())
+    assert failed.offers == [] and failed.error, "a failed lookup is an empty list with the reason"
+    assert h.post("/infra/catalog", json_body={"purpose": "tapes"}).status_code == 400
+    places = Locations.from_dict(h.get("/infra/catalog/locations?node_type=fake-gpu").json())
+    assert [p.id for p in places.locations] == ["fake-1", "fake-2"] and places.node_type == "fake-gpu"
 
 
-class _Describing(_Raising):
-    def describe_error(self, exc: Exception) -> str:
-        return _plain(exc)
+# ── Storage ──────────────────────────────────────────────────────────────────
 
 
-def test_a_conflict_answers_409_with_its_sentence() -> None:
-    plugin = _Raising()
-    plugin.exc = Conflict("The bucket is not empty. Delete its objects first.")
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        r = h.get("/infra/nodes/x")
-    assert r.status_code == 409
-    assert r.json()["detail"] == "The bucket is not empty. Delete its objects first."
+def test_every_storage_route_acts_through_a_connection(fake: Any) -> None:
+    _, h = fake
+    for method, path, body in (
+        ("GET", "/infra/storage", None),
+        ("POST", "/infra/storage", {"name": "x"}),
+        ("DELETE", "/infra/storage/x", None),
+        ("POST", "/infra/storage/presign", {"url": "fake://fake-data", "files": [{"path": "a"}]}),
+        ("GET", "/infra/storage/list?url=fake://fake-data", None),
+        ("POST", "/infra/storage/delete", {"url": "fake://fake-data", "paths": ["a"]}),
+        (
+            "POST",
+            "/infra/storage/transfer",
+            {"src_url": "fake://fake-data", "dst_url": "fake://fake-data", "items": ["a"]},
+        ),
+        ("GET", "/infra/storage/transfer/deadbeef0000", None),
+        ("DELETE", "/infra/storage/transfer/deadbeef0000", None),
+        ("POST", "/infra/storage/bundle", {"url": "fake://fake-data"}),
+        ("GET", "/infra/storage/bundle/deadbeef0000", None),
+        ("DELETE", "/infra/storage/bundle/deadbeef0000", None),
+    ):
+        r = h.call(method, path, json_body=body)
+        assert r.status_code == 400 and r.json()["code"] == "invalid_request", (method, path, r.text)
 
 
-def test_describe_error_words_an_unexpected_exception_and_is_still_scrubbed() -> None:
-    plugin = _Describing()
-    plugin.exc = RuntimeError(f"AccessDenied for {_ARN} (request id 42)")
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        assert h.get("/infra/nodes/x").json()["detail"] == "AWS refused the call."
-        plugin.exc = RuntimeError("hunter2 is wrong")
-        assert h.get("/infra/nodes/x").json()["detail"] == "*** is wrong", "an empty answer falls back, scrubbed"
-        plugin.exc = ProviderError(f"worded by the provider: {_ARN}")
-        r = h.get("/infra/nodes/x")
-        assert r.status_code == 502 and _ARN in r.json()["detail"], "a ProviderError keeps its own sentence"
+def test_storage_listing_browse_transfer_and_bundle(fake: Any) -> None:
+    plugin, h = fake
+    listing = StorageListing.from_dict(h.get("/infra/storage", headers=_KEYLESS).json())
+    assert [(i.id, i.url, i.default) for i in listing.storage] == [("fake-data", "fake://fake-data", True)]
+    assert h.post("/infra/storage", json_body={"name": "fresh"}, headers=_KEYLESS).status_code == 201
+    assert h.call("DELETE", "/infra/storage/fresh", headers=_KEYLESS).json() == {"deleted": True, "id": "fresh"}
+    assert h.call("DELETE", "/infra/storage/fresh", headers=_KEYLESS).status_code == 404
+    level = h.get("/infra/storage/list?url=fake://fake-data", headers=_KEYLESS).json()
+    assert [p["name"] for p in level["prefixes"]] == ["train"] and [o["name"] for o in level["objects"]] == [
+        "readme.txt"
+    ]
+    body = {"src_url": "fake://fake-data/train", "dst_url": "fake://fake-data/copy", "items": ["a.jpg"]}
+    started = h.post("/infra/storage/transfer", json_body=body, headers=_KEYLESS).json()
+    deadline = time.time() + 5
+    while h.get(f"/infra/storage/transfer/{started['transfer_id']}", headers=_KEYLESS).json()["state"] not in (
+        "done",
+        "failed",
+    ):
+        assert time.time() < deadline
+        time.sleep(0.01)
+    assert plugin.buckets["fake-data"]["copy/a.jpg"] == b"a" * 10
+    bundle = h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}, headers=_KEYLESS).json()
+    assert h.get(f"/infra/storage/bundle/{bundle['bundle_id']}", headers=_KEYLESS).status_code == 200
+    assert h.get("/infra/storage/transfer/not-an-id", headers=_KEYLESS).status_code == 400
 
 
-def test_a_describe_error_that_leaks_a_secret_or_raises_is_contained() -> None:
-    class Leaky(_Raising):
-        def describe_error(self, exc: Exception) -> str:
-            if "boom" in str(exc):
-                msg = "hook failed"
-                raise RuntimeError(msg)
-            return "the key hunter2 was refused"
+def test_a_storage_method_left_at_its_default_answers_501(tmp_path: Path) -> None:
+    class ListOnly(InfrastructurePlugin, StorageFacet):
+        def get_ui_fragment(self) -> str:
+            return ""
 
-    plugin = Leaky()
-    plugin.exc = RuntimeError("anything")
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        assert h.get("/infra/nodes/x").json()["detail"] == "the key *** was refused"
-        plugin.exc = RuntimeError("boom")
-        assert h.get("/infra/nodes/x").json()["detail"] == "boom"
+        def capabilities(self) -> CapabilitiesResponse:
+            return CapabilitiesResponse(provider="listonly", display_name="List only", ready=True)
 
+        def storage_capabilities(self) -> StorageCapabilities:
+            return StorageCapabilities(kind="bucket", label="B", creatable=False, transfer=False)
 
-def test_the_default_describe_error_is_the_scrubbed_text() -> None:
-    assert _Raising().describe_error(RuntimeError("key hunter2")) == "key ***"
-    assert _Raising().describe_error(KeyError()) == "KeyError"
+        def list_storage(self, *, fallback_url: str = "") -> StorageListing:
+            return StorageListing(capabilities=self.storage_capabilities())
 
-
-class _DescribingFake(FakeProvider):
-    """A fake whose catalog and storage calls fail the way a cloud SDK does."""
-
-    fail_catalog = False
-
-    def describe_error(self, exc: Exception) -> str:
-        return _plain(exc)
-
-    def gpu_catalog(self, *, node_type: str = "", region: str = "") -> GpuCatalog:
-        if self.fail_catalog:
-            msg = f"DescribeInstanceTypes failed for {_ARN}"
-            raise RuntimeError(msg)
-        return super().gpu_catalog(node_type=node_type, region=region)
-
-    def transfer_registry(self, url: str) -> Any:
-        registry = super().transfer_registry(url)
-
-        def copy(src: str, dst: str) -> None:
-            msg = f"CopyObject denied for {_ARN}"
-            raise RuntimeError(msg)
-
-        registry._copy = copy
-        return registry
-
-    def bundle_registry(self, url: str) -> Any:
-        registry = super().bundle_registry(url)
-
-        def store(path: Path, name: str) -> str:
-            msg = f"PutObject denied for {_ARN}"
-            raise RuntimeError(msg)
-
-        registry._store = store
-        return registry
+    headers = connection_headers(ConnectionBinding("c", "listonly", "AMBIENT"))
+    with PluginHarness(ListOnly(), plugin_id="listonly", config_root=tmp_path) as h:
+        assert h.get("/infra/capabilities").json()["operations"] == ["storage"]
+        r = h.post("/infra/storage", json_body={"name": "x"}, headers=headers)
+        assert r.status_code == 501 and r.json()["code"] == "not_supported"
 
 
-def test_describe_error_covers_the_routes_and_jobs_the_sdk_drives(tmp_path: Path) -> None:
-    plugin = _DescribingFake()
-    plugin.fail_catalog = True
-    with PluginHarness(plugin, plugin_id="fake", config_root=tmp_path) as h:
-        r = h.get("/infra/gpu-catalog")
-        assert (r.status_code, r.json()["detail"]) == (502, "AWS refused the call.")
-        body = {"src_url": "fake://fake-data", "dst_url": "fake://fake-data/copy", "items": ["train/"]}
-        tid = h.post("/infra/storage/transfer", json_body=body).json()["transfer_id"]
-        transfer = _wait(h, f"/infra/storage/transfer/{tid}")
-        assert transfer["state"] == "failed"
-        assert {f["reason"] for f in transfer["failures"]} == {"AWS refused the call."}
-        bid = h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}).json()["bundle_id"]
-        bundle = _wait(h, f"/infra/storage/bundle/{bid}")
-        assert (bundle["state"], bundle["error"]) == ("failed", "AWS refused the call.")
+# ── Deployments and the launcher's zone ──────────────────────────────────────
 
 
-def test_a_registry_built_with_its_own_describer_keeps_it() -> None:
-    from tlc_plugin_sdk.shared.storage_bundle import BundleRegistry
+_LAUNCHER = {LAUNCHER_ZONE_HEADER: _ZONE.id}
 
-    def mine(exc: Exception) -> str:
-        return "mine"
 
-    registry = BundleRegistry(
-        list_objects=lambda u: [], open_object=lambda k: None, store_bundle=lambda p, n: "", describe_error=mine
+def test_the_dns_routes_act_only_on_the_zone_the_host_names(fake: Any) -> None:
+    provider, h = fake
+    record = DnsRecord(name="a.deploy.example.com", type="A", values=["203.0.113.1"])
+    body = DnsChange(zone=_ZONE, create=[record]).to_dict()
+    query = {"zone_id": _ZONE.id, "zone_name": _ZONE.name}
+    # No header is what a request that did not come from the host's manager looks like.
+    for headers in (None, {LAUNCHER_ZONE_HEADER: "ZOTHER"}, {LAUNCHER_ZONE_HEADER: ""}):
+        refused = h.post("/infra/dns/changes", json_body=body, headers=headers)
+        assert refused.status_code == 400 and "not the one this launcher is configured with" in refused.text
+        assert h.get("/infra/dns/records", params=query, headers=headers).status_code == 400
+    assert not provider.zones.get(_ZONE.id)
+    assert h.post("/infra/dns/changes", json_body=body, headers=_LAUNCHER).status_code == 200
+    assert h.get("/infra/dns/records", params=query, headers=_LAUNCHER).status_code == 200
+
+
+def _records(h: PluginHarness, under: str = "") -> list[DnsRecord]:
+    found: list[DnsRecord] = []
+    cursor = ""
+    while True:
+        page = DnsRecords.from_dict(
+            h.get(
+                "/infra/dns/records",
+                params={"zone_id": _ZONE.id, "zone_name": _ZONE.name, "under": under, "cursor": cursor},
+                headers=_LAUNCHER,
+            ).json()
+        )
+        found += page.records
+        cursor = page.next_cursor
+        if not cursor:
+            return found
+
+
+def _change(h: PluginHarness, create: list[DnsRecord], delete: list[DnsRecord] | None = None) -> Any:
+    return h.post(
+        "/infra/dns/changes",
+        json_body=DnsChange(zone=_ZONE, create=create, delete=delete or []).to_dict(),
+        headers=_LAUNCHER,
     )
 
-    class Own(FakeProvider):
-        def bundle_registry(self, url: str) -> Any:
-            return registry
 
-    with PluginHarness(Own(), plugin_id="fake") as h:
-        h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"})
-        h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"})
-    describer = registry.describe_error
-    assert getattr(describer, "own", None) is mine, "kept, wrapped once"
-    assert describer is not None and describer(RuntimeError("x")) == "mine"
+def test_a_launch_runs_options_check_prepare_create_with_the_launcher_writing_the_zone(fake: Any) -> None:
+    plugin, h = fake
+    first = DeploymentOptions.from_dict(
+        h.post("/infra/deployments/options", json_body={"selected": {}}, headers=_KEYLESS).json()
+    )
+    assert [f.key for f in first.placement] == ["location"] and first.placement[0].default == "fake-2"
+    narrowed = DeploymentOptions.from_dict(
+        h.post("/infra/deployments/options", json_body={"selected": {"location": "fake-1"}}, headers=_KEYLESS).json()
+    )
+    assert [f.key for f in narrowed.placement] == ["location", "network"], "choices follow what is selected so far"
+    assert [c.id for c in narrowed.placement[1].choices] == ["net-fake-1-a", "net-fake-1-b"] and narrowed.costs
+    placement = {"location": "fake-1", "network": "net-fake-1-a"}
 
+    storage = DeploymentStorage(root="fake://fake-data/projects/ada")
+    request = DeploymentCheckRequest(label="ada", placement=placement, storage=storage, zone=_ZONE)
+    check = DeploymentCheck.from_dict(
+        h.post("/infra/deployments/check", json_body=request.to_dict(), headers=_KEYLESS).json()
+    )
+    assert check.ok and check.ingress_key == "fake-1-z1", "opaque to the launcher; it carries the zone it was asked in"
+    outside = DeploymentCheckRequest(
+        label="ada", placement=placement, storage=DeploymentStorage(root="fake://other/x"), zone=_ZONE
+    )
+    refused = DeploymentCheck.from_dict(
+        h.post("/infra/deployments/check", json_body=outside.to_dict(), headers=_KEYLESS).json()
+    )
+    assert not refused.ok and "project root" in refused.reason, "the Connection's storage rules bound the root"
+    by_address = DeploymentCheckRequest(label="ada", placement=placement)
+    assert (
+        DeploymentCheck.from_dict(
+            h.post("/infra/deployments/check", json_body=by_address.to_dict(), headers=_KEYLESS).json()
+        ).ingress_key
+        == ""
+    )
 
-def test_a_registry_describer_of_its_own_is_scrubbed_and_coerced(tmp_path: Path) -> None:
-    class Secretive(_DescribingFake):
-        def secret_values(self) -> list[str]:
-            return ["hunter2"]
+    namespace = f"i-{check.ingress_key}.{_ZONE.name}"
+    prepare = DeploymentPrepareRequest(
+        deployment_id="dep-1", placement=placement, namespace=namespace, ingress_key=check.ingress_key
+    )
+    pending = DeploymentPrepared.from_dict(
+        h.post("/infra/deployments/prepare", json_body=prepare.to_dict(), headers=_KEYLESS).json()
+    )
+    assert pending.state == "pending" and [r.name for r in pending.dns_records] == [f"_validate.{namespace}"]
+    assert all(r.name.endswith("." + namespace) for r in pending.dns_records)
+    assert _change(h, pending.dns_records).status_code == 200, "the launcher writes the records with its own identity"
+    ready = DeploymentPrepared.from_dict(
+        h.post("/infra/deployments/prepare", json_body=prepare.to_dict(), headers=_KEYLESS).json()
+    )
+    assert ready.state == "ready"
 
-        def bundle_registry(self, url: str) -> Any:
-            registry = super().bundle_registry(url)
-            if registry.describe_error is None:
-                registry.describe_error = lambda exc: f"PutObject with key hunter2 failed: {exc}"
-            return registry
-
-    with PluginHarness(Secretive(), plugin_id="fake", config_root=tmp_path) as h:
-        bid = h.post("/infra/storage/bundle", json_body={"url": "fake://fake-data/train"}).json()["bundle_id"]
-        bundle = _wait(h, f"/infra/storage/bundle/{bid}")
-    assert bundle["state"] == "failed"
-    assert "hunter2" not in bundle["error"] and bundle["error"].startswith("PutObject with key *** failed")
-
-
-def test_a_non_str_describe_error_answer_is_coerced() -> None:
-    class Numeric(_Raising):
-        def describe_error(self, exc: Exception) -> Any:
-            return 404
-
-    plugin = Numeric()
-    plugin.exc = RuntimeError("hunter2 boom")
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        assert h.get("/infra/nodes/x").json()["detail"] == "404"
-
-
-def test_a_described_error_is_scrubbed_before_it_is_truncated() -> None:
-    class Long(_Raising):
-        def describe_error(self, exc: Exception) -> str:
-            return "x" * 495 + " hunter2 tail"
-
-    plugin = Long()
-    plugin.exc = RuntimeError("anything")
-    with PluginHarness(plugin, plugin_id="raising") as h:
-        detail = h.get("/infra/nodes/x").json()["detail"]
-    assert len(detail) == 500 and "hunt" not in detail
-
-
-# ── Legacy owner-credentials facet ───────────────────────────────────────────
-
-
-class _Legacy(InfrastructurePlugin, LegacyOwnerCredentialsFacet, StorageFacet):
-    def __init__(self) -> None:
-        self.seen: list[tuple[dict[str, Any] | None, dict[str, dict[str, Any]]]] = []
-        self.owners: list[tuple[str, str]] = []
-        self.storage_seen: list[tuple[str, str, dict[str, Any] | None]] = []
-
-    def storage_capabilities(self) -> StorageCapabilities:
-        return StorageCapabilities(kind="bucket", label="B")
-
-    def list_storage(self, *, fallback_url: str = "") -> StorageListing:
-        return StorageListing(capabilities=self.storage_capabilities())
-
-    def create_storage(self, request: CreateStorageRequest) -> StorageItem:
-        self.storage_seen.append((request.owner, legacy.current_request_owner(), legacy.current_request_credentials()))
-        return StorageItem(id=request.name, name=request.name, url=f"x://{request.name}")
-
-    def get_ui_fragment(self) -> str:
-        return "<div/>"
-
-    def capabilities(self) -> CapabilitiesResponse:
-        return CapabilitiesResponse(provider="legacy", node_types=["t"], ready=True)
-
-    def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
-        self.seen.append((legacy.current_request_credentials(), legacy.current_provider_configs()))
-        self.owners.append((request.owner, legacy.current_request_owner()))
-        return CreateNodeResponse(provider_id="p", agent_url="http://x")
-
-    def node_state(self, provider_id: str) -> NodeStateResponse:
-        return NodeStateResponse(state="running")
-
-    def delete_node(self, provider_id: str) -> NodeStateResponse:
-        return NodeStateResponse(state="terminated")
-
-    def credential_descriptor(self) -> OwnerCredentialsDescriptor:
-        return OwnerCredentialsDescriptor(credential_keys=["api_key"], login=LoginDescriptor(kind="k", label="Sign in"))
-
-    def terminate_with_credentials(
-        self, provider_id: str, *, credentials: dict[str, Any], owner: str = ""
-    ) -> NodeStateResponse:
-        if credentials.get("api_key") == "sekrit":
-            msg = f"{owner} used {credentials['api_key']}: the provider refused it"
-            raise ProviderError(msg)
-        return NodeStateResponse(state="terminated", detail=f"terminated for {owner}")
-
-    def discover_storage(self, *, credentials: dict[str, Any], owner: str = "") -> StorageListing:
-        return StorageListing(capabilities=StorageCapabilities(kind="bucket", label="B"), account=owner)
-
-
-class _LegacyWithLogin(_Legacy):
-    def login_start(self, body: dict[str, Any], *, owner: str = "") -> dict[str, Any]:
-        return {"code": "ABCD", "owner": owner}
-
-    def role_setup(self, *, owner: str = "", bucket_url: str = "") -> dict[str, Any]:
-        return {"external_id": owner}
-
-
-class _LegacyEchoing(_Legacy):
-    """Echoes every credential value in its error, the way a cloud SDK's message names a region or a role."""
-
-    def credential_descriptor(self) -> OwnerCredentialsDescriptor:
-        return OwnerCredentialsDescriptor(
-            workspace_credentials=[
-                SettingsField(key="access", label="Access id", secret=True),
-                SettingsField(key="region", label="Region"),
-            ],
-            login=LoginDescriptor(kind="k", label="Sign in", fields=[{"key": "pin", "secret": True}]),
-        )
-
-    def terminate_with_credentials(
-        self, provider_id: str, *, credentials: dict[str, Any], owner: str = ""
-    ) -> NodeStateResponse:
-        msg = " ".join(f"{k}={v}" for k, v in credentials.items())
-        raise RuntimeError(msg)
-
-
-def test_only_secret_bearing_request_credentials_are_scrubbed() -> None:
-    creds = {
-        "access": "AKIDENTIFIER",
-        "region": "us-east-1",
-        "role_arn": "arn:aws:iam::1:role/r",
-        "pin": "123456",
-        "client_secret": "cs-value",
-        "aws_session_token": "tok-value",
-        "subscription_id": "sub-1",
+    hostnames = DeploymentHostnames(
+        hostname="",
+        object_service=f"os-ada.{namespace}",
+        compute_service=f"compute-ada.{namespace}",
+        namespace=namespace,
+    )
+    create = DeploymentRequest(
+        deployment_id="dep-1",
+        name="Ada",
+        bootstrap=DeploymentBootstrap(
+            record_id="rec-1", config_service_url="https://cs.example", token="bootstrap-secret-1"
+        ),
+        hostnames=hostnames,
+        ingress_key=check.ingress_key,
+        placement=placement,
+        storage=storage,
+        owner="ada",
+    )
+    r = h.post("/infra/deployments", json_body=create.to_dict(), headers=_KEYLESS)
+    assert r.status_code == 201 and "bootstrap-secret-1" not in r.text
+    created = DeploymentResponse.from_dict(r.json())
+    assert (
+        created.provider_id == "fake-dep-dep-1"
+        and created.resource_ref == "fake:deployment/dep-1"
+        and not created.failure
+    )
+    assert created.endpoints == {
+        "object_service_url": f"https://os-ada.{namespace}",
+        "compute_service_url": f"https://compute-ada.{namespace}",
     }
-    with PluginHarness(_LegacyEchoing(), plugin_id="legacy") as h:
-        r = h.post("/infra/nodes/p/terminate", json_body={"credentials": creds})
-    assert r.status_code == 502
-    assert r.json()["detail"] == (
-        "access=*** region=us-east-1 role_arn=arn:aws:iam::1:role/r pin=*** client_secret=*** "
-        "aws_session_token=*** subscription_id=sub-1"
+    assert created.location == "fake-1" and [a.type for a in created.addresses] == ["ipv4"]
+    again = DeploymentResponse.from_dict(
+        h.post("/infra/deployments", json_body=create.to_dict(), headers=_KEYLESS).json()
     )
+    assert again == created and len(plugin.deployments) == 1, "create is idempotent on the deployment id"
+    assert plugin.deployments["fake-dep-dep-1"]["tags"]["3lc-id"] == "dep-1"
+    assert plugin.deployments["fake-dep-dep-1"]["credential"] == "FakeCredential"
+    assert plugin.deployments["fake-dep-dep-1"]["connection_kind"] == "KEYLESS"
+
+    address = created.addresses[0].value
+    names = [
+        DnsRecord(name=host, type="A", values=[address])
+        for host in (hostnames.object_service, hostnames.compute_service)
+    ]
+    owner = DnsRecord(name=f"_owner-ada.{namespace}", type="TXT", values=["digest-of-launcher-and-dep-1"])
+    assert _change(h, [*names, owner]).status_code == 200
+    assert {r.name for r in _records(h, under=namespace)} == {n.name for n in [*names, owner, *pending.dns_records]}
+
+    state = NodeStateResponse.from_dict(
+        h.get("/infra/deployments/fake-dep-dep-1?diagnostics=baseline", headers=_KEYLESS).json()
+    )
+    assert state.state == "running" and state.bootstrap_history and not state.diagnostics
+    detailed = h.get("/infra/deployments/fake-dep-dep-1?diagnostics=detailed", headers=_KEYLESS).json()
+    assert detailed["diagnostics"], "the separately granted collector"
+    assert h.get("/infra/deployments/fake-dep-dep-1?diagnostics=everything", headers=_KEYLESS).status_code == 400
+    listing = DeploymentListing.from_dict(h.get("/infra/deployments?owner=ada").json())
+    assert [(d.provider_id, d.deployment_id, d.state) for d in listing.deployments] == [
+        ("fake-dep-dep-1", "dep-1", "running")
+    ]
+    assert h.get("/infra/deployments?owner=someone-else").json() == {"deployments": []}
+
+    plugin.leftovers.append("fake:address/203.0.113.250")
+    kept = SweepRequest(keep=[SweepItem("dep-1", "fake-dep-dep-1")])
+    report = SweepReport.from_dict(h.post("/infra/deployments/sweep", json_body=kept.to_dict()).json())
+    assert report.complete and report.held_addresses == [address] and report.released == []
+    assert report.pending == ["fake:address/203.0.113.250"], "inside the grace period"
+
+    assert _change(h, [], [*names, owner]).status_code == 200, "the launcher removes its records first"
+    assert h.call("DELETE", "/infra/deployments/fake-dep-dep-1", headers=_KEYLESS).json() == {"state": "terminated"}
+    assert h.call("DELETE", "/infra/deployments/fake-dep-dep-1", headers=_KEYLESS).json() == {"state": "terminated"}
+    assert [r.name for r in _records(h, under=namespace)] == [f"_validate.{namespace}"], "shared records stay"
+    gone = SweepRequest(gone=[SweepItem("dep-1")], grace_s=0)
+    report = SweepReport.from_dict(h.post("/infra/deployments/sweep", json_body=gone.to_dict()).json())
+    assert report.released == ["fake:address/203.0.113.250"] and report.held_addresses == []
 
 
-def test_credential_scrub_fails_closed_without_a_descriptor() -> None:
-    creds = {"aws_access_key_id": "AKIA1234", "api_key": "rp-key", "region": "eu-west-1", "account_key": "ak=="}
-    assert legacy.secret_credential_values(creds) == ["AKIA1234", "rp-key", "ak=="]
-    assert legacy.secret_credential_values(None) == []
-
-
-@pytest.mark.parametrize("key", ["sas", "connection_string", "credentials_json", "key", "passphrase", "Region"])
-def test_an_unknown_credential_key_is_scrubbed(key: str) -> None:
-    assert legacy.secret_credential_values({key: "some-value"}) == ["some-value"]
-
-
-def test_readable_credential_keys_and_descriptor_marks() -> None:
-    readable = {
-        k: f"v-{k}"
-        for k in (
-            "region",
-            "location",
-            "role_arn",
-            "start_url",
-            "tenant_id",
-            "client_id",
-            "subscription_id",
-            "account",
-            "resource_group",
-        )
+def test_without_a_zone_a_deployment_is_named_by_its_address(fake: Any) -> None:
+    _, h = fake
+    create = DeploymentRequest(
+        deployment_id="dep-2",
+        name="B",
+        bootstrap=DeploymentBootstrap(record_id="rec-2", config_service_url="https://cs"),
+    )
+    created = DeploymentResponse.from_dict(
+        h.post("/infra/deployments", json_body=create.to_dict(), headers=_KEYLESS).json()
+    )
+    address = created.addresses[0].value
+    assert created.endpoints == {
+        "object_service_url": f"https://os.{address}.sslip.io",
+        "compute_service_url": f"https://compute.{address}.sslip.io",
     }
-    assert legacy.secret_credential_values(readable) == []
-    descriptor = OwnerCredentialsDescriptor(
-        workspace_credentials=[
-            SettingsField(key="region", label="Region", secret=True),
-            SettingsField(key="profile", label="Profile"),
-        ],
-        login=LoginDescriptor(kind="k", label="l", fields=[{"key": "org", "secret": False}, {"key": "hint"}]),
+    prepared = h.post("/infra/deployments/prepare", json_body={"deployment_id": "dep-2"}, headers=_KEYLESS).json()
+    assert prepared["state"] == "ready" and prepared["dns_records"] == []
+
+
+def test_a_failed_launch_reports_failure_and_can_be_retained(fake: Any) -> None:
+    plugin, h = fake
+    create = DeploymentRequest(
+        deployment_id="dep-3",
+        name="C",
+        bootstrap=DeploymentBootstrap(record_id="rec-3", config_service_url="https://cs"),
+        env={"FAKE_FAIL": "1"},
     )
-    creds = {"region": "r-1", "profile": "p-1", "org": "o-1", "hint": "h-1"}
-    assert legacy.secret_credential_values(creds, descriptor) == ["r-1", "h-1"], "marked secret wins; unmarked scrubs"
+    created = DeploymentResponse.from_dict(
+        h.post("/infra/deployments", json_body=create.to_dict(), headers=_KEYLESS).json()
+    )
+    assert created.failure and created.provider_id, "resources exist and the launch did not complete"
+    retained = h.post("/infra/deployments/fake-dep-dep-3/retain", headers=_KEYLESS)
+    assert retained.status_code == 200 and plugin.deployments["fake-dep-dep-3"]["routed"] is False
+    assert plugin.deployments["fake-dep-dep-3"]["state"] == "exited", "the machine is kept"
+    missing = h.post("/infra/deployments/never-made/retain", headers=_KEYLESS)
+    assert missing.status_code == 404 and missing.json()["code"] == "not_found"
 
 
-def test_the_credential_descriptor_is_read_only_when_an_error_is_scrubbed() -> None:
-    reads: list[int] = []
-
-    class Counting(_LegacyEchoing):
-        def credential_descriptor(self) -> OwnerCredentialsDescriptor:
-            reads.append(1)
-            return super().credential_descriptor()
-
-        def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
-            creds = legacy.current_request_credentials() or {}
-            if creds.get("fail"):
-                msg = f"refused {creds['access']} in {creds['region']}"
-                raise RuntimeError(msg)
-            return CreateNodeResponse(provider_id="p", agent_url="http://x")
-
-    body = {"node_id": "n", "node_type": "t", "token": "tok"}
-    with PluginHarness(Counting(), plugin_id="legacy") as h:
-        ok = {**body, "credentials": {"access": "AKIDVALUE", "region": "eu-1"}}
-        assert h.post("/infra/nodes", json_body=ok).status_code == 201
-        assert reads == [], "a call that succeeds never reads the descriptor"
-        bad = {**body, "credentials": {"access": "AKIDVALUE", "region": "eu-1", "fail": "yes"}}
-        r = h.post("/infra/nodes", json_body=bad)
-    assert r.json()["detail"] == "refused *** in eu-1"
-    assert reads == [1]
+def _deployment_request(deployment_id: str) -> dict[str, Any]:
+    return DeploymentRequest(
+        deployment_id=deployment_id,
+        name=deployment_id,
+        bootstrap=DeploymentBootstrap(record_id=f"rec-{deployment_id}", config_service_url="https://cs"),
+    ).to_dict()
 
 
-def test_legacy_routes_are_mounted_only_for_overridden_methods() -> None:
-    base = {(m, p) for m, p in _paths(_Legacy()) if not p.startswith("/infra/storage") or p.endswith("/discover")}
-    assert ("POST", "/infra/nodes/{provider_id:str}/terminate") in base
-    assert ("POST", "/infra/storage/discover") in base
-    assert not any(p.startswith("/infra/login") or p == "/infra/role-setup" for _, p in base)
-    more = _paths(_LegacyWithLogin())
-    assert ("POST", "/infra/login") in more
-    assert ("GET", "/infra/role-setup") in more
-    assert ("GET", "/infra/login/{login_id:str}") not in more, "login_poll was not overridden"
+def test_every_deployment_call_but_list_sweep_and_delete_needs_a_connection(fake: Any) -> None:
+    _, h = fake
+    for method, path, body in (
+        ("POST", "/infra/deployments/options", {}),
+        ("POST", "/infra/deployments/check", {"label": "a"}),
+        ("POST", "/infra/deployments/prepare", {"deployment_id": "d"}),
+        ("POST", "/infra/deployments", {"deployment_id": "d", "bootstrap": {"record_id": "r"}}),
+        ("GET", "/infra/deployments/x", None),
+        ("POST", "/infra/deployments/x/retain", None),
+    ):
+        assert h.call(method, path, json_body=body).status_code == 400, (method, path)
+    assert h.get("/infra/deployments").status_code == 200
+    assert h.post("/infra/deployments/sweep", json_body={}).status_code == 200
+    assert h.post("/infra/deployments", json_body={"name": "no id"}, headers=_KEYLESS).status_code == 400
 
 
-def test_an_empty_top_level_credentials_object_does_not_hide_the_workspace_one() -> None:
-    plugin = _Legacy()
-    base = {"node_id": "n", "node_type": "t", "token": "tok"}
-    with PluginHarness(plugin, plugin_id="legacy") as h:
-        body = {**base, "credentials": {}, "workspace": {"credentials": {"api_key": "k"}}}
-        assert h.post("/infra/nodes", json_body=body).status_code == 201
-        assert h.post("/infra/nodes", json_body={**base, "credentials": {}}).status_code == 201
-        clash = {**base, "credentials": {"api_key": "a"}, "workspace": {"credentials": {"api_key": "b"}}}
-        r = h.post("/infra/nodes", json_body=clash)
-        assert r.status_code == 400 and "two different credentials" in r.json()["detail"]
-    assert [creds for creds, _ in plugin.seen] == [{"api_key": "k"}, {}]
+def test_a_deployment_is_deleted_without_a_connection_under_the_hosts_own_identity(fake: Any) -> None:
+    plugin, h = fake
+    created = h.post("/infra/deployments", json_body=_deployment_request("dep-u"), headers=_KEYLESS)
+    assert created.status_code == 201, created.text
+    pid = created.json()["provider_id"]
+    assert h.call("DELETE", f"/infra/deployments/{pid}").json() == {"state": "terminated"}
+    assert plugin.deployments[pid]["deleted_by"]["connection"] == "", "no Connection: the host's own identity"
+    assert h.call("DELETE", "/infra/deployments/never-made").json()["state"] == "gone"
 
 
-def test_legacy_credentials_reach_the_plugin_through_the_context_and_never_the_request() -> None:
-    plugin = _Legacy()
-    with PluginHarness(plugin, plugin_id="legacy") as h:
-        caps = h.get("/infra/capabilities").json()
-        assert caps["facets"] == ["storage", "legacy-owner-credentials"]
-        assert caps["credential_keys"] == ["api_key"]
-        assert caps["workspace_login"]["label"] == "Sign in"
-        assert "workspace_role" not in caps
-        body = {
-            "node_id": "n",
-            "node_type": "t",
-            "token": "tok",
-            "owner": "me@x",
-            "workspace": {"name": "w", "credentials": {"api_key": "sekrit"}, "provider_configs": {"aws": {"r": 1}}},
-        }
-        assert h.post("/infra/nodes", json_body=body).status_code == 201
-        assert h.post("/infra/nodes", json_body={"node_id": "n", "node_type": "t", "token": "tok"}).status_code == 201
-        r = h.post("/infra/nodes/p/terminate", json_body={"credentials": {"api_key": "sekrit"}, "owner": "me"})
-        assert r.status_code == 502
-        assert r.json()["detail"] == "me used ***: the provider refused it", "request credentials are scrubbed"
-        r = h.post("/infra/nodes/p/terminate", json_body={"credentials": {"api_key": "ok"}, "owner": "me"})
-        assert r.status_code == 200
-        assert r.json()["detail"] == "terminated for me"
-        assert h.post("/infra/nodes/p/terminate", json_body={}).status_code == 400
-        assert (
-            h.post("/infra/storage/discover", json_body={"credentials": {"api_key": "k"}, "owner": "o"}).json()[
-                "account"
-            ]
-            == "o"
-        )
-    assert plugin.seen == [({"api_key": "sekrit"}, {"aws": {"r": 1}}), (None, {})]
-    assert plugin.owners == [("me@x", "me@x"), ("", "")]
-    assert legacy.current_request_credentials() is None, "reset after the call"
-    assert legacy.current_request_owner() == ""
+def test_a_launcher_without_a_config_service_creates_with_no_record_and_no_token(fake: Any) -> None:
+    plugin, h = fake
+    body = _deployment_request("dep-n")
+    body["bootstrap"] = {"record_id": "", "config_service_url": "", "token": ""}
+    body["public"] = True
+    body["seed_provider_configs"] = {"aws": {"region": "eu-west-1"}}
+    created = h.post("/infra/deployments", json_body=body, headers=_KEYLESS)
+    assert created.status_code == 201, created.text
+    record = plugin.deployments[created.json()["provider_id"]]
+    assert record["record_id"] == "" and record["public"] is True
+    assert record["seed_provider_configs"] == {"aws": {"region": "eu-west-1"}}
+    body = _deployment_request("dep-t")
+    body["bootstrap"] = {"record_id": "", "config_service_url": "https://cs.example", "token": "orphan-token"}
+    refused = h.post("/infra/deployments", json_body=body, headers=_KEYLESS)
+    assert refused.status_code == 400 and "orphan-token" not in refused.text
 
 
-def test_owner_reaches_create_storage_in_the_request_and_the_context() -> None:
-    plugin = _Legacy()
-    with PluginHarness(plugin, plugin_id="legacy") as h:
-        r = h.post("/infra/storage", json_body={"name": "b", "owner": "me@x", "credentials": {"api_key": "k"}})
-        assert r.status_code == 201, r.text
-        assert h.post("/infra/storage", json_body={"name": "c", "owner": "you@x"}).status_code == 201
-    assert plugin.storage_seen == [("me@x", "me@x", {"api_key": "k"}), ("you@x", "you@x", None)]
+def test_a_dns_change_is_atomic_and_two_launches_cannot_both_win_a_name(fake: Any) -> None:
+    _, h = fake
+    mine = DnsRecord(name="os.ada.deploy.example.com", type="A", values=["203.0.113.7"])
+    assert _change(h, [mine]).json() == {}
+    assert _change(h, [mine]).status_code == 200, "the same name with the same values succeeds"
+    other = DnsRecord(name="compute.bob.deploy.example.com", type="A", values=["203.0.113.8"])
+    theirs = DnsRecord(name=mine.name, type="A", values=["203.0.113.9"])
+    lost = _change(h, [other, theirs])
+    assert lost.status_code == 409 and lost.json()["code"] == "conflict" and lost.json()["remedy"]
+    assert _records(h) == [mine], "nothing of a refused change is applied"
+    assert _change(h, [], [theirs]).status_code == 200 and _records(h) == [mine], "a delete removes only an exact match"
+    assert _change(h, [], [mine]).status_code == 200 and _records(h) == []
+    assert _change(h, [], [mine]).status_code == 200, "a missing record is success"
 
 
-def test_login_and_role_routes_pass_the_owner_through() -> None:
-    with PluginHarness(_LegacyWithLogin(), plugin_id="legacy") as h:
-        assert h.post("/infra/login", json_body={"owner": "me", "start_url": "u"}).json() == {
-            "code": "ABCD",
-            "owner": "me",
-        }
-        assert h.get("/infra/role-setup?owner=me").json() == {"external_id": "me"}
-
-
-def test_detailed_workspace_diagnostics_are_separate_and_opt_in(tmp_path: Path) -> None:
-    class Detailed(FakeProvider):
-        def workspace_diagnostics(self, provider_id: str) -> NodeStateResponse:
-            return NodeStateResponse(
-                state="running", diagnostics=[{"source": "collector", "status": "ok", "detail": provider_id}]
-            )
-
-    with PluginHarness(Detailed(), plugin_id="fake", config_root=tmp_path) as h:
-        response = h.get("/infra/workspace-diagnostics/vm-1")
-        assert response.status_code == 200
-        assert response.json()["diagnostics"][0]["detail"] == "vm-1"
-    with PluginHarness(FakeProvider(), plugin_id="fake", config_root=tmp_path) as h:
-        assert h.get("/infra/workspace-diagnostics/vm-1").status_code == 501
-
-
-def test_failed_retention_is_explicit_and_unsupported_by_default(tmp_path: Path) -> None:
-    class Retaining(FakeProvider):
-        def workspace_retain_failed(self, provider_id: str) -> NodeStateResponse:
-            return NodeStateResponse(state="running", detail=f"{provider_id} isolated")
-
-    with PluginHarness(Retaining(), plugin_id="fake", config_root=tmp_path) as h:
-        response = h.post("/infra/workspace-retain/vm-1", json_body={})
-        assert response.status_code == 200
-        assert response.json()["detail"] == "vm-1 isolated"
-    with PluginHarness(FakeProvider(), plugin_id="fake", config_root=tmp_path) as h:
-        assert h.post("/infra/workspace-retain/vm-1", json_body={}).status_code == 501
+def test_dns_listing_pages_and_changes_are_bounded_and_never_see_a_connection(fake: Any) -> None:
+    _, h = fake
+    many = [DnsRecord(name=f"n{i:03d}.many.deploy.example.com", type="TXT", values=[str(i)]) for i in range(350)]
+    for start in range(0, 350, 100):
+        assert _change(h, many[start : start + 100]).status_code == 200
+    first = DnsRecords.from_dict(
+        h.get("/infra/dns/records", params={"zone_id": _ZONE.id, "zone_name": _ZONE.name}, headers=_LAUNCHER).json()
+    )
+    assert len(first.records) == 300 and first.next_cursor
+    assert len(_records(h, under="many.deploy.example.com")) == 350
+    assert _records(h, under="other.deploy.example.com") == []
+    assert _change(h, many[:101]).status_code == 400, "one change holds at most 100 records"
+    mx = {"zone": _ZONE.to_dict(), "create": [{"name": "a.deploy.example.com", "type": "MX", "values": ["x"]}]}
+    assert h.post("/infra/dns/changes", json_body=mx, headers=_LAUNCHER).status_code == 400
+    elsewhere = DnsRecord(name="a.elsewhere.example.org", type="A", values=["203.0.113.1"])
+    assert _change(h, [elsewhere]).status_code == 400
+    assert h.get("/infra/dns/records").status_code == 400
+    assert h.get("/infra/dns/records", params={"zone_id": "Z1"}, headers=_KEYLESS).status_code == 400
+    assert h.post("/infra/dns/changes", json_body=DnsChange(zone=_ZONE).to_dict(), headers=_AMBIENT).status_code == 400

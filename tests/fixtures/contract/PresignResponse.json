@@ -1,0 +1,18 @@
+{
+  "type": "PresignResponse",
+  "route": "POST /infra/storage/presign (201)",
+  "example": {
+    "expires_s": 3600,
+    "uploads": [
+      {
+        "path": "c.jpg",
+        "key": "train/c.jpg",
+        "url": "fake://fake-data/train/c.jpg",
+        "method": "PUT"
+      }
+    ],
+    "downloads": [],
+    "refused": [],
+    "region": "fake-1"
+  }
+}

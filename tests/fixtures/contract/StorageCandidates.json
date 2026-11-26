@@ -1,0 +1,13 @@
+{
+  "type": "StorageCandidates",
+  "route": "GET /infra/storage/candidates (200)",
+  "example": {
+    "items": [
+      {
+        "location": "fake://fake-data",
+        "label": "fake-data"
+      }
+    ],
+    "truncated": false
+  }
+}

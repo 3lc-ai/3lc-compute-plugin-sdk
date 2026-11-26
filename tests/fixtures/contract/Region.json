@@ -1,0 +1,8 @@
+{
+  "type": "Region",
+  "route": "StorageListing.regions[]",
+  "example": {
+    "id": "fake-1",
+    "name": "Fake region 1"
+  }
+}

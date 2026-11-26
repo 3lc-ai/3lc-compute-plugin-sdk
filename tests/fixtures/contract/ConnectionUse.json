@@ -1,0 +1,8 @@
+{
+  "type": "ConnectionUse",
+  "route": "header x-3lc-connection-use",
+  "example": {
+    "resource_id": "node-1",
+    "source_identity": "ada@example.com"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "PlacementChoice",
+  "route": "PlacementField.choices[]",
+  "example": {
+    "id": "fake-1",
+    "label": "Fake region 1"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "type": "GrantUpdateRequest",
+  "route": "POST /infra/connection/grant/update (request)",
+  "example": {
+    "installed": {
+      "permissions": {
+        "deployments": true,
+        "nodes": true,
+        "storage": [
+          {
+            "location": "fake://fake-data/projects",
+            "access": "read_write"
+          }
+        ],
+        "options": {
+          "deployment_nodes": true
+        }
+      },
+      "account": {
+        "account_id": "000000000000"
+      },
+      "resource_ref": "fake:grant/conn-1",
+      "status": "complete",
+      "version": "1"
+    },
+    "pending": {
+      "deployments": false,
+      "nodes": true,
+      "storage": [],
+      "options": {}
+    },
+    "revision": 1,
+    "pending_revision": 2
+  }
+}

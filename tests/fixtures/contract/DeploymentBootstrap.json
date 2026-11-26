@@ -1,0 +1,10 @@
+{
+  "type": "DeploymentBootstrap",
+  "route": "DeploymentRequest.bootstrap",
+  "example": {
+    "record_id": "rec-1",
+    "config_service_url": "https://config.example.com",
+    "token": "bootstrap-token",
+    "launcher_service_id": "svc-launcher-1"
+  }
+}

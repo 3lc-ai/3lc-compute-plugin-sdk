@@ -1,0 +1,10 @@
+{
+  "type": "CostNote",
+  "route": "DeploymentOptions.costs[]",
+  "example": {
+    "label": "Machine",
+    "description": "Billed while the deployment runs.",
+    "hourly": 0.1,
+    "currency": "USD"
+  }
+}

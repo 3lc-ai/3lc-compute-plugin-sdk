@@ -1,0 +1,11 @@
+{
+  "type": "DeleteObjectsRequest",
+  "route": "POST /infra/storage/delete (request)",
+  "example": {
+    "url": "fake://fake-data",
+    "paths": [
+      "readme.txt"
+    ],
+    "dry_run": true
+  }
+}

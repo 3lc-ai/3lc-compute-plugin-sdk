@@ -1,0 +1,20 @@
+{
+  "type": "PlacementField",
+  "route": "DeploymentOptions.placement[]",
+  "example": {
+    "key": "location",
+    "label": "Location",
+    "choices": [
+      {
+        "id": "fake-1",
+        "label": "Fake region 1"
+      },
+      {
+        "id": "fake-2",
+        "label": "Fake region 2"
+      }
+    ],
+    "default": "fake-1",
+    "required": true
+  }
+}

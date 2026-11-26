@@ -1,0 +1,47 @@
+{
+  "type": "StorageListing",
+  "route": "GET /infra/storage (200)",
+  "example": {
+    "kind": "bucket",
+    "label": "Fake bucket",
+    "creatable": true,
+    "upload": true,
+    "browse": true,
+    "download": true,
+    "bundle": true,
+    "delete": true,
+    "transfer": true,
+    "rename": true,
+    "default_id": "fake-data",
+    "storage": [
+      {
+        "id": "fake-data",
+        "name": "fake-data",
+        "url": "fake://fake-data",
+        "region": "fake-1",
+        "size_gb": null,
+        "kind": "bucket",
+        "default": true,
+        "access": {
+          "browse": true,
+          "delete_location": false,
+          "bundle": true,
+          "grants": [
+            {
+              "url": "fake://fake-data/projects",
+              "read": true,
+              "write": true,
+              "delete": true
+            }
+          ]
+        }
+      }
+    ],
+    "regions": [
+      {
+        "id": "fake-1",
+        "name": "Fake region 1"
+      }
+    ]
+  }
+}

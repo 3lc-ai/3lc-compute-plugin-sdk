@@ -1,0 +1,22 @@
+{
+  "type": "PreflightResponse",
+  "route": "POST /infra/nodes/check (200)",
+  "example": {
+    "ok": true,
+    "checks": [
+      {
+        "name": "node type",
+        "ok": true,
+        "level": "info",
+        "detail": "fake-gpu"
+      },
+      {
+        "name": "location",
+        "ok": true,
+        "level": "info",
+        "detail": "fake-1"
+      }
+    ],
+    "summary": "ready"
+  }
+}

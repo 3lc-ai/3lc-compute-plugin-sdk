@@ -1,0 +1,12 @@
+{
+  "type": "NodeStateResponse",
+  "route": "GET /infra/nodes/fake-node-1 (200)",
+  "example": {
+    "state": "running",
+    "bootstrap_history": [
+      "Starting node agent"
+    ],
+    "bootstrap_detail": "Starting node agent",
+    "bootstrap_failed": false
+  }
+}

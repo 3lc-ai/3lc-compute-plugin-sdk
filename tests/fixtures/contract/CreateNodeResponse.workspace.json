@@ -1,0 +1,14 @@
+{
+  "type": "CreateNodeResponse.workspace",
+  "route": "POST /infra/nodes (201)",
+  "example": {
+    "provider_id": "fake-ws-1",
+    "storage_access": "none",
+    "hourly_rate": 0.1,
+    "location": "fake-1",
+    "services": {
+      "object_service_url": "http://fake-ws-1:5015",
+      "compute_service_url": "http://fake-ws-1:5020"
+    }
+  }
+}

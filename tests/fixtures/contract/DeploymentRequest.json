@@ -1,0 +1,48 @@
+{
+  "type": "DeploymentRequest",
+  "route": "POST /infra/deployments (request)",
+  "example": {
+    "deployment_id": "dep-1",
+    "name": "Ada's deployment",
+    "bootstrap": {
+      "record_id": "rec-1",
+      "config_service_url": "https://config.example.com",
+      "token": "bootstrap-token",
+      "launcher_service_id": "svc-launcher-1"
+    },
+    "hostnames": {
+      "hostname": "",
+      "object_service": "os-ada.i-fake-1-z0fake.deploy.example.com",
+      "compute_service": "compute-ada.i-fake-1-z0fake.deploy.example.com",
+      "namespace": "i-fake-1-z0fake.deploy.example.com"
+    },
+    "ingress_key": "fake-1-z0fake",
+    "size": "fake-small",
+    "placement": {
+      "location": "fake-1",
+      "network": "net-fake-1-a"
+    },
+    "storage": {
+      "root": "fake://fake-data/projects",
+      "scan": [
+        "fake://fake-data/train"
+      ],
+      "data": [],
+      "create_root": false
+    },
+    "compute_spec": "3lc-compute==1.3.0",
+    "env": {
+      "TLC_EXAMPLE": "1"
+    },
+    "plugins": [],
+    "owner": "ada@example.com",
+    "mode": "full",
+    "detailed_diagnostics": false,
+    "public": true,
+    "seed_provider_configs": {
+      "fake": {
+        "default_location": "fake-east-1"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "VerifyRequest",
+  "route": "POST /infra/connection/verify (request)",
+  "example": {
+    "storage_roots": [
+      {
+        "url": "fake://fake-data/projects",
+        "access": "read_write",
+        "role": "project_root"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "type": "TransferRequest",
+  "route": "POST /infra/storage/transfer (request)",
+  "example": {
+    "src_url": "fake://fake-data/train",
+    "dst_url": "fake://fake-data/copy",
+    "items": [
+      "a.jpg"
+    ],
+    "mode": "copy",
+    "rename_to": "",
+    "dry_run": false
+  }
+}

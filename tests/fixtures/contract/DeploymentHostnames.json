@@ -1,0 +1,10 @@
+{
+  "type": "DeploymentHostnames",
+  "route": "DeploymentRequest.hostnames",
+  "example": {
+    "hostname": "",
+    "object_service": "os-ada.i-fake-1-z0fake.deploy.example.com",
+    "compute_service": "compute-ada.i-fake-1-z0fake.deploy.example.com",
+    "namespace": "i-fake-1-z0fake.deploy.example.com"
+  }
+}

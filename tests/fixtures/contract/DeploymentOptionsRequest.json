@@ -1,0 +1,9 @@
+{
+  "type": "DeploymentOptionsRequest",
+  "route": "POST /infra/deployments/options (request)",
+  "example": {
+    "selected": {
+      "location": "fake-1"
+    }
+  }
+}

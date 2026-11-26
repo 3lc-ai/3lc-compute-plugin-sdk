@@ -1,0 +1,26 @@
+{
+  "type": "WorkspaceRequest",
+  "route": "CreateNodeRequest.workspace",
+  "example": {
+    "project_root_url": "",
+    "mode": "full",
+    "public": false,
+    "name": "ada",
+    "bootstrap_plugins": [],
+    "data_buckets": [],
+    "project_scan_urls": [],
+    "create_bucket": false,
+    "seed_provider_configs": false,
+    "workspace_id": "rec-1",
+    "config_service_url": "",
+    "bootstrap_token": "",
+    "region": "fake-1",
+    "vpc_id": "",
+    "subnet_id": "",
+    "availability_zone": "",
+    "launcher_service_id": "",
+    "detailed_diagnostics": false,
+    "dns_zone_id": "",
+    "dns_zone_name": ""
+  }
+}

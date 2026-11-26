@@ -1,0 +1,21 @@
+{
+  "type": "Offer",
+  "route": "Catalog.offers[]",
+  "example": {
+    "id": "fake-gpu",
+    "label": "Fake GPU",
+    "description": "One fake GPU.",
+    "vcpus": 8,
+    "memory_gb": 32.0,
+    "gpu_name": "Fake T1000",
+    "gpu_count": 1,
+    "gpu_memory_gb": 24.0,
+    "hourly": 1.5,
+    "hourly_spot": 0.5,
+    "currency": "USD",
+    "available": true,
+    "unavailable_reason": "",
+    "capacity": "High",
+    "recommended": true
+  }
+}

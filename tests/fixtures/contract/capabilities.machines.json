@@ -1,0 +1,43 @@
+{
+  "type": "CapabilitiesResponse",
+  "route": "GET /infra/capabilities (200)",
+  "example": {
+    "provider": "machines",
+    "display_name": "Machines",
+    "contract": 2,
+    "ready": true,
+    "not_ready_reason": "",
+    "missing_fields": [],
+    "requires_connection": false,
+    "access_methods": [],
+    "permissions": {
+      "options": []
+    },
+    "nodes": {
+      "kinds": [
+        "gpu",
+        "cpu"
+      ],
+      "types": [
+        "lab-gpu-1",
+        "lab-gpu-2"
+      ],
+      "type_label": "Machine",
+      "pricing": [
+        "on_demand"
+      ],
+      "storage_access": [
+        "ambient"
+      ],
+      "type_connections": {
+        "lab-gpu-2": "0b9d0c53-5d0f-4a51-9b0e-0c5a2f1d7e11"
+      }
+    },
+    "operations": [
+      "node.create",
+      "node.state",
+      "node.delete",
+      "node.check"
+    ]
+  }
+}

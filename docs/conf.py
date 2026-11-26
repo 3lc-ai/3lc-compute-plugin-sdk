@@ -82,6 +82,9 @@ suppress_warnings = [
     # ts_type_xref_formatter is a function, so Sphinx's config cache can't
     # pickle it. Harmless — it just means the config isn't cached between runs.
     "config.cache",
+    # A `type[...]` annotation in a signature is looked up as a name, and two wire types have a
+    # field called `type` (`Address.type`, `DnsRecord.type`): the lookup finds both and warns.
+    "ref.python",
 ]
 
 templates_path: list[str] = []

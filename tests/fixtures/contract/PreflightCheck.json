@@ -1,0 +1,10 @@
+{
+  "type": "PreflightCheck",
+  "route": "ConnectionVerification.checks[]",
+  "example": {
+    "name": "fake://fake-data/projects",
+    "ok": true,
+    "level": "info",
+    "detail": ""
+  }
+}

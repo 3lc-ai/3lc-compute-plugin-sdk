@@ -1,0 +1,19 @@
+{
+  "type": "DeploymentPrepared",
+  "route": "POST /infra/deployments/prepare (200)",
+  "example": {
+    "state": "pending",
+    "detail": "Waiting for the certificate's validation record.",
+    "dns_records": [
+      {
+        "name": "_validate.i-fake-1-z0fake.deploy.example.com",
+        "type": "TXT",
+        "values": [
+          "fake-fake-1-z0fake"
+        ],
+        "ttl": 60
+      }
+    ],
+    "retry_after_s": 0.0
+  }
+}

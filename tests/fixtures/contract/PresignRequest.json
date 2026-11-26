@@ -1,0 +1,14 @@
+{
+  "type": "PresignRequest",
+  "route": "POST /infra/storage/presign (request)",
+  "example": {
+    "url": "fake://fake-data/train",
+    "files": [
+      {
+        "path": "c.jpg",
+        "size": 3
+      }
+    ],
+    "mode": "upload"
+  }
+}

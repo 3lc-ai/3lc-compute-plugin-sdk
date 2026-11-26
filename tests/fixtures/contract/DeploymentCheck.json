@@ -1,0 +1,17 @@
+{
+  "type": "DeploymentCheck",
+  "route": "POST /infra/deployments/check (200)",
+  "example": {
+    "ok": true,
+    "reason": "",
+    "ingress_key": "fake-1-z0fake",
+    "checks": [
+      {
+        "name": "quota",
+        "ok": true,
+        "level": "info",
+        "detail": "1 of 10 fake machines in use"
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "type": "NodeCheckRequest",
+  "route": "POST /infra/nodes/check (request)",
+  "example": {
+    "node_type": "fake-gpu",
+    "pricing": "spot",
+    "location": "fake-1",
+    "storage_roots": [
+      {
+        "url": "fake://fake-data/projects",
+        "access": "read_write",
+        "role": "project_root"
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "type": "DnsChange",
+  "route": "POST /infra/dns/changes (request)",
+  "example": {
+    "zone": {
+      "id": "Z0FAKE",
+      "name": "deploy.example.com"
+    },
+    "create": [
+      {
+        "name": "_validate.i-fake-1-z0fake.deploy.example.com",
+        "type": "TXT",
+        "values": [
+          "fake-fake-1-z0fake"
+        ],
+        "ttl": 60
+      }
+    ],
+    "delete": []
+  }
+}

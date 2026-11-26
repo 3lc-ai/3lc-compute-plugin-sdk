@@ -1,0 +1,10 @@
+{
+  "type": "CreateStorageRequest",
+  "route": "POST /infra/storage (request)",
+  "example": {
+    "name": "fake-new",
+    "region": "fake-1",
+    "make_default": false,
+    "owner": "ada@example.com"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "CreateNodeResponse",
+  "route": "POST /infra/nodes (201)",
+  "example": {
+    "provider_id": "fake-node-1",
+    "storage_access": "identity",
+    "agent_url": "http://fake:8800",
+    "pricing": "spot",
+    "hourly_rate": 0.5,
+    "location": "fake-1",
+    "identity": "3lc-fake-node"
+  }
+}

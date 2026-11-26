@@ -1,496 +1,613 @@
 # Copyright 2026 3LC Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the InfrastructurePlugin contract and typed dataclasses."""
+"""The provider contract: tolerant wire types, operations that follow the class, and typed errors."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
-from litestar import Litestar
-from litestar.testing import TestClient
+from litestar.exceptions import HTTPException
 
+from tlc_plugin_sdk.connections import ConnectionBinding, CredentialUnavailable
 from tlc_plugin_sdk.contract import HubPlugin
+from tlc_plugin_sdk.harness import PluginHarness
 from tlc_plugin_sdk.infrastructure import (
+    CONTRACT_GENERATION,
+    OPERATIONS,
+    TRANSITIONAL_OPERATIONS,
+    AccessMethod,
+    AccountSchema,
+    Address,
     CapabilitiesResponse,
+    Catalog,
+    CatalogFacet,
+    CatalogRequest,
+    Conflict,
+    ConnectionVerification,
     CreateNodeRequest,
     CreateNodeResponse,
+    CredentialExpired,
+    DeploymentCapabilities,
+    DeploymentPrepared,
+    DeploymentProvider,
+    DeploymentRequest,
+    DnsFacet,
+    DnsRecord,
+    ErrorAnswer,
+    FormField,
+    GrantObservation,
+    GrantUpdate,
     InfrastructurePlugin,
+    InvalidRequest,
+    NodeCapabilities,
+    NodeProvider,
     NodeStateResponse,
-    PreflightCheck,
-    PreflightResponse,
-    ProjectStorage,
+    NotConfigured,
+    NotFound,
+    NotSupported,
+    Offer,
+    PermissionDenied,
+    PermissionOption,
+    PermissionSchema,
+    PluginSettings,
+    ProviderError,
+    RateLimited,
+    SettingsField,
+    StorageFacet,
+    VerifyRequest,
+    capabilities_problems,
+    provided_operations,
 )
+from tlc_plugin_sdk.infrastructure.errors import ERROR_CODES, scrub
+from tlc_plugin_sdk.infrastructure.routes import OPERATION_HANDLERS, answer, error_handlers
+from tlc_plugin_sdk.infrastructure.testing import FakeProvider, FakeSettings, connection_headers
 
-# ── Dataclass unit tests ─────────────────────────────────────────────────────
-
-
-class TestCreateNodeRequest:
-    def test_from_dict_full(self) -> None:
-        req = CreateNodeRequest.from_dict({
-            "node_id": " n1 ",
-            "node_type": "A100",
-            "token": "tok",
-            "env": {"K": "V"},
-            "agent_port": 9900,
-            "ports": [8888],
-            "idle_ttl_s": 600,
-            "flavor": "gpu",
-            "owner": "user@x",
-            "pricing": "spot",
-            "compute_spec": " 3lc-compute==1.2 ",
-            "project_storage": {"project_root_url": " s3://team/projects ", "project_scan_urls": ["s3://ex", ""]},
-        })
-        assert req.node_id == "n1"
-        assert req.node_type == "A100"
-        assert req.token == "tok"
-        assert req.env == {"K": "V"}
-        assert req.agent_port == 9900
-        assert req.ports == [8888]
-        assert req.idle_ttl_s == 600.0
-        assert req.owner == "user@x"
-        assert req.pricing == "spot"
-        assert req.compute_spec == "3lc-compute==1.2"
-        assert req.project_storage == ProjectStorage("s3://team/projects", ["s3://ex"])
-
-    def test_from_dict_minimal(self) -> None:
-        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "node_type": "H100"})
-        assert req.node_id == "n1"
-        assert req.node_type == "H100"
-        assert req.env == {}
-        assert req.agent_port == 8800
-        assert req.ports == []
-        assert req.idle_ttl_s == 1800.0
-        assert req.flavor == "gpu"
-        assert req.owner == ""
-        assert req.compute_spec == ""
-        assert req.pricing == ""
-        assert req.project_storage == ProjectStorage()  # an older host sends none
-
-    @pytest.mark.parametrize("spec", ["3lc-compute==1.2.0", "3lc-compute>=1.2,<1.3"])
-    def test_compute_spec_is_one_requirement_pin_or_range(self, spec: str) -> None:
-        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "compute_spec": f" {spec} "})
-        assert req.compute_spec == spec
-        assert CreateNodeRequest.from_dict(req.to_dict()).compute_spec == spec
-
-    def test_from_dict_ignores_keys_it_does_not_know(self) -> None:
-        """An older host's ``wheelhouse`` (or any other unknown key) is ignored, not an error."""
-        req = CreateNodeRequest.from_dict({
-            "node_id": "n1",
-            "token": "tok",
-            "node_type": "H100",
-            "compute_spec": "3lc-compute==1.2.0",
-            "wheelhouse": "/srv/wheels",
-            "something_new": {"x": 1},
-        })
-        assert req.compute_spec == "3lc-compute==1.2.0"
-        assert not hasattr(req, "wheelhouse")
-        assert "wheelhouse" not in req.to_dict()
-        assert "something_new" not in req.to_dict()
-
-    def test_from_dict_gpu_type_compat(self) -> None:
-        """The host may still send ``gpu_type`` — from_dict accepts both names."""
-        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "gpu_type": "H100"})
-        assert req.node_type == "H100"
-
-    def test_from_dict_node_type_wins(self) -> None:
-        """When both keys are present, ``node_type`` wins."""
-        req = CreateNodeRequest.from_dict({
-            "node_id": "n1",
-            "token": "tok",
-            "node_type": "new",
-            "gpu_type": "old",
-        })
-        assert req.node_type == "new"
-
-    def test_from_dict_none_coercion(self) -> None:
-        req = CreateNodeRequest.from_dict({
-            "node_id": "n1",
-            "token": "tok",
-            "node_type": "H100",
-            "env": None,
-            "agent_port": None,
-            "idle_ttl_s": None,
-        })
-        assert req.env == {}
-        assert req.agent_port == 8800
-        assert req.idle_ttl_s == 1800.0
-
-    @pytest.mark.parametrize(("sent", "read"), [(0, 0.0), ("0", 0.0), (-1, -1.0), (0.0, 0.0)])
-    def test_an_idle_ttl_of_zero_or_less_is_kept_as_never(self, sent: object, read: float) -> None:
-        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "idle_ttl_s": sent})
-        assert req.idle_ttl_s == read
-        assert CreateNodeRequest.from_dict(req.to_dict()).idle_ttl_s == read
-        assert req.to_dict()["idle_ttl_s"] == read
-
-    @pytest.mark.parametrize("sent", ["soon", True, float("nan"), float("inf"), [], {}])
-    def test_an_unreadable_idle_ttl_is_the_default(self, sent: object) -> None:
-        req = CreateNodeRequest.from_dict({"node_id": "n1", "token": "tok", "idle_ttl_s": sent})
-        assert req.idle_ttl_s == 1800.0
+_ERROR_KEYS = {"detail", "code", "remedy", "retry_after_s"}
+_AMBIENT = connection_headers(ConnectionBinding("conn-1", "nodes", "AMBIENT"))
 
 
-class TestCreateNodeResponse:
-    def test_to_dict_minimal(self) -> None:
-        resp = CreateNodeResponse(provider_id="p1", agent_url="http://x:8800")
-        d = resp.to_dict()
-        assert d == {"provider_id": "p1", "agent_url": "http://x:8800"}
-        assert "token" not in d
-        assert "pricing" not in d
-        assert "hourly_rate" not in d
-
-    def test_to_dict_hourly_rate(self) -> None:
-        """A quote is emitted as a number; zero is a real quote, ``None`` is no quote."""
-        base = {"provider_id": "p1", "agent_url": "http://x:8800"}
-        assert CreateNodeResponse(**base, hourly_rate=1.21).to_dict()["hourly_rate"] == 1.21
-        assert CreateNodeResponse(**base, hourly_rate=0).to_dict()["hourly_rate"] == 0.0
-        assert "hourly_rate" not in CreateNodeResponse(**base, hourly_rate=None).to_dict()
-
-    def test_to_dict_with_optionals(self) -> None:
-        resp = CreateNodeResponse(
-            provider_id="p1",
-            agent_url="http://x:8800",
-            token="tok",
-            pricing="spot",
-            detail="ok",
-        )
-        d = resp.to_dict()
-        assert d["token"] == "tok"
-        assert d["pricing"] == "spot"
-        assert d["detail"] == "ok"
+def _paths(plugin: InfrastructurePlugin) -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for handler in plugin.get_route_handlers():
+        for path in handler.paths:
+            for method in handler.http_methods:
+                if str(method).upper() != "OPTIONS":
+                    out.add((str(method).upper(), "/" + str(path).strip("/")))
+    return out
 
 
-class TestNodeStateResponse:
-    def test_to_dict(self) -> None:
-        resp = NodeStateResponse(state="running", detail="pid 1234")
-        assert resp.to_dict() == {"state": "running", "detail": "pid 1234"}
-
-    def test_to_dict_no_detail(self) -> None:
-        resp = NodeStateResponse(state="terminated")
-        assert resp.to_dict() == {"state": "terminated"}
+# ── Wire types ───────────────────────────────────────────────────────────────
 
 
-class TestPreflightResponse:
-    def test_to_dict(self) -> None:
-        resp = PreflightResponse(
-            ok=True,
-            checks=[PreflightCheck(name="reachable", ok=True, detail="ssh ok")],
-            summary="all good",
-        )
-        d = resp.to_dict()
-        assert d["ok"] is True
-        assert len(d["checks"]) == 1
-        assert d["checks"][0]["name"] == "reachable"
-        assert d["summary"] == "all good"
+def test_a_peers_shape_never_raises_and_unknown_keys_are_dropped() -> None:
+    caps = CapabilitiesResponse.from_dict({
+        "provider": 7,
+        "display_name": None,
+        "contract": "2",
+        "ready": "yes",
+        "missing_fields": "nope",
+        "account": {"noun": "A", "fields": [{"key": "k", "label": "L", "kind": "weird", "max_length": "x"}, 3]},
+        "access_methods": [{"kind": "SECRET", "label": "S", "purposes": ["nodes", "moon"]}],
+        "nodes": {"kinds": ["gpu", "quantum"], "pricing": "spot", "type_connections": {"a": None, "b": "c"}},
+        "deployments": "no",
+        "added_in_a_later_minor": {"x": 1},
+    })
+    assert caps.provider == "7" and caps.display_name == "" and caps.contract == 2 and caps.ready is True
+    assert caps.missing_fields == [] and caps.deployments is None
+    assert caps.account is not None and caps.account.fields == [FormField(key="k", label="L")]
+    assert caps.access_methods == [AccessMethod(kind="SECRET", label="S", purposes=["nodes"])]
+    assert caps.nodes == NodeCapabilities(kinds=["gpu"], type_connections={"b": "c"})
+    assert "added_in_a_later_minor" not in caps.to_dict()
+    for cls in (CreateNodeRequest, CreateNodeResponse, DeploymentRequest, ConnectionVerification, Catalog):
+        assert cls.from_dict(None) == cls.from_dict({}) == cls.from_dict([1, 2])
 
 
-class TestCapabilitiesResponse:
-    def test_to_dict(self) -> None:
-        resp = CapabilitiesResponse(provider="test", node_types=["A100"], ready=True)
-        d = resp.to_dict()
-        assert d["provider"] == "test"
-        assert d["node_types"] == ["A100"]
-        assert d["flavors"] == ["gpu"]
-        assert d["ready"] is True
-        assert d["missing"] == []
-
-    def test_extra_merged(self) -> None:
-        resp = CapabilitiesResponse(
-            provider="machines",
-            node_types=["devbox"],
-            ready=True,
-            extra={"machines": [{"name": "devbox", "gpu": "RTX 4090"}]},
-        )
-        d = resp.to_dict()
-        assert d["machines"] == [{"name": "devbox", "gpu": "RTX 4090"}]
-        assert d["node_types"] == ["devbox"]
-
-    def test_extra_empty_not_in_dict(self) -> None:
-        resp = CapabilitiesResponse(provider="test", node_types=[], ready=False)
-        d = resp.to_dict()
-        assert "machines" not in d
+def test_a_provider_that_says_no_contract_reads_as_generation_zero() -> None:
+    assert CONTRACT_GENERATION == 2
+    assert CapabilitiesResponse(provider="p", display_name="P").to_dict()["contract"] == 2
+    assert CapabilitiesResponse.from_dict({"provider": "p", "node_types": ["a"], "facets": []}).contract == 0
 
 
-# ── InfrastructurePlugin hierarchy tests ─────────────────────────────────────
+def test_a_key_whose_presence_carries_meaning_is_omitted_when_unset() -> None:
+    caps = CapabilitiesResponse(provider="p", display_name="P").to_dict()
+    assert {"account", "host", "nodes", "deployments", "storage"}.isdisjoint(caps)
+    assert caps["permissions"] == {"options": []}, "no storage schema: storage rules are not a thing here"
+    offer = Offer(id="a").to_dict()
+    assert "hourly" not in offer and "available" not in offer and offer["gpu_count"] == 0
+    assert CreateNodeResponse(provider_id="p").to_dict() == {"provider_id": "p", "storage_access": "none"}
+    assert ErrorAnswer(detail="d").to_dict() == {
+        "detail": "d",
+        "code": "provider_error",
+        "remedy": "",
+        "retry_after_s": None,
+    }
 
 
-class TestPluginHierarchy:
-    def test_is_hub_plugin_subclass(self) -> None:
-        assert issubclass(InfrastructurePlugin, HubPlugin)
-
-    def test_cannot_instantiate_without_abstracts(self) -> None:
-        with pytest.raises(TypeError):
-            InfrastructurePlugin()  # type: ignore[abstract]
-
-
-# ── Integration: default route handlers via TestClient ────────────────────────
+def test_an_unreadable_status_reads_as_the_safe_one() -> None:
+    assert GrantObservation.from_dict({"status": "COMPLETE!"}).status == "failed"
+    assert GrantUpdate.from_dict({}).status == "failed"
+    assert DeploymentPrepared.from_dict({"state": "done"}).state == "failed"
+    assert DnsRecord.from_dict({"name": "a", "type": "MX"}).type == "TXT"
+    assert Address.from_dict({"value": "x"}).type == "hostname"
+    assert CatalogRequest.from_dict({}).purpose == "gpu_node"
+    assert NodeStateResponse.from_dict({"state": "booting"}).state == "unknown"
 
 
-class _StubProvider(InfrastructurePlugin):
-    """Concrete implementation for testing the default route handlers."""
+def test_a_create_request_carries_kind_location_and_storage_roots() -> None:
+    body = {
+        "node_id": " n1 ",
+        "node_type": "t",
+        "token": "tok",
+        "kind": "cpu",
+        "location": "eu-west-1",
+        "pricing": "spot",
+        "host_id": "svc-1",
+        "idle_ttl_s": "inf",
+        "storage_roots": [{"url": "s3://b/p", "access": "read", "role": "scan"}, "junk"],
+        "gpu_type": "ignored",
+        "flavor": "gpu",
+    }
+    req = CreateNodeRequest.from_dict(body)
+    assert (req.node_id, req.kind, req.location, req.pricing, req.host_id) == (
+        "n1",
+        "cpu",
+        "eu-west-1",
+        "spot",
+        "svc-1",
+    )
+    assert req.idle_ttl_s == 1800.0 and req.flavor == ""
+    assert [(r.url, r.access, r.role) for r in req.storage_roots] == [("s3://b/p", "read", "scan")]
+    wire = req.to_dict()
+    assert "flavor" not in wire and "workspace" not in wire and "gpu_type" not in wire
+    assert CreateNodeRequest.from_dict(wire) == req
+    assert CreateNodeRequest.from_dict({}).kind == "gpu" and CreateNodeRequest.from_dict({}).pricing == ""
+
+
+@pytest.mark.parametrize(
+    ("body", "named"),
+    [
+        ({"kind": "quantum"}, "'gpu', 'cpu'"),
+        ({"pricing": "free"}, "'on_demand', 'spot'"),
+        ({"storage_roots": [{"url": "s3://b", "access": "write"}]}, "'read', 'read_write'"),
+        ({"storage_roots": [{"url": "s3://b", "role": "cache"}]}, "'project_root', 'scan', 'data'"),
+    ],
+)
+def test_a_create_request_refuses_an_unknown_enum_value(body: dict[str, Any], named: str) -> None:
+    with pytest.raises(InvalidRequest) as raised:
+        CreateNodeRequest.from_dict(body)
+    assert named in raised.value.remedy
+
+
+def test_a_deployment_request_refuses_an_unknown_mode_and_a_response_stays_tolerant() -> None:
+    with pytest.raises(InvalidRequest, match="mode"):
+        DeploymentRequest.from_dict({"deployment_id": "d", "name": "n", "bootstrap": {}, "mode": "partial"})
+    assert DeploymentRequest.from_dict({"deployment_id": "d", "name": "n", "bootstrap": {}}).mode == "full"
+    assert CreateNodeResponse.from_dict({"provider_id": "p", "storage_access": "telepathy"}).storage_access == "none"
+    assert CreateNodeRequest.from_dict({"idle_ttl_s": 0}).idle_ttl_s == 0.0, "zero or less means never"
+
+
+def test_a_bootstrap_token_is_never_in_a_repr() -> None:
+    request = DeploymentRequest.from_dict({
+        "deployment_id": "d",
+        "name": "D",
+        "bootstrap": {"record_id": "r", "token": "tok-1"},
+    })
+    assert request.bootstrap.token == "tok-1" and "tok-1" not in repr(request)
+
+
+def test_a_settings_field_becomes_a_form_field_prompt() -> None:
+    described = SettingsField(key="api_key", label="API key", secret=True, help="Where it is", placeholder="rp_…")
+    field = FormField.from_settings(described)
+    assert (field.kind, field.secret, field.example, field.help) == ("secret", True, "rp_…", "Where it is")
+    assert FormField.from_settings(SettingsField(key="region", label="Region")).kind == "text"
+
+
+# ── Operations follow the class ──────────────────────────────────────────────
+
+
+class _Bare(InfrastructurePlugin):
+    def get_ui_fragment(self) -> str:
+        return ""
+
+    def capabilities(self) -> CapabilitiesResponse:
+        return CapabilitiesResponse(provider="bare", display_name="Bare", ready=True)
+
+
+class _Nodes(InfrastructurePlugin, NodeProvider):
+    """The smallest node provider: the three abstract methods and nothing else."""
+
+    exc: BaseException | None = None
 
     def get_ui_fragment(self) -> str:
-        return "<div>stub</div>"
+        return ""
 
     def capabilities(self) -> CapabilitiesResponse:
         return CapabilitiesResponse(
-            provider="stub",
-            node_types=["T4", "A100"],
-            ready=True,
-            extra={"region": "us-east-1"},
+            provider="nodes", display_name="Nodes", ready=True, nodes=NodeCapabilities(types=["t"])
         )
 
     def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
-        return CreateNodeResponse(
-            provider_id=f"stub-{request.node_type}",
-            agent_url=f"http://stub:{request.agent_port}",
-        )
+        if self.exc is not None:
+            raise self.exc
+        return CreateNodeResponse(provider_id=f"p-{request.node_id}", agent_url="http://x:8800")
 
     def node_state(self, provider_id: str) -> NodeStateResponse:
-        if provider_id == "missing":
-            return NodeStateResponse(state="gone", detail="no such node")
-        return NodeStateResponse(state="running")
+        if self.exc is not None:
+            raise self.exc
+        return NodeStateResponse(state="running" if provider_id.startswith("p-") else "gone")
 
     def delete_node(self, provider_id: str) -> NodeStateResponse:
-        return NodeStateResponse(state="terminated", detail=f"stopped {provider_id}")
+        return NodeStateResponse(state="terminated")
+
+    def secret_values(self) -> list[str]:
+        return ["hunter2", ""]
 
 
-@pytest.fixture()
-def stub_client() -> TestClient[Litestar]:
-    plugin = _StubProvider()
-    plugin.id = "stub"
-    handlers = plugin.get_route_handlers()
-    app = Litestar(route_handlers=handlers)
-    return TestClient(app)
+def test_a_plugin_with_no_group_serves_capabilities_alone() -> None:
+    assert _paths(_Bare()) == {("GET", "/infra/capabilities")}
+    assert provided_operations(_Bare()) == []
+    with PluginHarness(_Bare(), plugin_id="bare") as h:
+        caps = h.get("/infra/capabilities").json()
+        assert caps["operations"] == [] and caps["contract"] == 2
+        assert h.post("/infra/nodes", json_body={}).status_code == 404, "an operation not provided has no route"
+        assert h.get("/infra/storage").status_code == 404
+        assert h.post("/infra/connection/verify", json_body={}).status_code == 404
 
 
-def _checking_client(plugin: InfrastructurePlugin) -> TestClient[Litestar]:
-    from tlc_plugin_sdk.connections import connection_middleware
+def test_a_node_provider_serves_its_three_routes_and_lists_only_what_it_wrote() -> None:
+    assert provided_operations(_Nodes()) == ["node.create", "node.state", "node.delete"]
+    assert _paths(_Nodes()) == {
+        ("GET", "/infra/capabilities"),
+        ("POST", "/infra/nodes"),
+        ("GET", "/infra/nodes/{provider_id:str}"),
+        ("DELETE", "/infra/nodes/{provider_id:str}"),
+    }
 
-    return TestClient(Litestar(route_handlers=plugin.get_route_handlers(), middleware=[connection_middleware]))
+    class Checking(_Nodes):
+        def check_node(self, request: Any) -> Any:
+            raise NotImplementedError
 
+        def verify_connection(self, request: VerifyRequest) -> ConnectionVerification:
+            return ConnectionVerification(identity="me", account={})
 
-class TestRequiresConnection:
-    def test_round_trips_and_is_omitted_when_false(self) -> None:
-        from tlc_plugin_sdk.infrastructure import CapabilitiesResponse
-
-        assert "requires_connection" not in CapabilitiesResponse(provider="p").to_dict()
-        wire = CapabilitiesResponse(provider="p", requires_connection=True).to_dict()
-        assert wire["requires_connection"] is True
-        assert CapabilitiesResponse.from_dict(wire).requires_connection is True
-        assert CapabilitiesResponse.from_dict({"provider": "p"}).requires_connection is False
-
-
-class TestConnectionCheck:
-    def test_default_reports_that_the_binding_resolved(self) -> None:
-        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
-
-        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
-        with _checking_client(_StubProvider()) as client:
-            resp = client.get("/infra/connection/check", headers=header)
-        assert (resp.status_code, resp.json()) == (200, {"identity": "", "checked": ["resolve"]})
-
-    def test_without_a_connection_there_is_nothing_to_check(self) -> None:
-        with _checking_client(_StubProvider()) as client:
-            resp = client.get("/infra/connection/check")
-        assert resp.status_code == 400
-        assert "x-3lc-connection" in resp.json()["detail"]
-
-    def test_a_provider_reports_who_the_connection_is(self) -> None:
-        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
-        from tlc_plugin_sdk.infrastructure import ConnectionCheckResponse
-
-        class Checking(_StubProvider):
-            def connection_check(self) -> ConnectionCheckResponse:
-                return ConnectionCheckResponse(
-                    identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
-                )
-
-        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
-        with _checking_client(Checking()) as client:
-            body = client.get("/infra/connection/check", headers=header).json()
-        assert ConnectionCheckResponse.from_dict(body) == ConnectionCheckResponse(
-            identity="arn:aws:sts::1:assumed-role/r/s", checked=["resolve", "whoami"]
-        )
-
-    def test_check_metadata_round_trips_and_is_left_out_when_empty(self) -> None:
-        from tlc_plugin_sdk.infrastructure import ConnectionCheckResponse
-
-        resp = ConnectionCheckResponse(metadata={"write_locations": ["s3://a"], "read_locations": []})
-        body = resp.to_dict()
-        assert body["metadata"] == {"write_locations": ["s3://a"], "read_locations": []}
-        assert ConnectionCheckResponse.from_dict(body) == resp
-        assert "metadata" not in ConnectionCheckResponse().to_dict()
-        assert ConnectionCheckResponse.from_dict({"metadata": "nope"}).metadata == {}
-
-    def test_host_root_context_preserves_missing_empty_and_changed_values(self) -> None:
-        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
-        from tlc_plugin_sdk.infrastructure import ConnectionCheckRequest, ConnectionCheckResponse
-
-        seen: list[str | None] = []
-
-        class Checking(_StubProvider):
-            def connection_check_with_context(self, request: ConnectionCheckRequest) -> ConnectionCheckResponse:
-                seen.append(request.project_root_url)
-                return ConnectionCheckResponse()
-
-        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
-        with _checking_client(Checking()) as client:
-            for params in (
-                {},
-                {"project_root_url": ""},
-                {"project_root_url": "s3://bucket/a b"},
-                {"project_root_url": "s3://bucket/new"},
-            ):
-                assert client.get("/infra/connection/check", params=params, headers=header).status_code == 200
-        assert seen == [None, "", "s3://bucket/a b", "s3://bucket/new"]
-
-    def test_old_hook_still_runs_with_host_context(self) -> None:
-        from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
-        from tlc_plugin_sdk.infrastructure import ConnectionCheckResponse
-
-        class OlderProvider(_StubProvider):
-            def connection_check(self) -> ConnectionCheckResponse:
-                return ConnectionCheckResponse(identity="old-hook")
-
-        header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
-        with _checking_client(OlderProvider()) as client:
-            response = client.get("/infra/connection/check", params={"project_root_url": "s3://b/p"}, headers=header)
-        assert response.status_code == 200 and response.json()["identity"] == "old-hook"
+    assert provided_operations(Checking()) == [
+        "connection.verify",
+        "node.create",
+        "node.state",
+        "node.delete",
+        "node.check",
+    ]
+    assert _paths(Checking()) - _paths(_Nodes()) == {
+        ("POST", "/infra/connection/verify"),
+        ("POST", "/infra/nodes/check"),
+    }
 
 
-class TestDefaultRouteHandlers:
-    def test_capabilities(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.get("/infra/capabilities")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["provider"] == "stub"
-        assert data["node_types"] == ["T4", "A100"]
-        assert data["ready"] is True
-        assert data["region"] == "us-east-1"
-
-    def test_preflight_default(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.get("/infra/preflight")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-
-    def test_create_node(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.post(
-            "/infra/nodes",
-            json={
-                "node_id": "n1",
-                "node_type": "A100",
-                "token": "tok",
-            },
-        )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["provider_id"] == "stub-A100"
-        assert "agent_url" in data
-
-    def test_create_node_gpu_type_compat(self, stub_client: TestClient[Litestar]) -> None:
-        """The host may still send ``gpu_type`` — accepted for backward compat."""
-        resp = stub_client.post(
-            "/infra/nodes",
-            json={
-                "node_id": "n1",
-                "gpu_type": "A100",
-                "token": "tok",
-            },
-        )
-        assert resp.status_code == 201
-        assert resp.json()["provider_id"] == "stub-A100"
-
-    def test_create_node_missing_fields(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.post("/infra/nodes", json={"node_type": "A100"})
-        assert resp.status_code == 400
-
-    def test_node_state(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.get("/infra/nodes/some-id")
-        assert resp.status_code == 200
-        assert resp.json()["state"] == "running"
-
-    def test_node_state_gone(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.get("/infra/nodes/missing")
-        assert resp.status_code == 200
-        assert resp.json()["state"] == "gone"
-
-    def test_delete_node(self, stub_client: TestClient[Litestar]) -> None:
-        resp = stub_client.delete("/infra/nodes/some-id")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["state"] == "terminated"
-        assert "stopped some-id" in data["detail"]
-
-    def test_extend_route_handlers(self) -> None:
-        """A subclass can extend the default handlers with custom routes."""
-        from litestar import get as http_get
-
-        @http_get("/custom")
-        def custom_route() -> dict[str, str]:
-            return {"custom": "yes"}
-
-        class ExtendedProvider(_StubProvider):
-            def get_route_handlers(self) -> list[Any]:
-                return [*super().get_route_handlers(), custom_route]
-
-        plugin = ExtendedProvider()
-        plugin.id = "extended"
-        handlers = plugin.get_route_handlers()
-        assert len(handlers) == 9  # 8 infra + 1 custom
-        app = Litestar(route_handlers=handlers)
-        with TestClient(app) as client:
-            resp = client.get("/custom")
-            assert resp.status_code == 200
-            assert resp.json() == {"custom": "yes"}
+def test_every_operation_has_a_route_builder_and_the_fake_provides_them_all() -> None:
+    assert set(OPERATION_HANDLERS) == set(OPERATIONS)
+    fake = FakeProvider()
+    assert provided_operations(fake) == [*OPERATIONS, "workspace.create"]
+    assert fake.operations() == provided_operations(fake)
+    assert set(TRANSITIONAL_OPERATIONS).isdisjoint(OPERATIONS)
+    for group in (NodeProvider, DeploymentProvider, StorageFacet, CatalogFacet, DnsFacet):
+        assert isinstance(fake, group)
+    paths = _paths(fake)
+    assert len(paths) == len({(m, p) for m, p in paths})
+    for expected in (
+        ("POST", "/infra/connection/grant"),
+        ("POST", "/infra/connection/grant/update"),
+        ("POST", "/infra/connection/verify"),
+        ("GET", "/infra/connection/node-access"),
+        ("POST", "/infra/connection/node-access"),
+        ("GET", "/infra/storage/candidates"),
+        ("POST", "/infra/nodes/check"),
+        ("POST", "/infra/catalog"),
+        ("GET", "/infra/catalog/locations"),
+        ("POST", "/infra/deployments/options"),
+        ("POST", "/infra/deployments/check"),
+        ("POST", "/infra/deployments/prepare"),
+        ("POST", "/infra/deployments"),
+        ("GET", "/infra/deployments"),
+        ("GET", "/infra/deployments/{provider_id:str}"),
+        ("DELETE", "/infra/deployments/{provider_id:str}"),
+        ("POST", "/infra/deployments/{provider_id:str}/retain"),
+        ("POST", "/infra/deployments/sweep"),
+        ("GET", "/infra/dns/records"),
+        ("POST", "/infra/dns/changes"),
+        ("GET", "/settings"),
+        ("POST", "/settings"),
+    ):
+        assert expected in paths, expected
+    assert not {p for _, p in paths if "gpu-catalog" in p or "preflight" in p or "login" in p or "role-setup" in p}
 
 
-def test_node_access_requires_binding_and_only_post_applies():
-    from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
-    from tlc_plugin_sdk.infrastructure import ConnectionNodeAccess
+def test_the_sdk_fills_operations_and_storage_over_what_the_author_set(tmp_path: Path) -> None:
+    class Overwriting(_Nodes):
+        def capabilities(self) -> CapabilitiesResponse:
+            caps = super().capabilities()
+            caps.operations = ["deployment.create", "made.up"]
+            return caps
 
-    seen = []
-
-    class Setup(_StubProvider):
-        def connection_node_access(self, request, *, apply=False):
-            seen.append((request.project_root_url, apply))
-            return ConnectionNodeAccess(supported=True, ready=apply, action_label="Set up" if not apply else "")
-
-    header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
-    with _checking_client(Setup()) as client:
-        assert client.post("/infra/connection/node-access", json={"project_root_url": "s3://b"}).status_code == 400
-        assert client.get("/infra/connection/node-access").status_code == 400
-        assert not seen
-        assert not client.get(
-            "/infra/connection/node-access", params={"project_root_url": "s3://b/a b"}, headers=header
-        ).json()["ready"]
-        assert client.post(
-            "/infra/connection/node-access", json={"project_root_url": "s3://b/a b"}, headers=header
-        ).json()["ready"]
-        assert client.post("/infra/connection/node-access", json={}, headers=header).status_code == 400
-    assert seen == [("s3://b/a b", False), ("s3://b/a b", True)]
+    with PluginHarness(Overwriting(), plugin_id="nodes", config_root=tmp_path) as h:
+        caps = h.get("/infra/capabilities").json()
+    assert caps["operations"] == ["node.create", "node.state", "node.delete"]
+    assert "storage" not in caps
 
 
-def test_node_access_carries_reviewed_storage_access_and_revision():
-    from tlc_plugin_sdk.connections import CONNECTION_HEADER, ConnectionBinding, encode_binding
-    from tlc_plugin_sdk.infrastructure import ConnectionNodeAccess
+def test_node_diagnostics_is_listed_only_when_written_and_the_plain_state_answers_otherwise() -> None:
+    with PluginHarness(_Nodes(), plugin_id="nodes") as h:
+        assert "node.diagnostics" not in h.get("/infra/capabilities").json()["operations"]
+        assert h.get("/infra/nodes/p-1?diagnostics=true").json() == {"state": "running"}
 
-    seen = []
-    rules = {"rules": [{"scope": {"kind": "bucket", "bucket": "data"}, "prefix": "", "access": "read"}]}
 
-    class Setup(_StubProvider):
-        def connection_node_access(self, request, *, apply=False):
-            seen.append((request.storage_access, request.expected_revision, apply))
-            return ConnectionNodeAccess(supported=True, ready=apply, storage_access=rules, revision="r2")
+# ── Capabilities are validated before they are answered ──────────────────────
 
-    header = {CONNECTION_HEADER: encode_binding(ConnectionBinding("c1", "stub", "AMBIENT"))}
-    with _checking_client(Setup()) as client:
-        got = client.get("/infra/connection/node-access", params={"project_root_url": "s3://b"}, headers=header).json()
-        assert got["storage_access"] == rules and got["revision"] == "r2"
-        body = {"project_root_url": "s3://b", "storage_access": rules, "expected_revision": "r1"}
-        assert client.post("/infra/connection/node-access", json=body, headers=header).json()["ready"]
-        bad = {"project_root_url": "s3://b", "storage_access": ["not", "an", "object"]}
-        assert client.post("/infra/connection/node-access", json=bad, headers=header).status_code == 400
-    assert seen == [(None, "", False), (rules, "r1", True)]
-    assert "storage_access" not in ConnectionNodeAccess(supported=True).to_dict(), "no choice offered, none sent"
-    assert ConnectionNodeAccess.from_dict({"storage_access": rules, "revision": "r2"}).revision == "r2"
+
+def _valid() -> CapabilitiesResponse:
+    return CapabilitiesResponse(
+        provider="nodes",
+        display_name="Nodes",
+        account=AccountSchema(noun="A", fields=[FormField(key="account_id", label="Id")]),
+        access_methods=[AccessMethod(kind="KEYLESS", label="K", fields=[FormField(key="role_name", label="R")])],
+        nodes=NodeCapabilities(),
+    )
+
+
+def test_a_valid_declaration_has_no_problems() -> None:
+    assert capabilities_problems(_Nodes(), _valid()) == []
+
+
+@pytest.mark.parametrize(
+    ("spoil", "says"),
+    [
+        (lambda c: setattr(c, "provider", "Not A Slug"), "provider"),
+        (lambda c: setattr(c, "contract", 1), "contract"),
+        (lambda c: c.account.fields.append(FormField(key="account_id", label="Again")), "listed twice"),
+        (lambda c: c.account.fields.append(FormField(key="Bad-Key", label="B")), "does not match"),
+        (lambda c: c.account.defaults.append(FormField(key="account_id", label="D")), "both a field and a default"),
+        (lambda c: c.access_methods[0].fields.append(FormField(key="account_id", label="X")), "also an account field"),
+        (
+            lambda c: c.access_methods[0].fields.append(FormField(key="k", label="K", secret=True)),
+            "secret true exactly",
+        ),
+        (
+            lambda c: c.access_methods[0].fields.append(FormField(key="k", label="K", kind="secret")),
+            "secret true exactly",
+        ),
+        (lambda c: c.access_methods[0].fields.append(FormField(key="k", label="K", max_length=0)), "max_length"),
+        (lambda c: c.access_methods.append(AccessMethod(kind="KEYLESS", label="Again")), "more than one access method"),
+        (
+            lambda c: (
+                setattr(c.access_methods[0], "preferred", True),
+                c.access_methods.append(AccessMethod(kind="AMBIENT", label="A", preferred=True)),
+            ),
+            "more than one is preferred",
+        ),
+        (
+            lambda c: setattr(
+                c,
+                "permissions",
+                PermissionSchema(
+                    options=[
+                        PermissionOption(key="o", label="O", purpose="nodes"),
+                        PermissionOption(key="o", label="O2", purpose="nodes"),
+                    ]
+                ),
+            ),
+            "listed twice",
+        ),
+        (lambda c: setattr(c, "nodes", None), "nodes must be set exactly"),
+        (
+            lambda c: setattr(c, "deployments", DeploymentCapabilities(certificate="machine")),
+            "deployments must be set exactly",
+        ),
+    ],
+)
+def test_a_declaration_that_breaks_a_rule_is_named_and_never_answered(spoil: Any, says: str, tmp_path: Path) -> None:
+    caps = _valid()
+    spoil(caps)
+    problems = capabilities_problems(_Nodes(), caps)
+    assert any(says in p for p in problems), problems
+
+    class Spoiled(_Nodes):
+        def capabilities(self) -> CapabilitiesResponse:
+            return caps
+
+    with PluginHarness(Spoiled(), plugin_id="nodes", config_root=tmp_path) as h:
+        r = h.get("/infra/capabilities")
+    assert r.status_code == 502 and r.json()["code"] == "provider_error"
+    assert says in r.json()["detail"] and r.json()["remedy"]
+
+
+def test_readiness_comes_from_the_settings_layer_as_form_fields(tmp_path: Path) -> None:
+    class WithSettings(_Nodes):
+        settings = PluginSettings(FakeSettings, "nodes")
+
+        def capabilities(self) -> CapabilitiesResponse:
+            return CapabilitiesResponse(
+                provider="nodes", display_name="N", nodes=NodeCapabilities(), **self.readiness()
+            )
+
+    assert _Nodes().readiness() == {"ready": True, "missing_fields": []}
+    with PluginHarness(WithSettings(), plugin_id="nodes", config_root=tmp_path) as h:
+        caps = h.get("/infra/capabilities").json()
+        assert caps["ready"] is False
+        assert [(f["key"], f["kind"], f["secret"]) for f in caps["missing_fields"]] == [("api_key", "secret", True)]
+        h.post("/settings", json_body={"api_key": "hunter2-key"})
+        caps = h.get("/infra/capabilities").json()
+        assert caps["ready"] is True and caps["missing_fields"] == []
+        assert h.get("/settings", headers=_AMBIENT).status_code == 400, "settings are never sent a Connection"
+
+
+@pytest.mark.parametrize(
+    ("requires_connection", "account_key", "ready"),
+    [
+        (True, "api_key", True),
+        (False, "api_key", False),
+        (True, "account_id", False),
+    ],
+    ids=["the-connection-carries-it", "no-connection-required", "a-setting-that-matters-without-a-connection"],
+)
+def test_an_account_setting_the_connection_carries_does_not_keep_a_provider_not_ready(
+    tmp_path: Path, requires_connection: bool, account_key: str, ready: bool
+) -> None:
+    class FromConnection(_Nodes):
+        settings = PluginSettings(FakeSettings, "nodes")
+
+        def capabilities(self) -> CapabilitiesResponse:
+            return CapabilitiesResponse(
+                provider="nodes",
+                display_name="N",
+                requires_connection=requires_connection,
+                account=AccountSchema(noun="A", fields=[FormField(key=account_key, label="Key")]),
+                access_methods=[AccessMethod(kind="SECRET", label="S")],
+                nodes=NodeCapabilities(),
+                **self.readiness(),
+            )
+
+    with PluginHarness(FromConnection(), plugin_id="nodes", config_root=tmp_path) as h:
+        caps = CapabilitiesResponse.from_dict(h.get("/infra/capabilities").json())
+    assert caps.ready is ready
+    assert [(f.key, f.required) for f in caps.missing_fields] == [("api_key", not ready)], "still listed, as optional"
+
+
+# ── Typed errors ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("exc", "status", "code"),
+    [
+        (ProviderError("upstream said no"), 502, "provider_error"),
+        (InvalidRequest("bad id"), 400, "invalid_request"),
+        (PermissionDenied("not allowed to run instances"), 403, "permission_denied"),
+        (NotFound("no such node"), 404, "not_found"),
+        (NotConfigured("no key"), 409, "not_configured"),
+        (Conflict("bucket not empty"), 409, "conflict"),
+        (CredentialUnavailable("the role refused"), 424, "credential_unavailable"),
+        (CredentialExpired("the session ended"), 424, "credential_expired"),
+        (RateLimited("slow down", retry_after_s=3), 429, "rate_limited"),
+        (NotSupported("nope"), 501, "not_supported"),
+        (ValueError("not a region"), 400, "invalid_request"),
+        (TypeError("wrong type"), 400, "invalid_request"),
+        (NotImplementedError("later"), 501, "not_supported"),
+        (RuntimeError("the cloud exploded"), 502, "provider_error"),
+        (KeyError("k"), 502, "provider_error"),
+        (HTTPException(status_code=418, detail="teapot"), 418, "provider_error"),
+        (HTTPException(status_code=403, detail="no"), 403, "permission_denied"),
+    ],
+)
+def test_what_a_method_raises_answers_its_status_code_and_sentence(exc: BaseException, status: int, code: str) -> None:
+    plugin = _Nodes()
+    plugin.exc = exc
+    with PluginHarness(plugin, plugin_id="nodes") as h:
+        r = h.get("/infra/nodes/x")
+    assert r.status_code == status, r.text
+    body = r.json()
+    assert set(body) == _ERROR_KEYS and body["code"] == code and code in ERROR_CODES
+    assert isinstance(body["detail"], str) and body["detail"] != "Internal Server Error"
+    assert body["retry_after_s"] == (3 if code == "rate_limited" else None)
+
+
+def test_detail_and_remedy_are_scrubbed_of_the_plugins_secrets_and_the_requests() -> None:
+    plugin = _Nodes()
+    plugin.exc = PermissionDenied("key hunter2 may not start tok-123", remedy="Grant it to hunter2 in the console.")
+    with PluginHarness(plugin, plugin_id="nodes") as h:
+        r = h.post("/infra/nodes", json_body={"node_id": "n", "node_type": "t", "token": "tok-123"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == "key *** may not start ***"
+    assert r.json()["remedy"] == "Grant it to *** in the console."
+    assert scrub("a bbbb", ["", "bbbb"]) == "a ***"
+    assert scrub("ghost t", ["t"]) == "ghost t", "a value too short to be a secret is left alone"
+
+
+def test_the_requests_own_credential_is_scrubbed_from_an_error(tmp_path: Path) -> None:
+    class Leaky(FakeProvider):
+        def node_state(self, provider_id: str) -> NodeStateResponse:
+            from tlc_plugin_sdk.connections import current_credential
+
+            msg = f"the cloud rejected {getattr(current_credential(), 'access_token', '')}"
+            raise RuntimeError(msg)
+
+    headers = connection_headers(ConnectionBinding("conn-9", "fake", "KEYLESS", access={"role_name": "r"}))
+    with PluginHarness(Leaky(), plugin_id="fake", config_root=tmp_path) as h:
+        r = h.get("/infra/nodes/x", headers=headers)
+    assert r.status_code == 502 and r.json()["detail"] == "the cloud rejected ***"
+
+
+def test_describe_error_words_an_unexpected_exception_and_is_still_scrubbed() -> None:
+    class Describing(_Nodes):
+        def describe_error(self, exc: Exception) -> str:
+            if "boom" in str(exc):
+                msg = "hook failed"
+                raise RuntimeError(msg)
+            return "The cloud refused the call with key hunter2." if "arn:" in str(exc) else ""
+
+    plugin = Describing()
+    with PluginHarness(plugin, plugin_id="nodes") as h:
+        plugin.exc = RuntimeError("AccessDenied for arn:x (request id 42)")
+        assert h.get("/infra/nodes/x").json()["detail"] == "The cloud refused the call with key ***."
+        plugin.exc = RuntimeError("hunter2 is wrong")
+        assert h.get("/infra/nodes/x").json()["detail"] == "*** is wrong", "an empty answer falls back, scrubbed"
+        plugin.exc = RuntimeError("boom")
+        assert h.get("/infra/nodes/x").json()["detail"] == "boom", "a hook that raises falls back too"
+        plugin.exc = ProviderError("worded by the provider: arn:x")
+        assert "arn:x" in h.get("/infra/nodes/x").json()["detail"], "a ProviderError keeps its own sentence"
+    assert _Nodes().describe_error(RuntimeError("key hunter2")) == "key ***"
+    assert _Nodes().describe_error(KeyError()) == "KeyError"
+
+
+def test_a_malformed_body_is_a_contract_error_too() -> None:
+    with PluginHarness(_Nodes(), plugin_id="nodes") as h:
+        r = h.call("POST", "/infra/nodes", content=b"{not json", headers={"content-type": "application/json"})
+        assert r.status_code == 400 and set(r.json()) == _ERROR_KEYS and r.json()["code"] == "invalid_request"
+        r = h.post("/infra/nodes", json_body={"node_type": "t"})
+        assert r.status_code == 400 and "node_id" in r.json()["detail"]
+
+
+def test_a_private_route_answers_the_same_error_body_with_the_handlers() -> None:
+    from litestar import get
+
+    class Private(HubPlugin):
+        def get_ui_fragment(self) -> str:
+            return ""
+
+        def get_route_handlers(self) -> list[Any]:
+            plugin = _Nodes()
+
+            def refuse() -> dict[str, Any]:
+                msg = "no machine by that name"
+                raise NotFound(msg)
+
+            @get("/with", sync_to_thread=True, exception_handlers=error_handlers())
+            def with_handlers() -> dict[str, Any]:
+                return answer(plugin, refuse)
+
+            @get("/without", sync_to_thread=True)
+            def without_handlers() -> dict[str, Any]:
+                return answer(plugin, refuse)
+
+            return [with_handlers, without_handlers]
+
+    with PluginHarness(Private(), plugin_id="private") as h:
+        assert h.get("/with").json() == {
+            "detail": "no machine by that name",
+            "code": "not_found",
+            "remedy": "",
+            "retry_after_s": None,
+        }
+        plain = h.get("/without")
+        assert plain.status_code == 404 and plain.json()["detail"] == "no machine by that name"
+        assert plain.json()["extra"]["code"] == "not_found"
+
+
+def test_a_storage_item_carries_typed_access_and_omits_it_when_unsaid() -> None:
+    from tlc_plugin_sdk.infrastructure import StorageAccess, StorageGrant, StorageItem
+
+    item = StorageItem(id="b", access=StorageAccess(browse=True, grants=[StorageGrant(url="s3://b/p", read=True)]))
+    wire = item.to_dict()
+    assert wire["access"]["grants"] == [{"url": "s3://b/p", "read": True, "write": False, "delete": False}]
+    assert StorageItem.from_dict(wire) == item
+    assert "access" not in StorageItem(id="b").to_dict()
+    assert StorageItem.from_dict({"id": "b", "access": "all"}).access is None

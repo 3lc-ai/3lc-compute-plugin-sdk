@@ -1,0 +1,47 @@
+{
+  "type": "AccountSchema",
+  "route": "CapabilitiesResponse.account",
+  "example": {
+    "noun": "Fake account",
+    "fields": [
+      {
+        "key": "account_id",
+        "label": "Account id",
+        "kind": "text",
+        "required": true,
+        "secret": false,
+        "help": "The twelve digits of the fake account.",
+        "example": "000000000000",
+        "pattern": "^\\d{12}$",
+        "max_length": 12,
+        "choices": [],
+        "default": ""
+      }
+    ],
+    "defaults": [
+      {
+        "key": "location",
+        "label": "Default location",
+        "kind": "select",
+        "required": false,
+        "secret": false,
+        "help": "",
+        "example": "",
+        "pattern": "",
+        "max_length": 256,
+        "choices": [
+          {
+            "id": "fake-1",
+            "label": "Fake region 1"
+          },
+          {
+            "id": "fake-2",
+            "label": "Fake region 2"
+          }
+        ],
+        "default": "fake-1"
+      }
+    ],
+    "help": "Any twelve digits work; the provider is in memory."
+  }
+}

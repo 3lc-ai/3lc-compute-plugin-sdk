@@ -3,71 +3,154 @@
 """The conformance kit: drive a provider through its routes and say what disagrees with the contract.
 
 :func:`check_provider` opens a :class:`~tlc_plugin_sdk.harness.PluginHarness` around the plugin
-and runs one group of checks per surface the plugin implements; :func:`assert_conformant` raises
-``AssertionError`` with the report when any check fails. In a provider repo's CI::
+and runs one group of checks per group of operations the plugin lists; :func:`assert_conformant`
+raises ``AssertionError`` with the report when any check fails. In a provider repo's CI::
 
     def test_conformance(tmp_path):
-        with patch_provider_seams():  # the repo's own fake for boto3 / runpod / az clients
-            assert_conformant(AwsPlugin(), plugin_id="aws", config_root=tmp_path)
+        with patch_provider_seams():  # the repo's own fake for its cloud's client
+            assert_conformant(MyPlugin(), plugin_id="mycloud", config_root=tmp_path)
 
-By default (``create_nodes=False``, ``live_storage=False``) the kit runs the shape, preflight,
-errors, settings, routes, catalog-envelope and workspaces-envelope checks — nothing that needs
-cloud credentials or a patched provider seam. ``create_nodes=True`` adds the node lifecycle
-(create, state, diagnostics, delete twice); ``live_storage=True`` adds ``list_objects`` and a
+By default the kit runs the checks that create nothing: capabilities, the connect group, node
+checks, catalogs, deployment options and checks, errors, settings and routes. ``create_nodes=True``
+adds the node lifecycle (create twice for idempotency, state, diagnostics, delete twice);
+``create_deployments=True`` the deployment lifecycle (prepare, create twice, state, list, retain is
+not called, delete twice, sweep); ``dns_zone=DnsZone(...)`` the DNS checks, which write and remove
+records under ``_3lc-conformance.<zone>``; ``live_storage=True`` adds ``list_objects`` and a
 transfer dry-run against the first listed storage. Settings are read and written under
-``config_root`` — a temporary directory when none is given — so a run never touches
+``config_root``, a temporary directory when none is given, so a run never touches
 ``~/.3lc-plugin-configs``.
 
-Also a CLI: ``python -m tlc_plugin_sdk.infrastructure.testing <plugin_dir> [--config-root DIR]
-[--create-nodes] [--live-storage] [--node-type T] [--skip GROUP]... [--header N=V]...``.
+Every call that acts on an account carries a Connection. Pass ``headers`` (built with
+:func:`connection_headers`) to choose it; without them the kit sends an ``AMBIENT`` binding for
+the plugin's provider, and none at all to a provider that takes no Connection.
 
-:class:`FakeProvider` is the SDK's reference implementation of every facet — in-memory nodes,
-buckets, catalogs and workspaces — and the object the SDK's own lockstep tests drive.
+Also a CLI: ``python -m tlc_plugin_sdk.infrastructure.testing <plugin_dir> [--config-root DIR]
+[--create-nodes] [--create-deployments] [--dns-zone ID=NAME] [--live-storage] [--node-type T]
+[--skip GROUP]... [--header N=V]...``.
+
+:class:`FakeProvider` is the SDK's reference implementation of every operation, in memory: nodes,
+deployments, a DNS zone, buckets and catalogs. It is what a host is tested against in process, and
+what emits the golden fixtures of the wire types.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import io
 import json
 import re
 import sys
 import tempfile
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from tlc_plugin_sdk.infrastructure.errors import InvalidRequest, NotFound
-from tlc_plugin_sdk.infrastructure.facets import (
-    CatalogFacet,
-    LegacyOwnerCredentialsFacet,
-    StorageFacet,
-    WorkspaceFacet,
+from tlc_plugin_sdk import connections as _connections
+from tlc_plugin_sdk.connections import (
+    AMBIENT_ONLY_PATHS,
+    AMBIENT_ONLY_PREFIXES,
+    BOUND_CREDENTIAL_HEADER,
+    CONNECTION_HEADER,
+    CONNECTION_TOKEN_HEADER,
+    CONNECTION_USE_HEADER,
+    LAUNCHER_ZONE_HEADER,
+    Ambient,
+    ConnectionBinding,
+    ConnectionUse,
+    CredentialUnavailable,
+    IdentityToken,
+    ResolvedCredential,
+    ResolveRequest,
+    SecretToken,
+    current_connection,
+    current_credential,
+    current_use,
+    encode_binding,
+    encode_credential,
+    encode_identity_token,
+    encode_use,
+    register_resolver,
+    token_audience,
 )
-from tlc_plugin_sdk.infrastructure.plugin import InfrastructurePlugin
+from tlc_plugin_sdk.infrastructure.errors import ERROR_CODES, Conflict, InvalidRequest, NotFound
+from tlc_plugin_sdk.infrastructure.facets import CatalogFacet, DeploymentProvider, DnsFacet, NodeProvider, StorageFacet
+from tlc_plugin_sdk.infrastructure.plugin import InfrastructurePlugin, capabilities_problems, provided_operations
+from tlc_plugin_sdk.infrastructure.transitional import WorkspaceFacet, WorkspaceInstance, WorkspaceListing
 from tlc_plugin_sdk.infrastructure.types import (
+    CONTRACT_GENERATION,
+    AccessMethod,
+    AccountSchema,
+    Address,
     CapabilitiesResponse,
-    CpuCatalog,
+    Catalog,
+    CatalogRequest,
+    Choice,
+    ConnectionNodeAccess,
+    ConnectionPermissions,
+    ConnectionVerification,
+    CostNote,
     CreateNodeRequest,
     CreateNodeResponse,
     CreateStorageRequest,
-    Datacenters,
     DeleteObjectsRequest,
-    GpuCatalog,
+    DeploymentBootstrap,
+    DeploymentCapabilities,
+    DeploymentCheck,
+    DeploymentCheckRequest,
+    DeploymentInstance,
+    DeploymentListing,
+    DeploymentOptions,
+    DeploymentPrepared,
+    DeploymentPrepareRequest,
+    DeploymentRequest,
+    DeploymentResponse,
+    DnsChange,
+    DnsRecord,
+    DnsRecords,
+    DnsZone,
+    FormField,
+    Grant,
+    GrantFile,
+    GrantObservation,
+    GrantRequest,
+    GrantUpdate,
+    GrantUpdateRequest,
+    HostIdentity,
+    IdentityTokenSpec,
+    Location,
+    Locations,
+    NodeAccessRequest,
+    NodeCapabilities,
+    NodeCheckRequest,
     NodeStateResponse,
     ObjectListing,
-    OwnerCredentialsDescriptor,
+    Offer,
+    PermissionOption,
+    PermissionSchema,
+    PlacementChoice,
+    PlacementField,
+    PreflightCheck,
     PreflightResponse,
     PresignRequest,
     PresignResponse,
     Region,
+    StorageAccess,
+    StorageCandidate,
+    StorageCandidates,
     StorageCapabilities,
     StorageDeleted,
+    StorageGrant,
     StorageItem,
     StorageListing,
-    WorkspaceInstance,
-    WorkspaceListing,
+    StorageLocationSchema,
+    StorageRule,
+    SweepReport,
+    SweepRequest,
+    TokenIdentity,
+    VerifyRequest,
     is_node_state,
 )
 from tlc_plugin_sdk.shared.settings import PluginSettings, option, secret
@@ -81,31 +164,119 @@ __all__ = [
     "GROUPS",
     "Check",
     "ConformanceReport",
+    "FakeCredential",
     "FakeProvider",
     "FakeSettings",
+    "acting_as",
     "assert_conformant",
     "check_provider",
+    "connection_headers",
     "main",
 ]
 
 #: The check groups, each skippable by name.
 GROUPS: tuple[str, ...] = (
     "shape",
+    "connect",
     "lifecycle",
-    "preflight",
+    "check",
     "errors",
     "settings",
     "storage",
     "catalog",
+    "deployments",
+    "dns",
     "workspaces",
-    "legacy",
     "routes",
 )
 
 _MADE_UP_ID = "deadbeef0000"
+_ERROR_KEYS = {"detail", "code", "remedy", "retry_after_s"}
+_DNS_PAGE = 300
+
+
+@contextmanager
+def acting_as(
+    binding: ConnectionBinding | None,
+    credential: ResolvedCredential | None = None,
+    use: ConnectionUse | None = None,
+    token: IdentityToken | None = None,
+) -> Iterator[None]:
+    """Act on ``binding`` in code a unit test calls directly, as a request through the routes would.
+
+    Inside the block :func:`~tlc_plugin_sdk.connections.current_connection`,
+    :func:`~tlc_plugin_sdk.connections.current_credential` and
+    :func:`~tlc_plugin_sdk.connections.current_use` answer what is given here; on exit they
+    answer what they did before, also when the block raises. Nothing is resolved: pass the
+    credential the handler should see (an ``Ambient``, the plugin's own session, a
+    ``SecretToken``), or leave it ``None`` for a call made without one. To go through the
+    routes instead, send :func:`connection_headers`.
+
+    Args:
+        binding: The Connection the call acts on, or ``None`` for a call that names none.
+        credential: The credential bound for the call.
+        use: What the call uses the Connection for.
+        token: The identity token the host sent for the call, scrubbed from route errors.
+
+    Yields:
+        Nothing; the context is set for the block.
+    """
+    connection_token = _connections._CONNECTION.set(binding)
+    credential_token = _connections._CREDENTIAL.set(credential)
+    use_token = _connections._USE.set(use)
+    identity_token = _connections._IDENTITY_TOKEN.set(token)
+    try:
+        yield
+    finally:
+        _connections._IDENTITY_TOKEN.reset(identity_token)
+        _connections._USE.reset(use_token)
+        _connections._CREDENTIAL.reset(credential_token)
+        _connections._CONNECTION.reset(connection_token)
+
+
+def connection_headers(
+    binding: ConnectionBinding,
+    *,
+    use: ConnectionUse | None = None,
+    credential: SecretToken | None = None,
+    token: IdentityToken | None = None,
+) -> dict[str, str]:
+    """The host-owned headers a host sends for a call that acts on ``binding``.
+
+    Args:
+        binding: The Connection's binding.
+        use: What the Connection is used for, when the host says.
+        credential: The value of a ``SECRET`` Connection.
+        token: The identity token of a ``KEYLESS`` Connection whose method declares one.
+
+    Returns:
+        The headers, for :meth:`~tlc_plugin_sdk.harness.PluginHarness.call` or :func:`check_provider`.
+    """
+    headers = {CONNECTION_HEADER: encode_binding(binding)}
+    if use is not None:
+        headers[CONNECTION_USE_HEADER] = encode_use(use)
+    if credential is not None:
+        headers[BOUND_CREDENTIAL_HEADER] = encode_credential(credential)
+    if token is not None:
+        headers[CONNECTION_TOKEN_HEADER] = encode_identity_token(token)
+    return headers
+
+
+def _ambient_only(path: str) -> bool:
+    bare = path.split("?", 1)[0]
+    return (
+        bare.rstrip("/") in AMBIENT_ONLY_PATHS
+        or any(bare.startswith(prefix) for prefix in AMBIENT_ONLY_PREFIXES)
+        or bare.rstrip("/") == "/settings"
+    )
 
 
 # ── The report ─────────────────────────────────────────────────────────────────
+
+
+#: The bootstrap token the deployment checks send: shaped like one the Config Service mints, so a provider
+#: that refuses anything else as a token still launches.
+_CONFORMANCE_BOOT_TOKEN = "tlc_boot_conformance_bootstrap_token"
 
 
 @dataclass
@@ -122,7 +293,7 @@ class ConformanceReport:
     """What :func:`check_provider` found."""
 
     checks: list[Check]
-    facets: list[str]
+    operations: list[str]
 
     @property
     def ok(self) -> bool:
@@ -135,7 +306,7 @@ class ConformanceReport:
 
     def text(self) -> str:
         """One line per check, for the CLI and assertion messages."""
-        lines = [f"facets: {', '.join(self.facets) or 'none'}"]
+        lines = [f"operations: {', '.join(self.operations) or 'none'}"]
         for c in self.checks:
             mark = "ok  " if c.ok else "FAIL"
             lines.append(f"{mark} {c.name}" + (f" — {c.detail}" if c.detail else ""))
@@ -155,27 +326,43 @@ class _Run:
         plugin: InfrastructurePlugin,
         harness: PluginHarness,
         *,
+        plugin_id: str,
         headers: dict[str, str] | None,
         config_root: Path,
         node_type: str,
         create_nodes: bool,
+        create_deployments: bool,
+        dns_zone: DnsZone | None,
         live_storage: bool,
     ) -> None:
         self.plugin = plugin
         self.h = harness
-        self.headers = headers
+        self.plugin_id = plugin_id
+        self.given_headers = headers
+        self.headers: dict[str, str] | None = headers
         self.config_root = config_root
         self.node_type = node_type
         self.create_nodes = create_nodes
+        self.create_deployments = create_deployments
+        self.dns_zone = dns_zone
         self.live_storage = live_storage
         self.checks: list[Check] = []
         self.responses: list[tuple[str, str, int, str]] = []
-        self.caps: dict[str, Any] = {}
+        self.caps = CapabilitiesResponse(provider="", display_name="")
+        self.operations: list[str] = []
 
     # ── plumbing ──
 
-    def call(self, method: str, path: str, *, json_body: Any = None) -> HarnessResponse:
-        response = self.h.call(method, path, json_body=json_body, headers=self.headers)
+    def call(self, method: str, path: str, *, json_body: Any = None, bare: bool = False) -> HarnessResponse:
+        """One request. The Connection headers go on every route that may carry them, and on no other."""
+        headers = None if bare or _ambient_only(path) else self.headers
+        response = self.h.call(method, path, json_body=json_body, headers=headers)
+        self.responses.append((method, path, response.status_code, response.text))
+        return response
+
+    def launcher_call(self, method: str, path: str, zone: DnsZone, *, json_body: Any = None) -> HarnessResponse:
+        """One DNS request as the host sends it: no Connection, and the zone it is configured with."""
+        response = self.h.call(method, path, json_body=json_body, headers={LAUNCHER_ZONE_HEADER: zone.id})
         self.responses.append((method, path, response.status_code, response.text))
         return response
 
@@ -195,6 +382,35 @@ class _Run:
     def status_detail(self, response: HarnessResponse) -> str:
         return f"HTTP {response.status_code}: {response.text[:200]}"
 
+    def listed(self, operation: str) -> bool:
+        return operation in self.operations
+
+    def round_trips(self, name: str, response: HarnessResponse, cls: Any, *, status: int = 200) -> Any:
+        """Check ``response`` answers ``status`` with a body that reads as ``cls`` and writes back the same."""
+        if response.status_code != status:
+            self.check(name, False, self.status_detail(response))
+            return None
+        message = cls.from_dict(self.body(response))
+        again = cls.from_dict(message.to_dict())
+        self.check(name, again == message, f"{cls.__name__} does not round-trip: {response.text[:200]}")
+        return message
+
+    def load_capabilities(self) -> bool:
+        r = self.call("GET", "/infra/capabilities")
+        if r.status_code != 200:
+            return False
+        self.caps = CapabilitiesResponse.from_dict(self.body(r))
+        self.operations = list(self.caps.operations)
+        if self.given_headers is None and self.caps.account is not None:
+            self.headers = connection_headers(
+                ConnectionBinding(id="conformance", provider=self.caps.provider or self.plugin_id, kind="AMBIENT")
+            )
+        return True
+
+    def default_node_type(self) -> str:
+        types_ = self.caps.nodes.types if self.caps.nodes is not None else []
+        return self.node_type or (types_[0] if types_ else "")
+
     # ── groups ──
 
     def shape(self) -> None:
@@ -203,70 +419,252 @@ class _Run:
         if not self.check("shape: GET /infra/capabilities answers 200", r.status_code == 200, self.status_detail(r)):
             return
         d = self.body(r)
-        self.caps = d
         caps = CapabilitiesResponse.from_dict(d)
         self.check(
             "shape: capabilities round-trip through CapabilitiesResponse",
             CapabilitiesResponse.from_dict(caps.to_dict()) == caps,
         )
         self.check(
-            "shape: facets equals implemented_facets()",
-            d.get("facets") == plugin.implemented_facets(),
-            f"{d.get('facets')!r} != {plugin.implemented_facets()!r}",
-        )
-        self.check("shape: gpu_types equals node_types", d.get("gpu_types") == d.get("node_types"))
-        self.check(
-            "shape: flavors lists workspace iff WorkspaceFacet",
-            ("workspace" in (d.get("flavors") or [])) == isinstance(plugin, WorkspaceFacet),
-            f"flavors={d.get('flavors')!r}",
+            f"shape: contract is {CONTRACT_GENERATION}", caps.contract == CONTRACT_GENERATION, f"{d.get('contract')!r}"
         )
         self.check(
-            "shape: storage present iff StorageFacet",
+            "shape: provider equals the plugin id",
+            caps.provider == self.plugin_id,
+            f"{caps.provider!r} != {self.plugin_id!r}",
+        )
+        problems = capabilities_problems(plugin, caps)
+        self.check("shape: the declaration follows the contract's rules", not problems, "; ".join(problems))
+        self.check(
+            "shape: operations lists exactly what the class provides",
+            caps.operations == provided_operations(plugin),
+            f"{caps.operations!r} != {provided_operations(plugin)!r}",
+        )
+        self.check(
+            "shape: storage present exactly when the class has a StorageFacet",
             ("storage" in d) == isinstance(plugin, StorageFacet),
         )
-        pricing = d.get("pricing")
         self.check(
-            "shape: pricing, when present, is a non-empty list of strings",
-            pricing is None
-            or (isinstance(pricing, list) and bool(pricing) and all(isinstance(p, str) for p in pricing)),
-            f"pricing={pricing!r}",
+            "shape: requires_connection needs an account and an access method",
+            not caps.requires_connection or (caps.account is not None and bool(caps.access_methods)),
         )
-        wanted = {"key", "label", "required", "secret", "help", "href", "placeholder"}
-        fields_ok = all(isinstance(f, dict) and wanted <= set(f) for f in d.get("missing_fields") or [])
-        self.check("shape: missing_fields entries carry the seven keys", fields_ok)
+        grants = [m.kind for m in caps.access_methods if m.grants]
+        self.check(
+            "shape: a method that grants has connection.grant listed",
+            not grants or self.listed("connection.grant"),
+            f"methods {grants} say grants and connection.grant is not listed",
+        )
+        binding = ConnectionBinding(id="conformance", provider=caps.provider or self.plugin_id, kind="AMBIENT")
+        r = self.h.call("GET", "/infra/capabilities", headers=connection_headers(binding))
+        self.responses.append(("GET", "/infra/capabilities", r.status_code, r.text))
+        self.check(
+            "shape: GET /infra/capabilities refuses a Connection header with 400",
+            r.status_code == 400,
+            self.status_detail(r),
+        )
+
+    def identity_tokens(self) -> None:
+        """A method that declares ``identity_token``: its resolver needs the token, and a call without one is 424."""
+        caps = self.caps
+        for method in caps.access_methods:
+            if method.paste_back:
+                self.check("connect: only a method that grants asks for paste_back fields", method.grants, method.kind)
+            spec = method.identity_token
+            if spec is None:
+                continue
+            if not self.check("connect: only a KEYLESS method declares identity_token", method.kind == "KEYLESS"):
+                continue
+            self.check("connect: identity_token names an audience", bool(spec.audience))
+            registered = token_audience(caps.provider)
+            self.check(
+                "connect: the KEYLESS resolver is registered with the declared token audience",
+                registered == spec.audience,
+                f"registered {registered!r}, declared {spec.audience!r}",
+            )
+            if not self.listed("connection.verify"):
+                continue
+            binding = ConnectionBinding(id="conformance-token", provider=caps.provider, kind="KEYLESS")
+            stranger = IdentityToken(
+                connection_id="another-connection",
+                audience=spec.audience,
+                token="conformance.token.value",
+                expires_at="2099-01-01T00:00:00Z",
+            )
+            for label, headers in (
+                ("without a token", connection_headers(binding)),
+                ("with another Connection's token", connection_headers(binding, token=stranger)),
+            ):
+                r = self.h.call(
+                    "POST", "/infra/connection/verify", json_body=VerifyRequest().to_dict(), headers=headers
+                )
+                self.responses.append(("POST", "/infra/connection/verify", r.status_code, r.text))
+                self.check(f"connect: a KEYLESS call {label} answers 424", r.status_code == 424, self.status_detail(r))
+                self.check(
+                    f"connect: a KEYLESS refusal {label} never echoes the token",
+                    stranger.token not in r.text,
+                    r.text[:200],
+                )
+
+    def connect(self) -> None:
+        caps = self.caps
+        if self.listed("connection.grant"):
+            method = next((m for m in caps.access_methods if m.grants), None)
+            if self.check("connect: a listed connection.grant has a method that grants", method is not None):
+                assert method is not None
+                account = {
+                    f.key: f.example or f.default or "conformance"
+                    for f in (caps.account.fields if caps.account else [])
+                }
+                access = {f.key: f.example or f.default or "conformance" for f in method.fields if not f.secret}
+                identity = (
+                    TokenIdentity(
+                        issuer="https://issuer.conformance.invalid",
+                        subject="conformance",
+                        audience=method.identity_token.audience,
+                    )
+                    if method.identity_token is not None
+                    else None
+                )
+                request = GrantRequest(
+                    connection_id="conformance",
+                    kind=method.kind,
+                    account=account,
+                    access=access,
+                    permissions=ConnectionPermissions(nodes=True),
+                    identity=identity,
+                )
+                r = self.call("POST", "/infra/connection/grant", json_body=request.to_dict())
+                grant = self.round_trips("connect: POST /infra/connection/grant answers a Grant", r, Grant)
+                if grant is not None:
+                    self.check("connect: a grant says what it is", bool(grant.summary), r.text[:200])
+                    self.check(
+                        "connect: a grant's link is https",
+                        not grant.link or grant.link.startswith("https://"),
+                        grant.link[:120],
+                    )
+                    self.check("connect: a create grant answers action create", grant.action == "create", grant.action)
+                r = self.h.call(
+                    "POST",
+                    "/infra/connection/grant",
+                    json_body=request.to_dict(),
+                    headers=connection_headers(
+                        ConnectionBinding(id="conformance", provider=caps.provider, kind="AMBIENT")
+                    ),
+                )
+                self.responses.append(("POST", "/infra/connection/grant", r.status_code, r.text))
+                self.check(
+                    "connect: POST /infra/connection/grant refuses a Connection header with 400",
+                    r.status_code == 400,
+                    self.status_detail(r),
+                )
+        self.identity_tokens()
+        for operation, method_, path in (
+            ("connection.grant_update", "POST", "/infra/connection/grant/update"),
+            ("connection.verify", "POST", "/infra/connection/verify"),
+            ("connection.node_access", "GET", "/infra/connection/node-access"),
+            ("storage.candidates", "GET", "/infra/storage/candidates"),
+        ):
+            if not self.listed(operation):
+                continue
+            r = self.call(method_, path, json_body={} if method_ == "POST" else None, bare=True)
+            self.check(
+                f"connect: {method_} {path} without a Connection answers 400",
+                r.status_code == 400,
+                self.status_detail(r),
+            )
+        if self.headers is None:
+            return
+        if self.listed("connection.verify"):
+            r = self.call("POST", "/infra/connection/verify", json_body=VerifyRequest().to_dict())
+            if r.status_code == 200:
+                found = self.round_trips(
+                    "connect: POST /infra/connection/verify answers a ConnectionVerification", r, ConnectionVerification
+                )
+                if found is not None:
+                    self.check("connect: a verification says who the Connection is", bool(found.identity), r.text[:200])
+                    declared = {f.key for f in (caps.account.fields if caps.account else [])}
+                    self.check(
+                        "connect: the verified account uses the declared account fields",
+                        set(found.account) <= declared,
+                        f"{sorted(found.account)} not within {sorted(declared)}",
+                    )
+            else:
+                self.check(
+                    "connect: a verification that cannot pass answers a worded 4xx",
+                    400 <= r.status_code < 500,
+                    self.status_detail(r),
+                )
+        if self.listed("connection.node_access"):
+            r = self.call("GET", "/infra/connection/node-access")
+            if r.status_code == 200:
+                self.round_trips(
+                    "connect: GET /infra/connection/node-access answers ConnectionNodeAccess", r, ConnectionNodeAccess
+                )
+            else:
+                self.check(
+                    "connect: node access that cannot be read answers a worded 4xx",
+                    400 <= r.status_code < 500,
+                    self.status_detail(r),
+                )
+        if self.listed("storage.candidates"):
+            r = self.call("GET", "/infra/storage/candidates")
+            if r.status_code == 200:
+                found = self.round_trips(
+                    "connect: GET /infra/storage/candidates answers StorageCandidates", r, StorageCandidates
+                )
+                if found is not None:
+                    self.check(
+                        "connect: at most 2000 storage candidates", len(found.items) <= 2000, str(len(found.items))
+                    )
+            else:
+                self.check(
+                    "connect: candidates that cannot be listed answer a worded 4xx",
+                    400 <= r.status_code < 500,
+                    self.status_detail(r),
+                )
 
     def lifecycle(self) -> None:
-        plugin = self.plugin
-        types_ = self.caps.get("node_types") or []
-        node_type = self.node_type or (str(types_[0]) if types_ else "")
+        if not self.listed("node.create"):
+            return
+        node_type = self.default_node_type()
         r = self.call("POST", "/infra/nodes", json_body={"node_type": node_type})
         self.check(
             "lifecycle: POST /infra/nodes without node_id/token answers 400",
             r.status_code == 400,
             self.status_detail(r),
         )
-        body = CreateNodeRequest(node_id="conformance-1", node_type=node_type, token="conformance-token").to_dict()
+        body = CreateNodeRequest(
+            node_id="conformance-1",
+            node_type=node_type,
+            token="conformance-token",
+            owner="conformance",
+            host_id="conformance",
+        ).to_dict()
         r = self.call("POST", "/infra/nodes", json_body=body)
         created = CreateNodeResponse.from_dict(self.body(r))
-        if not self.check(
-            "lifecycle: POST /infra/nodes answers 2xx", 200 <= r.status_code < 300, self.status_detail(r)
-        ):
+        if not self.check("lifecycle: POST /infra/nodes answers 201", r.status_code == 201, self.status_detail(r)):
             return
         self.check("lifecycle: create answers provider_id", bool(created.provider_id), r.text[:200])
+        self.check("lifecycle: create answers agent_url", bool(created.agent_url), r.text[:200])
         self.check(
-            "lifecycle: create answers agent_url or services",
-            bool(created.agent_url or created.services),
-            r.text[:200],
+            "lifecycle: create answers a storage_access the capabilities declare",
+            created.storage_access == "none"
+            or (self.caps.nodes is not None and created.storage_access in self.caps.nodes.storage_access),
+            created.storage_access,
         )
         pid = created.provider_id
+        r = self.call("POST", "/infra/nodes", json_body=body)
+        again = CreateNodeResponse.from_dict(self.body(r))
+        self.check(
+            "lifecycle: a repeated create with the same node_id returns the same node (idempotent)",
+            200 <= r.status_code < 300 and again.provider_id == pid,
+            self.status_detail(r),
+        )
         r = self.call("GET", f"/infra/nodes/{pid}")
-        state = NodeStateResponse.from_dict(self.body(r))
         self.check(
             "lifecycle: GET /infra/nodes/{id} answers 200 with a valid state",
             r.status_code == 200 and is_node_state(self.body(r).get("state")),
             self.status_detail(r),
         )
-        del state
         r = self.call("GET", f"/infra/nodes/{pid}?diagnostics=true")
         self.check(
             "lifecycle: GET /infra/nodes/{id}?diagnostics=true answers 200", r.status_code == 200, self.status_detail(r)
@@ -285,70 +683,43 @@ class _Run:
             r.status_code == 404 or (r.status_code == 200 and after in ("terminated", "gone")),
             self.status_detail(r),
         )
-        with_creds = {**body, "node_id": "conformance-creds", "credentials": {"api_key": "conformance-secret-value"}}
-        r = self.call("POST", "/infra/nodes", json_body=with_creds)
-        if isinstance(plugin, LegacyOwnerCredentialsFacet):
-            self.check("lifecycle: a credentials object on create is not a 5xx (legacy facet)", r.status_code < 500)
-            if 200 <= r.status_code < 300:
-                self.call("DELETE", f"/infra/nodes/{CreateNodeResponse.from_dict(self.body(r)).provider_id}")
-        else:
-            self.check(
-                "lifecycle: a credentials object on create answers 400 without the legacy facet",
-                r.status_code == 400,
-                self.status_detail(r),
-            )
-        alias = {k: v for k, v in body.items() if k != "node_type"}
-        alias["node_id"] = "conformance-2"
-        r = self.call("POST", "/infra/nodes", json_body=alias)
-        self.check(
-            "lifecycle: POST /infra/nodes with gpu_type only creates as with node_type",
-            200 <= r.status_code < 300,
-            self.status_detail(r),
-        )
-        if 200 <= r.status_code < 300:
-            self.call("DELETE", f"/infra/nodes/{CreateNodeResponse.from_dict(self.body(r)).provider_id}")
 
-    def preflight(self) -> None:
-        types_ = self.caps.get("node_types") or []
-        node_type = self.node_type or (str(types_[0]) if types_ else "")
-        if not node_type:
-            self.check(
-                "preflight: skipped",
-                True,
-                note="capabilities list no node_types and no --node-type was given; nothing to preflight",
-            )
+    def node_check(self) -> None:
+        if not self.listed("node.check"):
             return
-        path = f"/infra/preflight?node_type={node_type}"
-        r = self.call("GET", path)
-        if not self.check("preflight: GET /infra/preflight answers 200", r.status_code == 200, self.status_detail(r)):
+        request = NodeCheckRequest(node_type=self.default_node_type())
+        r = self.call("POST", "/infra/nodes/check", json_body=request.to_dict())
+        if not self.check("check: POST /infra/nodes/check answers 200", r.status_code == 200, self.status_detail(r)):
             return
-        d = self.body(r)
-        resp = PreflightResponse.from_dict(d)
-        self.check(
-            "preflight: round-trip through PreflightResponse", PreflightResponse.from_dict(resp.to_dict()) == resp
-        )
+        resp = PreflightResponse.from_dict(self.body(r))
+        self.check("check: round-trip through PreflightResponse", PreflightResponse.from_dict(resp.to_dict()) == resp)
         failed_errors = [c for c in resp.checks if not c.ok and c.level == "error"]
         agrees = (not resp.ok) if failed_errors else True
         if resp.ok is False and resp.checks and all(c.ok for c in resp.checks):
             agrees = False
         self.check(
-            "preflight: ok agrees with the checks", agrees, f"ok={resp.ok} checks={[c.to_dict() for c in resp.checks]}"
+            "check: ok agrees with the checks", agrees, f"ok={resp.ok} checks={[c.to_dict() for c in resp.checks]}"
         )
 
     def errors(self) -> None:
-        r = self.call("GET", "/infra/nodes/conformance-missing")
-        self.check(
-            "errors: an unknown node id answers 200 (gone/unknown) or 404, never 5xx",
-            (r.status_code == 200 and self.body(r).get("state") in ("gone", "unknown", "terminated"))
-            or r.status_code == 404,
-            self.status_detail(r),
-        )
+        if self.listed("node.state"):
+            r = self.call("GET", "/infra/nodes/conformance-missing")
+            self.check(
+                "errors: an unknown node id answers 200 (gone/unknown) or 404, never 5xx",
+                (r.status_code == 200 and self.body(r).get("state") in ("gone", "unknown", "terminated"))
+                or r.status_code == 404,
+                self.status_detail(r),
+            )
         bad = [
             f"{m} {p} → {s}: {t[:80]}"
             for m, p, s, t in self.responses
-            if not (200 <= s < 300) and not _is_detail_body(t)
+            if not (200 <= s < 300) and not _is_error_body(t)
         ]
-        self.check("errors: every non-2xx body is {detail: str}", not bad, "; ".join(bad[:5]))
+        self.check(
+            "errors: every non-2xx body is {detail, code, remedy, retry_after_s} with a known code",
+            not bad,
+            "; ".join(bad[:5]),
+        )
         secrets = [v for v in self.plugin.secret_values() if v]
         leaked = [f"{m} {p}" for m, p, _s, t in self.responses if any(v in t for v in secrets)]
         self.check("errors: no secret value appears in any body", not leaked, ", ".join(leaked[:5]))
@@ -505,20 +876,256 @@ class _Run:
             )
 
     def catalog(self) -> None:
-        if not isinstance(self.plugin, CatalogFacet):
+        if not self.listed("catalog"):
             return
-        for path, key in (
-            ("/infra/gpu-catalog", "gpus"),
-            ("/infra/cpu-catalog", "sizes"),
-            ("/infra/datacenters", "datacenters"),
-        ):
-            r = self.call("GET", path)
-            d = self.body(r)
+        r = self.call("POST", "/infra/catalog", json_body={"purpose": "conformance"})
+        self.check("catalog: an unknown purpose answers 400", r.status_code == 400, self.status_detail(r))
+        purposes = ["gpu_node", "cpu_node"] if self.caps.nodes is not None else []
+        if self.caps.deployments is not None:
+            purposes.append("deployment")
+        for purpose in purposes:
+            r = self.call("POST", "/infra/catalog", json_body={"purpose": purpose})
+            found = self.round_trips(f"catalog: POST /infra/catalog ({purpose}) answers a Catalog", r, Catalog)
+            if found is not None:
+                self.check(f"catalog: at most 500 offers ({purpose})", len(found.offers) <= 500, str(len(found.offers)))
+                self.check(f"catalog: every offer has an id ({purpose})", all(o.id for o in found.offers))
+        if self.listed("catalog.locations"):
+            r = self.call("GET", "/infra/catalog/locations")
+            found = self.round_trips("catalog: GET /infra/catalog/locations answers Locations", r, Locations)
+            if found is not None:
+                self.check("catalog: every location has an id", all(x.id for x in found.locations))
+
+    def deployments(self) -> None:
+        if not self.listed("deployment.create"):
+            return
+        r = self.call("POST", "/infra/deployments", json_body={"deployment_id": "conformance"}, bare=True)
+        self.check(
+            "deployments: POST /infra/deployments without a Connection answers 400",
+            r.status_code == 400,
+            self.status_detail(r),
+        )
+        if self.headers is None:
+            return
+        placement: dict[str, str] = {}
+        if self.listed("deployment.options"):
+            for _ in range(8):
+                r = self.call("POST", "/infra/deployments/options", json_body={"selected": placement})
+                options = self.round_trips(
+                    "deployments: POST /infra/deployments/options answers DeploymentOptions", r, DeploymentOptions
+                )
+                if options is None:
+                    break
+                chosen = dict(placement)
+                for f in options.placement:
+                    value = f.default or (f.choices[0].id if f.choices else "")
+                    if value and f.key not in chosen:
+                        chosen[f.key] = value
+                        break
+                if chosen == placement:
+                    break
+                placement = chosen
+        ingress_key = ""
+        if self.listed("deployment.check"):
+            request = DeploymentCheckRequest(label="conformance", placement=placement, zone=self.dns_zone)
+            r = self.call("POST", "/infra/deployments/check", json_body=request.to_dict())
+            checked = self.round_trips(
+                "deployments: POST /infra/deployments/check answers a DeploymentCheck", r, DeploymentCheck
+            )
+            if checked is not None:
+                ingress_key = checked.ingress_key
+                shared = self.caps.deployments is not None and self.caps.deployments.shared_ingress
+                self.check(
+                    "deployments: an ingress_key only with shared_ingress", shared or not ingress_key, ingress_key
+                )
+                self.check("deployments: a refused check says why", checked.ok or bool(checked.reason), r.text[:200])
+        if not self.create_deployments:
+            return
+        if self.listed("deployment.prepare"):
+            request_p = DeploymentPrepareRequest(
+                deployment_id="conformance-1", placement=placement, ingress_key=ingress_key
+            )
+            r = self.call("POST", "/infra/deployments/prepare", json_body=request_p.to_dict())
+            prepared = self.round_trips(
+                "deployments: POST /infra/deployments/prepare answers DeploymentPrepared", r, DeploymentPrepared
+            )
+            if prepared is not None:
+                self.check(
+                    "deployments: prepare answers records only under the namespace it was given",
+                    not prepared.dns_records or bool(request_p.namespace),
+                    f"{[x.name for x in prepared.dns_records]} with no namespace",
+                )
+        request_c = DeploymentRequest(
+            deployment_id="conformance-1",
+            name="Conformance",
+            bootstrap=DeploymentBootstrap(
+                record_id="conformance-record",
+                config_service_url="https://config.invalid",
+                token=_CONFORMANCE_BOOT_TOKEN,
+            ),
+            ingress_key="",
+            placement=placement,
+            owner="conformance",
+        )
+        r = self.call("POST", "/infra/deployments", json_body=request_c.to_dict())
+        created = self.round_trips(
+            "deployments: POST /infra/deployments answers a DeploymentResponse (201)", r, DeploymentResponse, status=201
+        )
+        if created is None:
+            return
+        pid = created.provider_id
+        self.check("deployments: create answers provider_id", bool(pid), r.text[:200])
+        self.check(
+            "deployments: create answers addresses or a failure",
+            bool(created.addresses) or bool(created.failure),
+            r.text[:200],
+        )
+        endpoints_ok = bool(created.failure) or (
+            {"object_service_url", "compute_service_url"} <= set(created.endpoints)
+            and all(v.startswith("https://") for v in created.endpoints.values())
+        )
+        self.check("deployments: endpoints are the two https service urls", endpoints_ok, f"{created.endpoints!r}")
+        self.check(
+            "deployments: a deployment named by address needs deployments.sslip",
+            self.caps.deployments is not None and self.caps.deployments.sslip,
+        )
+        self.check("deployments: the bootstrap token is in no answer", _CONFORMANCE_BOOT_TOKEN not in r.text)
+        r = self.call("POST", "/infra/deployments", json_body=request_c.to_dict())
+        again = DeploymentResponse.from_dict(self.body(r))
+        self.check(
+            "deployments: a repeated create with the same deployment_id returns the same deployment (idempotent)",
+            200 <= r.status_code < 300 and again.provider_id == pid,
+            self.status_detail(r),
+        )
+        for diagnostics in ("", "baseline"):
+            r = self.call("GET", f"/infra/deployments/{pid}?diagnostics={diagnostics}")
             self.check(
-                f"catalog: GET {path} answers 200 with a {key} list and a string error",
-                r.status_code == 200 and isinstance(d.get(key), list) and isinstance(d.get("error", ""), str),
+                f"deployments: GET /infra/deployments/{{id}}?diagnostics={diagnostics} answers a valid state",
+                r.status_code == 200 and is_node_state(self.body(r).get("state")),
                 self.status_detail(r),
             )
+        r = self.call("GET", f"/infra/deployments/{pid}?diagnostics=conformance")
+        self.check("deployments: an unknown diagnostics level answers 400", r.status_code == 400, self.status_detail(r))
+        if self.listed("deployment.list"):
+            r = self.call("GET", "/infra/deployments")
+            listing = self.round_trips(
+                "deployments: GET /infra/deployments answers a DeploymentListing", r, DeploymentListing
+            )
+            if listing is not None:
+                self.check(
+                    "deployments: the listing holds the created deployment",
+                    any(x.provider_id == pid for x in listing.deployments),
+                )
+                self.check("deployments: at most 500 listed", len(listing.deployments) <= 500)
+        r1 = self.call("DELETE", f"/infra/deployments/{pid}")
+        r2 = self.call("DELETE", f"/infra/deployments/{pid}", bare=True)
+        self.check(
+            "deployments: DELETE /infra/deployments/{id} answers 200 twice, the second without a Connection",
+            r1.status_code == 200 and r2.status_code == 200,
+            f"first {self.status_detail(r1)}; second {self.status_detail(r2)}",
+        )
+        if self.listed("deployment.sweep"):
+            r = self.call("POST", "/infra/deployments/sweep", json_body=SweepRequest(grace_s=3600.0).to_dict())
+            self.round_trips("deployments: POST /infra/deployments/sweep answers a SweepReport", r, SweepReport)
+
+    def dns(self) -> None:
+        if not self.listed("dns"):
+            return
+        r = self.h.call(
+            "GET",
+            "/infra/dns/records?zone_id=conformance&zone_name=conformance.invalid",
+            headers=connection_headers(ConnectionBinding(id="conformance", provider=self.plugin_id, kind="AMBIENT")),
+        )
+        self.responses.append(("GET", "/infra/dns/records", r.status_code, r.text))
+        self.check(
+            "dns: the DNS routes refuse a Connection header with 400", r.status_code == 400, self.status_detail(r)
+        )
+        r = self.launcher_call(
+            "POST",
+            "/infra/dns/changes",
+            DnsZone(id="z", name="z.invalid"),
+            json_body={
+                "zone": {"id": "z", "name": "z.invalid"},
+                "create": [{"name": "a.z.invalid", "type": "MX", "values": ["x"]}],
+            },
+        )
+        self.check(
+            "dns: a record type other than A, AAAA, CNAME, TXT answers 400", r.status_code == 400, self.status_detail(r)
+        )
+        for named in ("", "another-zone"):
+            r = self.h.call(
+                "GET",
+                "/infra/dns/records?zone_id=conformance&zone_name=conformance.invalid",
+                headers={LAUNCHER_ZONE_HEADER: named} if named else None,
+            )
+            self.responses.append(("GET", "/infra/dns/records", r.status_code, r.text))
+            self.check(
+                f"dns: a request naming {'another zone' if named else 'no zone'} as the launcher's answers 400",
+                r.status_code == 400,
+                self.status_detail(r),
+            )
+        zone = self.dns_zone
+        if zone is None:
+            return
+        base = f"_3lc-conformance.{zone.name}"
+        one = DnsRecord(name=f"a.{base}", type="TXT", values=["one"])
+        other = DnsRecord(name=f"b.{base}", type="TXT", values=["other"])
+        clash = DnsRecord(name=one.name, type="TXT", values=["two"])
+
+        def change(create: list[DnsRecord], delete: list[DnsRecord]) -> HarnessResponse:
+            body = DnsChange(zone=zone, create=create, delete=delete).to_dict()
+            return self.launcher_call("POST", "/infra/dns/changes", zone, json_body=body)
+
+        def names() -> set[tuple[str, tuple[str, ...]]]:
+            found: set[tuple[str, tuple[str, ...]]] = set()
+            cursor = ""
+            for _ in range(50):
+                r = self.launcher_call(
+                    "GET",
+                    f"/infra/dns/records?zone_id={zone.id}&zone_name={zone.name}&under={base}&cursor={cursor}",
+                    zone,
+                )
+                page = DnsRecords.from_dict(self.body(r))
+                found |= {(x.name, tuple(x.values)) for x in page.records}
+                cursor = page.next_cursor
+                if not cursor:
+                    break
+            return found
+
+        change([], [one, other, clash])
+        r = change([one], [])
+        self.check("dns: a create answers 200", r.status_code == 200, self.status_detail(r))
+        r = change([one], [])
+        self.check(
+            "dns: a create of the same record with the same values succeeds",
+            r.status_code == 200,
+            self.status_detail(r),
+        )
+        r = change([other, clash], [])
+        self.check(
+            "dns: a create of an existing name with other values answers 409 conflict",
+            r.status_code == 409 and self.body(r).get("code") == "conflict",
+            self.status_detail(r),
+        )
+        listed = names()
+        self.check("dns: a refused change applied nothing", (other.name, ("other",)) not in listed, f"{sorted(listed)}")
+        self.check(
+            "dns: the listing under a name holds what was created", (one.name, ("one",)) in listed, f"{sorted(listed)}"
+        )
+        r = change([], [clash])
+        self.check(
+            "dns: a delete that does not match the record exactly removes nothing",
+            r.status_code == 200 and (one.name, ("one",)) in names(),
+            self.status_detail(r),
+        )
+        r1 = change([], [one])
+        r2 = change([], [one])
+        self.check(
+            "dns: a delete answers 200, and again when the record is gone",
+            r1.status_code == 200 and r2.status_code == 200 and (one.name, ("one",)) not in names(),
+            f"first {self.status_detail(r1)}; second {self.status_detail(r2)}",
+        )
+
+    # ── transitional ──
 
     def workspaces(self) -> None:
         if not isinstance(self.plugin, WorkspaceFacet):
@@ -530,41 +1137,7 @@ class _Run:
             ok = WorkspaceListing.from_dict(listing.to_dict()) == listing
         self.check("workspaces: GET /infra/workspaces round-trips WorkspaceListing", ok, self.status_detail(r))
 
-    def legacy(self) -> None:
-        if not isinstance(self.plugin, LegacyOwnerCredentialsFacet):
-            return
-        try:
-            descriptor: OwnerCredentialsDescriptor | None = self.plugin.credential_descriptor()
-        except Exception as exc:
-            descriptor = None
-            self.check("legacy: credential_descriptor() answers", False, f"{type(exc).__name__}: {exc}"[:200])
-        if descriptor is not None:
-            keys = _descriptor_keys(descriptor)
-            self.check(
-                "legacy: credential_descriptor() names the keys a request's credentials carry", bool(keys), f"{keys!r}"
-            )
-            absent = sorted(k for k in descriptor.to_dict() if k not in self.caps)
-            self.check(
-                "legacy: capabilities carry the credential descriptor",
-                not absent,
-                f"missing {absent}" if absent else "",
-            )
-        r = self.call("POST", "/infra/nodes/conformance-missing/terminate", json_body={})
-        self.check(
-            "legacy: POST /infra/nodes/{id}/terminate without credentials answers 400",
-            r.status_code == 400,
-            self.status_detail(r),
-        )
-
-
-def _descriptor_keys(descriptor: OwnerCredentialsDescriptor) -> list[str]:
-    """Every credential key the descriptor names: top-level, the entered fields, the sign-in's, the role's."""
-    keys = [*descriptor.credential_keys, *(f.key for f in descriptor.workspace_credentials)]
-    if descriptor.login is not None:
-        keys += descriptor.login.credential_keys
-    if descriptor.role is not None and descriptor.role.field.get("key"):
-        keys.append(str(descriptor.role.field["key"]))
-    return [k for k in dict.fromkeys(keys) if k]
+    # ── end transitional ──
 
 
 def _route_checks(plugin: InfrastructurePlugin) -> tuple[list[Check], bool]:
@@ -597,12 +1170,19 @@ def _ok(response: HarnessResponse) -> bool:
     return 200 <= response.status_code < 300
 
 
-def _is_detail_body(text: str) -> bool:
+def _is_error_body(text: str) -> bool:
     try:
         data = json.loads(text)
     except ValueError:
         return False
-    return isinstance(data, dict) and isinstance(data.get("detail"), str)
+    return (
+        isinstance(data, dict)
+        and set(data) == _ERROR_KEYS
+        and isinstance(data["detail"], str)
+        and data["code"] in ERROR_CODES
+        and isinstance(data["remedy"], str)
+        and (data["retry_after_s"] is None or isinstance(data["retry_after_s"], (int, float)))
+    )
 
 
 def check_provider(
@@ -612,6 +1192,8 @@ def check_provider(
     config_root: str | Path | None = None,
     node_type: str = "",
     create_nodes: bool = False,
+    create_deployments: bool = False,
+    dns_zone: DnsZone | None = None,
     live_storage: bool = False,
     skip: Iterable[str] = (),
     headers: dict[str, str] | None = None,
@@ -623,11 +1205,17 @@ def check_provider(
         plugin_id: The manifest id a host would hydrate onto it.
         config_root: A scratch settings root (see :class:`~tlc_plugin_sdk.harness.PluginHarness`);
             a temporary directory when ``None``. The real ``~/.3lc-plugin-configs`` is never used.
-        node_type: The node type to create and preflight (default: the first in ``node_types``).
-        create_nodes: Run the lifecycle checks (create, state, diagnostics, delete).
+        node_type: The node type to create and check (default: the first in ``nodes.types``).
+        create_nodes: Run the node lifecycle checks (create, state, diagnostics, delete).
+        create_deployments: Run the deployment lifecycle checks (prepare, create, state, list,
+            delete, sweep), naming the deployment by its address.
+        dns_zone: A zone the DNS checks may write under ``_3lc-conformance.<name>``; ``None``
+            runs only the DNS checks that write nothing.
         live_storage: Run ``list_objects`` and a transfer dry-run against the first listed storage.
         skip: Group names (:data:`GROUPS`) not to run.
-        headers: Headers to send on every call (an ``x-3lc-connection`` binding, say).
+        headers: The Connection headers to send on every call that acts on an account
+            (:func:`connection_headers`). Default: an ``AMBIENT`` binding for the provider, and
+            none for a provider whose capabilities declare no account.
 
     Returns:
         The report.
@@ -636,58 +1224,44 @@ def check_provider(
     route_checks, duplicates = _route_checks(plugin) if "routes" not in skipped else ([], False)
     if duplicates:
         # Litestar refuses to build an app with two handlers on one method and path: nothing else can run.
-        return ConformanceReport(checks=route_checks, facets=plugin.implemented_facets())
+        return ConformanceReport(checks=route_checks, operations=provided_operations(plugin))
     with tempfile.TemporaryDirectory(prefix="tlc-conformance-") as scratch:
         root = Path(config_root) if config_root is not None else Path(scratch)
-        return _run_checks(
-            plugin,
-            plugin_id=plugin_id,
-            root=root,
-            node_type=node_type,
-            create_nodes=create_nodes,
-            live_storage=live_storage,
-            skipped=skipped,
-            headers=headers,
-            route_checks=route_checks,
-        )
+        from tlc_plugin_sdk.harness import PluginHarness
 
-
-def _run_checks(
-    plugin: InfrastructurePlugin,
-    *,
-    plugin_id: str,
-    root: Path,
-    node_type: str,
-    create_nodes: bool,
-    live_storage: bool,
-    skipped: set[str],
-    headers: dict[str, str] | None,
-    route_checks: list[Check],
-) -> ConformanceReport:
-    from tlc_plugin_sdk.harness import PluginHarness
-
-    with PluginHarness(plugin, plugin_id=plugin_id, config_root=root) as h:
-        run = _Run(
-            plugin,
-            h,
-            headers=headers,
-            config_root=root,
-            node_type=node_type,
-            create_nodes=create_nodes,
-            live_storage=live_storage,
-        )
-        if "shape" not in skipped:
-            run.shape()
-        else:
-            run.caps = run.body(run.call("GET", "/infra/capabilities"))
-        if create_nodes and "lifecycle" not in skipped:
-            run.lifecycle()
-        for group in ("preflight", "settings", "storage", "catalog", "workspaces", "legacy"):
-            if group not in skipped:
-                getattr(run, group)()
-        if "errors" not in skipped:
-            run.errors()
-    return ConformanceReport(checks=[*run.checks, *route_checks], facets=plugin.implemented_facets())
+        with PluginHarness(plugin, plugin_id=plugin_id, config_root=root) as h:
+            run = _Run(
+                plugin,
+                h,
+                plugin_id=plugin_id,
+                headers=headers,
+                config_root=root,
+                node_type=node_type,
+                create_nodes=create_nodes,
+                create_deployments=create_deployments,
+                dns_zone=dns_zone,
+                live_storage=live_storage,
+            )
+            loaded = run.load_capabilities()
+            if "shape" not in skipped:
+                run.shape()
+            if loaded:
+                groups: tuple[tuple[str, Any], ...] = (
+                    ("connect", run.connect),
+                    ("lifecycle", run.lifecycle if create_nodes else None),
+                    ("check", run.node_check),
+                    ("settings", run.settings),
+                    ("storage", run.storage),
+                    ("catalog", run.catalog),
+                    ("deployments", run.deployments),
+                    ("dns", run.dns),
+                    ("workspaces", run.workspaces),
+                    ("errors", run.errors),
+                )
+                for group, fn in groups:
+                    if group not in skipped and fn is not None:
+                        fn()
+    return ConformanceReport(checks=[*run.checks, *route_checks], operations=provided_operations(plugin))
 
 
 def assert_conformant(plugin: InfrastructurePlugin, *, plugin_id: str, **options: Any) -> None:
@@ -719,12 +1293,39 @@ class FakeSettings:
     api_key: str = secret(
         label="Fake API key", help="Any value works; the provider is in memory.", placeholder="fake-…"
     )
-    node_types: list[str] = option(default_factory=lambda: ["fake-gpu"], label="Node types")
+    node_types: list[str] = option(default_factory=lambda: ["fake-gpu", "fake-cpu"], label="Node types")
     default_storage: str = "fake-data"
     extra_env: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, repr=False)
+class FakeCredential:
+    """What :class:`FakeProvider`'s resolver returns for a ``KEYLESS`` Connection: its own credential class.
+
+    Attributes:
+        connection_id: The Connection it was exchanged for.
+        access_token: The short-lived value. Never in a repr; scrubbed from error answers.
+        account: The account it is in.
+        expires_at: ISO-8601 expiry.
+    """
+
+    connection_id: str
+    access_token: str
+    account: dict[str, str] = field(default_factory=dict)
+    expires_at: str = "2099-01-01T00:00:00+00:00"
+
+    def __repr__(self) -> str:
+        return f"FakeCredential(connection_id={self.connection_id!r}, access_token='***')"
+
+    def secret_values(self) -> list[str]:
+        """The token."""
+        return [self.access_token]
+
+
 _FAKE_URL = re.compile(r"^fake://([^/]+)/?(.*)$")
+_FAKE_ACCOUNT = {"account_id": "000000000000"}
+_FAKE_LOCATIONS = ("fake-1", "fake-2")
+_FAKE_HOST = "fake-host-principal"
 
 
 def _split(url: str) -> tuple[str, str]:
@@ -736,64 +1337,404 @@ def _split(url: str) -> tuple[str, str]:
     return m.group(1), m.group(2).strip("/")
 
 
-class FakeProvider(InfrastructurePlugin, StorageFacet, CatalogFacet, WorkspaceFacet):
-    """Every facet, in memory: the SDK's reference provider and the object its lockstep tests drive.
+def _canonical(permissions: ConnectionPermissions) -> ConnectionPermissions:
+    """The permissions as the fake stores them: locations without a trailing slash, sorted, no duplicates."""
+    rules = sorted({(rule.location.rstrip("/"), rule.access) for rule in permissions.storage})
+    return ConnectionPermissions(
+        deployments=permissions.deployments,
+        nodes=permissions.nodes,
+        storage=[StorageRule(location=location, access=access) for location, access in rules],
+        options={key: permissions.options[key] for key in sorted(permissions.options)},
+    )
 
-    Nodes live in a dict; storage is one ``{key: bytes}`` per bucket under ``fake://<bucket>/``;
-    transfers and bundles run the SDK engines over that dict; catalogs answer one static row each.
+
+class FakeProvider(InfrastructurePlugin, NodeProvider, DeploymentProvider, StorageFacet, CatalogFacet, DnsFacet):
+    """Every operation of the contract, in memory: the SDK's reference provider.
+
+    ``FakeProvider()`` also serves the transitional deployment surface (it is a ``WorkspaceFacet``
+    and lists ``workspace.create``); ``FakeProvider(transitional=False)`` presents only the
+    generation 2 deployment operations, the shape a host's launcher drives through the typed path.
+
+    Nodes and deployments live in dicts keyed by provider id and are idempotent on the host's id;
+    storage is one ``{key: bytes}`` per bucket under ``fake://<bucket>/``; transfers and bundles
+    run the SDK engines over that dict; the DNS zone is a dict per zone id with the atomic-change
+    semantics of the contract; catalogs answer static offers. It declares all three access
+    methods and resolves ``KEYLESS`` itself, to a :class:`FakeCredential`: a binding whose
+    ``access`` says ``role_name = "refused"`` is refused.
+
+    Attributes:
+        nodes: ``{provider_id: record}``; a record says what the create call carried, including
+            the ``connection`` id and the ``credential`` class the call acted with.
+        deployments: ``{provider_id: record}``, likewise.
+        zones: ``{zone_id: {(name, type): DnsRecord}}``.
+        buckets: ``{bucket: {key: bytes}}``.
+        leftovers: Resource names a sweep finds unowned and releases.
+        shared_ingress: Whether ``check_deployment`` answers an ``ingress_key`` in a zone, so
+            that ``prepare_deployment`` has a validation record to ask for.
+        requires_connection: What capabilities say.
+        identity_token_audience: Set by :meth:`require_identity_token`: the ``KEYLESS`` method then
+            declares ``identity_token`` and ``paste_back``, and its resolver needs the token.
+        identity_tokens: The Connection id of every identity token the resolver was handed.
     """
 
     settings = PluginSettings(FakeSettings, "fake")
 
-    def __init__(self) -> None:
+    def __new__(cls, *, transitional: bool = True) -> FakeProvider:
+        # ── transitional ──
+        if transitional and not issubclass(cls, WorkspaceFacet):
+            return super().__new__(_with_workspaces(cls))
+        # ── end transitional ──
+        return super().__new__(cls)
+
+    def __init__(self, *, transitional: bool = True) -> None:
+        del transitional  # chosen in __new__
         self.nodes: dict[str, dict[str, Any]] = {}
+        self.deployments: dict[str, dict[str, Any]] = {}
+        self.zones: dict[str, dict[tuple[str, str], DnsRecord]] = {}
         self.buckets: dict[str, dict[str, bytes]] = {
             "fake-data": {"train/a.jpg": b"a" * 10, "train/b.jpg": b"b" * 20, "readme.txt": b"hello"}
         }
+        self.leftovers: list[str] = []
+        self.shared_ingress = True
+        self.requires_connection = False
+        self.node_access: dict[str, dict[str, Any]] = {}
         self._transfers: dict[str, TransferRegistry] = {}
         self._bundles: dict[str, BundleRegistry] = {}
+        self.identity_token_audience = ""
+        self.identity_tokens: list[str] = []
+        register_resolver("fake", self.resolve_keyless)
+
+    def require_identity_token(self, audience: str = "api://fake-token-exchange") -> None:
+        """Make the ``KEYLESS`` method one that needs a host-minted identity token for ``audience``."""
+        self.identity_token_audience = audience
+        register_resolver("fake", self.resolve_keyless, token_audience=audience)
 
     def get_ui_fragment(self) -> str:
         return "<div>fake provider</div>"
 
-    # ── core ──
+    # ── the credential seam ──
+
+    def resolve_keyless(self, request: ResolveRequest) -> Ambient | FakeCredential:
+        """The fake's ``KEYLESS`` resolver, registered for provider ``fake`` when a fake is built."""
+        binding = request.binding
+        if request.identity_token is not None:
+            self.identity_tokens.append(request.identity_token.connection_id)
+        if binding.access.get("role_name") == "refused":
+            msg = "The fake account refused to let this host in"
+            raise CredentialUnavailable(msg, remedy="Use a role_name other than 'refused'.")
+        if binding.access.get("deployment_of") == _FAKE_HOST:
+            return Ambient(provider=binding.provider, account=dict(binding.account), defaults=dict(binding.defaults))
+        return FakeCredential(
+            connection_id=binding.id,
+            access_token=f"fake-session-{binding.id}",
+            account=dict(binding.account) or dict(_FAKE_ACCOUNT),
+        )
+
+    @staticmethod
+    def _acting() -> dict[str, Any]:
+        """Which Connection, credential and use the current call acts with, for a record."""
+        binding = current_connection()
+        credential = current_credential()
+        use = current_use()
+        return {
+            "connection": binding.id if binding is not None else "",
+            "connection_kind": binding.kind if binding is not None else "",
+            "credential": type(credential).__name__ if credential is not None else "",
+            "resource_id": use.resource_id if use is not None else "",
+            "source_identity": use.source_identity if use is not None else "",
+        }
+
+    @staticmethod
+    def _account() -> dict[str, str]:
+        binding = current_connection()
+        return dict(binding.account) if binding is not None and binding.account else dict(_FAKE_ACCOUNT)
+
+    @staticmethod
+    def _default_location() -> str:
+        binding = current_connection()
+        return (binding.defaults.get("location") if binding is not None else "") or _FAKE_LOCATIONS[0]
+
+    # ── capabilities ──
 
     def capabilities(self) -> CapabilitiesResponse:
         s = self.settings.load()
         return CapabilitiesResponse(
             provider="fake",
-            node_types=list(s.node_types),
-            flavors=["gpu", "workspace"],
-            pricing=["on_demand"],
-            region="fake-1",
-            **self.settings.readiness(s),
+            display_name="Fake cloud",
+            requires_connection=self.requires_connection,
+            account=AccountSchema(
+                noun="Fake account",
+                fields=[
+                    FormField(
+                        key="account_id",
+                        label="Account id",
+                        help="The twelve digits of the fake account.",
+                        example="000000000000",
+                        pattern=r"^\d{12}$",
+                        max_length=12,
+                    )
+                ],
+                defaults=[
+                    FormField(
+                        key="location",
+                        label="Default location",
+                        kind="select",
+                        required=False,
+                        choices=[Choice(id=loc, label=f"Fake region {loc[-1]}") for loc in _FAKE_LOCATIONS],
+                        default=_FAKE_LOCATIONS[0],
+                    )
+                ],
+                help="Any twelve digits work; the provider is in memory.",
+            ),
+            access_methods=[
+                AccessMethod(
+                    kind="KEYLESS",
+                    label="Uses access you grant to 3LC",
+                    summary="You create a role in the fake account that trusts this host.",
+                    preferred=True,
+                    grants=True,
+                    fields=[
+                        FormField(
+                            key="role_name", label="Role name", example="3lc-fake", default="3lc-fake", max_length=64
+                        )
+                    ],
+                    identity_token=(
+                        IdentityTokenSpec(audience=self.identity_token_audience)
+                        if self.identity_token_audience
+                        else None
+                    ),
+                    paste_back=(
+                        [FormField(key="client_id", label="Client id", example="00000000-0000", max_length=64)]
+                        if self.identity_token_audience
+                        else []
+                    ),
+                ),
+                AccessMethod(
+                    kind="AMBIENT",
+                    label="Uses this machine's own sign-in",
+                    summary="The Compute Service acts as itself.",
+                    purposes=["nodes", "storage"],
+                ),
+                AccessMethod(
+                    kind="SECRET",
+                    label="Uses an API key you store",
+                    purposes=["nodes", "storage"],
+                    fields=[FormField(key="api_key", label="API key", kind="secret", secret=True, example="fake-…")],
+                ),
+            ],
+            host=HostIdentity(display="Fake host", matches={"setup_identity": _FAKE_HOST}),
+            permissions=PermissionSchema(
+                options=[
+                    PermissionOption(
+                        key="deployment_nodes",
+                        label="Deployments may start their own nodes",
+                        purpose="deployments",
+                        default=True,
+                        operations=["node.create", "node.describe", "node.terminate"],
+                    )
+                ],
+                storage=StorageLocationSchema(
+                    scheme="fake",
+                    example="fake://fake-data/projects",
+                    pattern=r"^fake://[a-z0-9*-]+(/.*)?$",
+                    access_modes=["read", "read_write_no_delete", "read_write"],
+                    help="A bucket, or a folder in one. * matches any run of characters.",
+                ),
+            ),
+            nodes=NodeCapabilities(
+                kinds=["gpu", "cpu"],
+                types=list(s.node_types),
+                type_label="Fake machine",
+                pricing=["on_demand", "spot"],
+                storage_access=["identity", "ambient"],
+            ),
+            deployments=DeploymentCapabilities(certificate="provider", shared_ingress=True, sslip=True),
+            **self.readiness(),
         )
+
+    # ── connect an account ──
+
+    def describe_grant(self, request: GrantRequest) -> Grant:
+        if request.kind != "KEYLESS":
+            msg = "Only the granted access method has a grant to describe"
+            raise InvalidRequest(msg, remedy="Ask for the grant of a KEYLESS Connection.")
+        role = request.access.get("role_name") or "3lc-fake"
+        account = request.account.get("account_id") or _FAKE_ACCOUNT["account_id"]
+        permissions = _canonical(request.permissions)
+        update = request.action == "update"
+        creates: dict[str, list[str]] = {}
+        if permissions.deployments:
+            creates["deployments"] = [f"A role {role}-deployment that a managed deployment runs as."]
+        if permissions.nodes:
+            creates["nodes"] = [f"A role {role}-node that a node runs as."]
+        if permissions.storage:
+            creates["storage"] = [f"{rule.access} access to {rule.location}" for rule in permissions.storage]
+        trusts = _FAKE_HOST
+        if request.identity is not None:
+            trusts = f"{request.identity.issuer} as {request.identity.subject}"
+        document = {"role": role, "trusts": trusts, "permissions": permissions.to_dict()}
+        return Grant(
+            summary=f"{'Updates' if update else 'Creates'} the role {role} in fake account {account}.",
+            action=request.action,
+            link=f"https://console.fake.invalid/grants/{request.action}?connection={request.connection_id}",
+            link_label="Open the fake console",
+            steps=["Open the link.", "Review what is created.", "Choose Apply and wait for it to complete."],
+            creates=creates,
+            trusts=f"The fake principal {trusts}",
+            files=[GrantFile(name="3lc-connection.json", content=json.dumps(document, sort_keys=True))],
+            command="fake grants apply --file 3lc-connection.json",
+            permissions=permissions,
+            access={"role_name": role, "node_identity": f"{role}-node", "setup_identity": _FAKE_HOST},
+            version="1",
+            console_url=f"https://console.fake.invalid/grants/{request.connection_id}",
+            notes=["Delete the role to revoke the access."],
+        )
+
+    def prepare_grant_update(self, request: GrantUpdateRequest) -> GrantUpdate:
+        if _canonical(request.installed.permissions) == _canonical(request.pending):
+            return GrantUpdate(
+                status="no_changes",
+                detail="The installed grant already allows this.",
+                revision=request.revision,
+                pending_revision=request.pending_revision,
+            )
+        binding = current_connection()
+        name = binding.id if binding is not None else ""
+        return GrantUpdate(
+            status="ready",
+            detail="A change is ready for review.",
+            review_url=f"https://console.fake.invalid/grants/{name}/changes/{request.pending_revision}",
+            revision=request.revision,
+            pending_revision=request.pending_revision,
+        )
+
+    def verify_connection(self, request: VerifyRequest) -> ConnectionVerification:
+        binding = current_connection()
+        kind = binding.kind if binding is not None else "AMBIENT"
+        account = self._account()
+        observation = None
+        if binding is not None and kind == "KEYLESS":
+            observation = GrantObservation(
+                permissions=binding.permissions or ConnectionPermissions(nodes=True),
+                account=account,
+                resource_ref=binding.grant_ref or f"fake:grant/{binding.id}",
+                status="complete",
+                version="1",
+            )
+        checks = []
+        for root in request.storage_roots:
+            try:
+                reachable = _split(root.url)[0] in self.buckets
+            except InvalidRequest:
+                reachable = False
+            checks.append(
+                PreflightCheck(
+                    name=root.url,
+                    ok=reachable,
+                    level="info" if reachable else "warn",
+                    detail="" if reachable else "Not found.",
+                )
+            )
+        return ConnectionVerification(
+            identity=f"fake:{kind.lower()}:{account.get('account_id', '')}",
+            account=account,
+            account_label=f"Fake account {account.get('account_id', '')}",
+            checked=["resolve", "whoami"],
+            checks=checks,
+            observation=observation,
+            facts={"Grant version": "1"} if observation is not None else {},
+        )
+
+    def connection_node_access(self, request: NodeAccessRequest, *, apply: bool = False) -> ConnectionNodeAccess:
+        binding = current_connection()
+        key = binding.id if binding is not None else ""
+        state = self.node_access.setdefault(key, {"ready": False, "rules": [], "revision": "0"})
+        if apply:
+            if request.storage_access is not None:
+                if request.expected_revision and request.expected_revision != state["revision"]:
+                    msg = "The node access setup changed since it was reviewed"
+                    raise Conflict(msg, remedy="Review the current setup and apply again.")
+                state["rules"] = list(request.storage_access.get("rules") or [])
+            state["ready"] = True
+            state["revision"] = str(int(state["revision"]) + 1)
+        return ConnectionNodeAccess(
+            supported=True,
+            ready=bool(state["ready"]),
+            detail="Nodes reach storage as the fake node identity."
+            if state["ready"]
+            else "The fake node identity is not set up.",
+            action_label="" if state["ready"] else "Set up node access",
+            checks=[PreflightCheck(name=root.url, ok=True, detail=root.access) for root in request.storage_roots],
+            storage_access={"rules": list(state["rules"])},
+            revision=str(state["revision"]),
+        )
+
+    def storage_candidates(self) -> StorageCandidates:
+        return StorageCandidates(
+            items=[StorageCandidate(location=f"fake://{b}", label=b) for b in sorted(self.buckets)][:2000]
+        )
+
+    # ── nodes ──
 
     def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
         s = self.settings.load()
         if request.node_type not in s.node_types:
             msg = f"'{request.node_type[:40]}' is not a configured node type"
-            raise InvalidRequest(msg)
+            raise InvalidRequest(msg, remedy="Choose one of the configured node types.")
+        location = request.location or self._default_location()
+        if location not in _FAKE_LOCATIONS:
+            msg = f"'{location[:40]}' is not a fake location"
+            raise InvalidRequest(msg, remedy=f"Choose one of {', '.join(_FAKE_LOCATIONS)}.")
         provider_id = f"fake-{request.node_id}"
+        existing = self.nodes.get(provider_id)
+        if existing is not None and existing["state"] != "terminated":
+            response: CreateNodeResponse = existing["response"]
+            return response
+        acting = self._acting()
+        access = {"KEYLESS": "identity", "AMBIENT": "ambient"}.get(acting["connection_kind"], "none")
         node: dict[str, Any] = {
             "state": "running",
+            "kind": request.kind,
             "flavor": request.flavor,
             "owner": request.owner,
+            "host_id": request.host_id,
             "type": request.node_type,
+            "location": location,
+            "pricing": request.pricing or "on_demand",
+            "storage_roots": [root.to_dict() for root in request.storage_roots],
+            "tags": {"3lc": "node", "3lc-id": request.node_id, "3lc-owner": request.owner, "3lc-host": request.host_id},
+            **acting,
         }
+        # ── transitional ──
         if request.flavor == "workspace":
+            node["tags"]["3lc"] = "deployment"
             node["services"] = {
                 "object_service_url": f"http://{provider_id}:5015",
                 "compute_service_url": f"http://{provider_id}:5020",
             }
-            self.nodes[provider_id] = node
-            return CreateNodeResponse(
-                provider_id=provider_id, services=node["services"], managed_by="creator", hourly_rate=0.1
+            node["response"] = CreateNodeResponse(
+                provider_id=provider_id, services=node["services"], hourly_rate=0.1, location=location
             )
-        self.nodes[provider_id] = node
-        return CreateNodeResponse(
-            provider_id=provider_id, agent_url=f"http://fake:{request.agent_port}", hourly_rate=1.5
+            self.nodes[provider_id] = node
+            workspace_response: CreateNodeResponse = node["response"]
+            return workspace_response
+        # ── end transitional ──
+        binding = current_connection()
+        identity = (
+            (binding.access.get("node_identity", "") if binding is not None else "") if access == "identity" else ""
         )
+        node["response"] = CreateNodeResponse(
+            provider_id=provider_id,
+            agent_url=f"http://fake:{request.agent_port}",
+            pricing=node["pricing"],
+            hourly_rate=0.5 if node["pricing"] == "spot" else 1.5,
+            location=location,
+            identity=identity or ("fake-node" if access == "identity" else ""),
+            storage_access="identity" if access == "identity" else "ambient" if access == "ambient" else "none",
+        )
+        self.nodes[provider_id] = node
+        created: CreateNodeResponse = node["response"]
+        return created
 
     def node_state(self, provider_id: str) -> NodeStateResponse:
         node = self.nodes.get(provider_id)
@@ -817,6 +1758,27 @@ class FakeProvider(InfrastructurePlugin, StorageFacet, CatalogFacet, WorkspaceFa
         node["state"] = "terminated"
         return NodeStateResponse(state="terminated")
 
+    def check_node(self, request: NodeCheckRequest) -> PreflightResponse:
+        s = self.settings.load()
+        node_type = request.node_type or (s.node_types[0] if s.node_types else "")
+        location = request.location or self._default_location()
+        checks = [
+            PreflightCheck(
+                name="node type",
+                ok=node_type in s.node_types,
+                level="info" if node_type in s.node_types else "error",
+                detail=node_type,
+            ),
+            PreflightCheck(
+                name="location",
+                ok=location in _FAKE_LOCATIONS,
+                level="info" if location in _FAKE_LOCATIONS else "error",
+                detail=location,
+            ),
+        ]
+        ok = all(c.ok for c in checks)
+        return PreflightResponse(ok=ok, checks=checks, summary="ready" if ok else "not ready")
+
     # ── storage ──
 
     def storage_capabilities(self) -> StorageCapabilities:
@@ -827,11 +1789,37 @@ class FakeProvider(InfrastructurePlugin, StorageFacet, CatalogFacet, WorkspaceFa
         return StorageListing(
             capabilities=self.storage_capabilities(),
             storage=[
-                StorageItem(id=b, name=b, url=f"fake://{b}", kind="bucket", region="fake-1", default=b == default)
+                StorageItem(
+                    id=b,
+                    name=b,
+                    url=f"fake://{b}",
+                    kind="bucket",
+                    region="fake-1",
+                    default=b == default,
+                    access=self._storage_access(f"fake://{b}"),
+                )
                 for b in sorted(self.buckets)
             ],
             regions=[Region(id="fake-1", name="Fake region 1")],
         )
+
+    @staticmethod
+    def _storage_access(url: str) -> StorageAccess | None:
+        """What the Connection's installed storage rules allow in ``url``; ``None`` without rules."""
+        binding = current_connection()
+        if binding is None or binding.permissions is None or not binding.permissions.storage:
+            return None
+        grants = [
+            StorageGrant(
+                url=rule.location,
+                read=True,
+                write=rule.access != "read",
+                delete=rule.access == "read_write",
+            )
+            for rule in binding.permissions.storage
+            if rule.location == url or rule.location.startswith(url + "/")
+        ]
+        return StorageAccess(browse=bool(grants), delete_location=False, bundle=bool(grants), grants=grants)
 
     def create_storage(self, request: CreateStorageRequest) -> StorageItem:
         if request.name in self.buckets:
@@ -972,16 +1960,310 @@ class FakeProvider(InfrastructurePlugin, StorageFacet, CatalogFacet, WorkspaceFa
 
     # ── catalog ──
 
-    def gpu_catalog(self, *, node_type: str = "", region: str = "") -> GpuCatalog:
-        return GpuCatalog(gpus=[{"id": "fake-gpu", "name": "Fake GPU", "price": 1.5, "region": region or "fake-1"}])
+    def catalog(self, request: CatalogRequest) -> Catalog:
+        location = request.location or self._default_location()
+        if location not in _FAKE_LOCATIONS:
+            return Catalog(location=location, error=f"'{location[:40]}' is not a fake location")
+        offers = {
+            "gpu_node": [
+                Offer(
+                    id="fake-gpu",
+                    label="Fake GPU",
+                    description="One fake GPU.",
+                    vcpus=8,
+                    memory_gb=32.0,
+                    gpu_name="Fake T1000",
+                    gpu_count=1,
+                    gpu_memory_gb=24.0,
+                    hourly=1.5,
+                    hourly_spot=0.5,
+                    available=True,
+                    capacity="High",
+                    recommended=True,
+                ),
+                Offer(
+                    id="fake-gpu-xl",
+                    label="Fake GPU XL",
+                    vcpus=32,
+                    memory_gb=128.0,
+                    gpu_name="Fake T1000",
+                    gpu_count=4,
+                    gpu_memory_gb=24.0,
+                    hourly=6.0,
+                    available=False,
+                    unavailable_reason="Your fake quota for this family is zero.",
+                ),
+            ],
+            "cpu_node": [Offer(id="fake-cpu", label="Fake CPU", vcpus=4, memory_gb=16.0, hourly=0.2, available=True)],
+            "deployment": [
+                Offer(
+                    id="fake-small", label="Small", vcpus=2, memory_gb=8.0, hourly=0.1, available=True, recommended=True
+                ),
+                Offer(id="fake-large", label="Large", vcpus=8, memory_gb=32.0, hourly=0.4, available=True),
+            ],
+        }
+        return Catalog(offers=offers[request.purpose], location=location)
 
-    def cpu_catalog(self, *, region: str = "") -> CpuCatalog:
-        return CpuCatalog(sizes=[{"id": "fake-cpu", "name": "Fake CPU", "price": 0.1}], region=region or "fake-1")
+    def locations(self, *, node_type: str = "") -> Locations:
+        return Locations(
+            locations=[
+                Location(id="fake-1", label="Fake region 1", available=True, capacity="High"),
+                Location(id="fake-2", label="Fake region 2", available=True, capacity="Low"),
+            ],
+            node_type=node_type,
+            default=self._default_location(),
+        )
 
-    def datacenters(self, *, node_type: str = "") -> Datacenters:
-        return Datacenters(datacenters=[{"id": "fake-1", "name": "Fake region 1", "stock": "ok"}], node_type=node_type)
+    # ── deployments ──
 
-    # ── workspaces ──
+    @staticmethod
+    def _address(deployment_id: str) -> str:
+        return f"203.0.113.{sum(deployment_id.encode()) % 250 + 1}"
+
+    def deployment_options(self, selected: dict[str, str]) -> DeploymentOptions:
+        location = selected.get("location") or self._default_location()
+        fields = [
+            PlacementField(
+                key="location",
+                label="Location",
+                choices=[PlacementChoice(id=loc, label=f"Fake region {loc[-1]}") for loc in _FAKE_LOCATIONS],
+                default=self._default_location(),
+            )
+        ]
+        blockers: list[str] = []
+        if location not in _FAKE_LOCATIONS:
+            blockers.append(f"'{location[:40]}' is not a fake location.")
+        elif "location" in selected:
+            fields.append(
+                PlacementField(
+                    key="network",
+                    label="Network",
+                    choices=[
+                        PlacementChoice(id=f"net-{location}-a", label=f"Default network of {location}"),
+                        PlacementChoice(id=f"net-{location}-b", label=f"Second network of {location}"),
+                    ],
+                    default=f"net-{location}-a",
+                )
+            )
+        return DeploymentOptions(
+            placement=fields,
+            costs=[
+                CostNote(label="Machine", description="Billed while the deployment runs.", hourly=0.1),
+                CostNote(label="Shared ingress", description="One per network.", hourly=0.03, reused=False),
+            ],
+            warnings=[] if location != "fake-2" else ["Fake region 2 has low stock."],
+            blockers=blockers,
+        )
+
+    def check_deployment(self, request: DeploymentCheckRequest) -> DeploymentCheck:
+        location = request.placement.get("location") or self._default_location()
+        checks = [PreflightCheck(name="quota", ok=True, detail="1 of 10 fake machines in use")]
+        if len(request.label) > 40:
+            return DeploymentCheck(
+                ok=False, reason="The name is too long for the fake ingress (40 characters).", checks=checks
+            )
+        binding = current_connection()
+        allowed = binding.permissions.storage if binding is not None and binding.permissions is not None else None
+        root = request.storage.root.rstrip("/")
+        if allowed is not None and root and not any(root.startswith(rule.location.rstrip("*")) for rule in allowed):
+            checks.append(PreflightCheck(name="storage", ok=False, level="error", detail=root))
+            return DeploymentCheck(ok=False, reason="The Connection may not reach the project root.", checks=checks)
+        key = f"{location}-{request.zone.id}".lower() if self.shared_ingress and request.zone is not None else ""
+        return DeploymentCheck(ok=True, ingress_key=key, checks=checks)
+
+    def prepare_deployment(self, request: DeploymentPrepareRequest) -> DeploymentPrepared:
+        if not request.namespace:
+            return DeploymentPrepared(state="ready", detail="Nothing is shared outside a zone.")
+        record = DnsRecord(name=f"_validate.{request.namespace}", type="TXT", values=[f"fake-{request.ingress_key}"])
+        present = any(
+            zone.get((record.name, record.type)) is not None
+            and zone[(record.name, record.type)].values == record.values
+            for zone in self.zones.values()
+        )
+        if present:
+            return DeploymentPrepared(state="ready", detail="The shared certificate is issued.", dns_records=[record])
+        return DeploymentPrepared(
+            state="pending",
+            detail="Waiting for the certificate's validation record.",
+            dns_records=[record],
+            retry_after_s=0.0,
+        )
+
+    def create_deployment(self, request: DeploymentRequest) -> DeploymentResponse:
+        provider_id = f"fake-dep-{request.deployment_id}"
+        existing = self.deployments.get(provider_id)
+        if existing is not None and existing["state"] != "terminated":
+            response: DeploymentResponse = existing["response"]
+            return response
+        location = request.placement.get("location") or self._default_location()
+        if location not in _FAKE_LOCATIONS:
+            msg = f"'{location[:40]}' is not a fake location"
+            raise InvalidRequest(msg, remedy=f"Choose one of {', '.join(_FAKE_LOCATIONS)}.")
+        address = self._address(request.deployment_id)
+        if request.hostnames is not None:
+            endpoints = {
+                "object_service_url": f"https://{request.hostnames.object_service}",
+                "compute_service_url": f"https://{request.hostnames.compute_service}",
+            }
+        else:
+            endpoints = {
+                "object_service_url": f"https://os.{address}.sslip.io",
+                "compute_service_url": f"https://compute.{address}.sslip.io",
+            }
+        failure = "The fake machine did not start." if request.env.get("FAKE_FAIL") else ""
+        response = DeploymentResponse(
+            provider_id=provider_id,
+            addresses=[Address(type="ipv4", value=address)],
+            endpoints=endpoints,
+            location=location,
+            placement={**request.placement, "location": location},
+            hourly_rate=0.4 if request.size == "fake-large" else 0.1,
+            resource_ref=f"fake:deployment/{request.deployment_id}",
+            failure=failure,
+        )
+        self.deployments[provider_id] = {
+            "state": "exited" if failure else "running",
+            "deployment_id": request.deployment_id,
+            "name": request.name,
+            "owner": request.owner,
+            "size": request.size or "fake-small",
+            "location": location,
+            "address": address,
+            "routed": True,
+            "record_id": request.bootstrap.record_id,
+            "hostnames": request.hostnames.to_dict() if request.hostnames is not None else None,
+            "ingress_key": request.ingress_key,
+            "storage": request.storage.to_dict(),
+            "mode": request.mode,
+            "public": request.public,
+            "seed_provider_configs": {k: dict(v) for k, v in request.seed_provider_configs.items()},
+            "tags": {"3lc": "deployment", "3lc-id": request.deployment_id, "3lc-owner": request.owner},
+            "response": response,
+            **self._acting(),
+        }
+        return response
+
+    def deployment_state(self, provider_id: str, *, diagnostics: str = "") -> NodeStateResponse:
+        record = self.deployments.get(provider_id)
+        if record is None:
+            return NodeStateResponse(state="gone", detail="no such deployment")
+        state = NodeStateResponse(state=record["state"])
+        if diagnostics:
+            state.bootstrap_history = ["Machine started", "Services installed"]
+            state.bootstrap_detail = "Services installed"
+            state.bootstrap_stage = "services"
+            state.bootstrap_failed = record["state"] == "exited"
+        if diagnostics == "detailed":
+            state.diagnostics = [{"source": "boot-log", "available": True, "lines": ["fake boot line"]}]
+        return state
+
+    def delete_deployment(self, provider_id: str) -> NodeStateResponse:
+        record = self.deployments.get(provider_id)
+        if record is None:
+            return NodeStateResponse(state="gone", detail="no such deployment")
+        record["state"] = "terminated"
+        record["routed"] = False
+        record["deleted_by"] = self._acting()
+        return NodeStateResponse(state="terminated")
+
+    def retain_deployment(self, provider_id: str) -> NodeStateResponse:
+        record = self.deployments.get(provider_id)
+        if record is None:
+            msg = f"No deployment {provider_id[:60]}"
+            raise NotFound(msg)
+        record["routed"] = False
+        return NodeStateResponse(state=record["state"], detail="Traffic is no longer routed to the machine.")
+
+    def list_deployments(self, *, owner: str = "") -> DeploymentListing:
+        return DeploymentListing(
+            deployments=[
+                DeploymentInstance(
+                    provider_id=pid,
+                    deployment_id=d["deployment_id"],
+                    name=d["name"],
+                    owner=d["owner"],
+                    size=d["size"],
+                    state=d["state"],
+                    location=d["location"],
+                    addresses=[Address(type="ipv4", value=d["address"])],
+                )
+                for pid, d in self.deployments.items()
+                if d["state"] != "terminated" and (not owner or d["owner"] == owner)
+            ][:500]
+        )
+
+    def sweep_deployments(self, request: SweepRequest) -> SweepReport:
+        keep = {item.deployment_id for item in request.keep}
+        gone = {item.deployment_id for item in request.gone}
+        released: list[str] = []
+        held: list[str] = []
+        pending: list[str] = []
+        for pid, d in self.deployments.items():
+            if d["state"] == "terminated":
+                continue
+            if d["deployment_id"] in keep:
+                held.append(d["address"])
+            elif d["deployment_id"] in gone or request.grace_s <= 0:
+                d["state"] = "terminated"
+                d["routed"] = False
+                released.append(pid)
+            else:
+                pending.append(pid)
+        if request.grace_s <= 0:
+            released += self.leftovers
+            self.leftovers = []
+        else:
+            pending += self.leftovers
+        return SweepReport(complete=True, released=released, held_addresses=sorted(held), pending=pending)
+
+    # ── DNS ──
+
+    def list_records(self, zone: DnsZone, *, under: str = "", cursor: str = "") -> DnsRecords:
+        suffix = under.lower().rstrip(".")
+        records = [
+            record
+            for (name, _type), record in sorted(self.zones.get(zone.id, {}).items())
+            if not suffix or name == suffix or name.endswith("." + suffix)
+        ]
+        try:
+            start = int(cursor) if cursor else 0
+        except ValueError:
+            msg = "That cursor did not come from this listing"
+            raise InvalidRequest(msg) from None
+        page = records[start : start + _DNS_PAGE]
+        more = start + _DNS_PAGE < len(records)
+        return DnsRecords(records=page, next_cursor=str(start + _DNS_PAGE) if more else "")
+
+    def change_records(self, change: DnsChange) -> None:
+        zone = self.zones.setdefault(change.zone.id, {})
+        suffix = change.zone.name.lower().rstrip(".")
+        for record in [*change.create, *change.delete]:
+            name = record.name.lower().rstrip(".")
+            if suffix and name != suffix and not name.endswith("." + suffix):
+                msg = f"{record.name[:80]} is not in the zone {change.zone.name[:80]}"
+                raise InvalidRequest(msg)
+        for record in change.create:
+            existing = zone.get((record.name.lower().rstrip("."), record.type))
+            if existing is not None and (existing.values != record.values or existing.ttl != record.ttl):
+                msg = f"{record.type} {record.name[:80]} exists with other values"
+                raise Conflict(msg, remedy="Choose another name, or remove the record that holds it.")
+        for record in change.delete:
+            key = (record.name.lower().rstrip("."), record.type)
+            existing = zone.get(key)
+            if existing is not None and existing.values == record.values and existing.ttl == record.ttl:
+                del zone[key]
+        for record in change.create:
+            name = record.name.lower().rstrip(".")
+            zone[(name, record.type)] = DnsRecord(
+                name=name, type=record.type, values=list(record.values), ttl=record.ttl
+            )
+
+
+# ── transitional ──
+class _Workspaces(WorkspaceFacet):
+    """The transitional deployment surface a ``FakeProvider`` serves unless built with ``transitional=False``."""
+
+    nodes: dict[str, dict[str, Any]]
 
     def list_workspaces(self, *, owner: str = "") -> WorkspaceListing:
         return WorkspaceListing(
@@ -994,6 +2276,14 @@ class FakeProvider(InfrastructurePlugin, StorageFacet, CatalogFacet, WorkspaceFa
             ]
         )
 
+
+@functools.cache
+def _with_workspaces(cls: type[FakeProvider]) -> type[FakeProvider]:
+    """``cls`` that also serves the transitional surface, under the same name."""
+    return type(cls.__name__, (cls, _Workspaces), {"__module__": cls.__module__, "__qualname__": cls.__qualname__})
+
+
+# ── end transitional ──
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
@@ -1013,10 +2303,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("plugin_dir", help="Directory holding plugin.toml or pyproject.toml")
     parser.add_argument("--config-root", default=None, help="Settings root (default: a temporary directory)")
     parser.add_argument("--create-nodes", action="store_true", help="Run the node lifecycle checks")
+    parser.add_argument("--create-deployments", action="store_true", help="Run the deployment lifecycle checks")
+    parser.add_argument("--dns-zone", default="", metavar="ID=NAME", help="A zone the DNS checks may write under")
     parser.add_argument(
         "--live-storage", action="store_true", help="List objects and dry-run a transfer on real storage"
     )
-    parser.add_argument("--node-type", default="", help="The node type to create and preflight")
+    parser.add_argument("--node-type", default="", help="The node type to create and check")
     parser.add_argument(
         "--skip", action="append", default=[], metavar="GROUP", help=f"Skip a group: {', '.join(GROUPS)}"
     )
@@ -1036,12 +2328,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{loaded.plugin_id} is not an InfrastructurePlugin", file=sys.stderr)
         return 1
     headers = dict(item.split("=", 1) for item in args.header)
+    zone_id, _, zone_name = args.dns_zone.partition("=")
     report = check_provider(
         plugin,
         plugin_id=loaded.plugin_id,
         config_root=args.config_root,
         node_type=args.node_type,
         create_nodes=args.create_nodes,
+        create_deployments=args.create_deployments,
+        dns_zone=DnsZone(id=zone_id, name=zone_name) if zone_id and zone_name else None,
         live_storage=args.live_storage,
         skip=args.skip,
         headers=headers or None,

@@ -1,0 +1,51 @@
+{
+  "type": "AccessMethod",
+  "route": "CapabilitiesResponse.access_methods[]",
+  "example": {
+    "kind": "KEYLESS",
+    "label": "Uses access you grant to 3LC",
+    "summary": "You create a role in the fake account that trusts this host.",
+    "purposes": [
+      "deployments",
+      "nodes",
+      "storage"
+    ],
+    "available": true,
+    "unavailable_reason": "",
+    "preferred": true,
+    "fields": [
+      {
+        "key": "role_name",
+        "label": "Role name",
+        "kind": "text",
+        "required": true,
+        "secret": false,
+        "help": "",
+        "example": "3lc-fake",
+        "pattern": "",
+        "max_length": 64,
+        "choices": [],
+        "default": "3lc-fake"
+      }
+    ],
+    "grants": true,
+    "identity_token": {
+      "audience": "api://fake-token-exchange"
+    },
+    "paste_back": [
+      {
+        "key": "client_id",
+        "label": "Client id",
+        "kind": "text",
+        "required": true,
+        "secret": false,
+        "help": "",
+        "example": "00000000-0000",
+        "pattern": "",
+        "max_length": 64,
+        "choices": [],
+        "default": ""
+      }
+    ]
+  }
+}

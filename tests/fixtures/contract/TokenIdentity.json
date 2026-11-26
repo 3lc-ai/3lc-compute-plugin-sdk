@@ -1,0 +1,9 @@
+{
+  "type": "TokenIdentity",
+  "route": "GrantRequest.identity",
+  "example": {
+    "issuer": "https://issuer.3lc.invalid",
+    "subject": "conn-1",
+    "audience": "api://fake-token-exchange"
+  }
+}

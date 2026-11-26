@@ -1,0 +1,10 @@
+{
+  "type": "StorageGrant",
+  "route": "StorageAccess.grants[]",
+  "example": {
+    "url": "fake://fake-data/projects",
+    "read": true,
+    "write": true,
+    "delete": true
+  }
+}

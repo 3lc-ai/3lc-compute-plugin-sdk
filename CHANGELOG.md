@@ -5,12 +5,61 @@ All notable changes to `3lc-compute-plugin-sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - Unreleased
+
+Infrastructure provider contract, generation 2 (`docs/provider-contract.md`). A provider written
+for the 0.7 infrastructure or Connections surface needs porting: the document's *Migration from
+0.7* lists every removal and rename. Needs a Compute Service 1.3 or later.
+
+- Capabilities are typed end to end: `account`, `access_methods`, `host`, `permissions`, `nodes`,
+  `deployments`, with `contract: 2`. Every `extra` map is gone. The SDK validates the declaration
+  (`capabilities_problems`) and fills `operations` with the operations whose routes it mounted.
+- A provider is `InfrastructurePlugin` plus mixins: `NodeProvider`, `DeploymentProvider`,
+  `StorageFacet`, `CatalogFacet`, `DnsFacet`. A route is mounted only for an operation the class
+  provides: a mixin's abstract methods, or an optional method the class overrides.
+- Connect an account: `describe_grant`, `prepare_grant_update`, `verify_connection`,
+  `connection_node_access` and `storage_candidates`, with `Grant`, `GrantObservation`,
+  `ConnectionVerification` and `ConnectionPermissions`.
+- Nodes: `CreateNodeRequest` carries `kind`, `location`, `host_id` and `storage_roots`;
+  `create_node` is idempotent on `node_id`; `check_node` replaces preflight. One typed `catalog`
+  (`Offer`) replaces the GPU and CPU catalogs, and `locations` replaces datacenters.
+- Deployments: options, check, prepare, create, state, delete, retain, list and sweep, with the
+  launcher's DNS zone written through `DnsFacet`. `FakeProvider` implements them all.
+- The Connection binding carries `account`, `access`, `defaults`, `permissions` and `grant_ref`
+  and names no vendor. `register_resolver(provider, resolver)` takes a `ResolveRequest` and
+  returns the plugin's own credential class (`ProviderCredential`); `credential_as(cls)` reads it
+  back; `SecretToken.fields()` reads a value of several fields. `AwsSession` is removed.
+- The Connection middleware refuses a binding over 8 KiB and a credential header over 4 KiB with
+  a sentence, and refuses any Connection header on the routes that read the host's own identity
+  (capabilities, the grant, DNS). The storage routes need a Connection. The worker serves with a
+  64 KiB request-head limit.
+- Every error answer is `{detail, code, remedy, retry_after_s}`. `ProviderError` takes `remedy`
+  and `retry_after_s`; `PermissionDenied` (403), `CredentialExpired` (424) and `RateLimited` (429)
+  are new. `routes.error_handlers()` gives a plugin-private route the same body.
+- `FakeProvider` implements every operation in memory and `check_provider` covers each, with new
+  groups `connect`, `check`, `deployments` and `dns`, and `connection_headers` to run under a
+  chosen Connection. One golden JSON fixture per wire type is in `tests/fixtures/contract/`.
+- Removed: the owner-credentials facet and `tlc_plugin_sdk.infrastructure.legacy`
+  (request-carried `credentials` and `provider_configs`), `ProjectStorage`,
+  `CreateNodeResponse.managed_by`, the `gpu_type` and `gpu_types` aliases.
+- Transitional, removed before 0.8.0 is released: a deployment created as a `flavor ==
+  "workspace"` node, `WorkspaceFacet` and its routes, `ConnectionBinding.configuration` and the
+  operation ids `workspace.create`, `workspace.name_check` and `workspace.sweep`
+  (`tlc_plugin_sdk.infrastructure.transitional`).
+
 ## [0.7.0] - Unreleased
 
 - Add primary-table project transitions to the shared preset controller: derive the output
   project, retain same-project settings, reset defaults across projects with Undo, and preserve
   explicit saved setups. Scope drafts to the current source project and ignore stale/failed reads.
 - Add `table_project_context` to obtain source identity from an opened 3LC table without row reads.
+- An infrastructure plugin can act with a stored credential. A node can act on a `SECRET`
+  Connection for a service the manifest declares: on the calls about that node the worker binds the
+  Connection's binding (`current_connection()`), its use (`current_use()`) and its value
+  (`current_credential(service)`), with no resolver to register. A `SECRET` binding without its
+  value, or with a value granted for another Connection or service, answers 424.
+  `CapabilitiesResponse.node_type_connections` names the Connection each node type acts on. Needs a
+  Compute Service 1.3 or later.
 
 - Linux/macOS workers support isolated job processes, with per-job cancellation and cleanup of
   child processes. The optional `prepare_job(ctx)` hook hands transient inputs from the serving

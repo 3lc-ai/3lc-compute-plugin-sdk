@@ -1,0 +1,21 @@
+{
+  "type": "WorkspacePlacement",
+  "route": "GET /infra/workspace-placement (200)",
+  "example": {
+    "regions": [
+      {
+        "id": "fake-1",
+        "name": "Fake region 1"
+      }
+    ],
+    "networks": [],
+    "zones": [],
+    "subnets": [],
+    "defaults": {
+      "region": "fake-1"
+    },
+    "costs": {},
+    "warnings": [],
+    "blockers": []
+  }
+}

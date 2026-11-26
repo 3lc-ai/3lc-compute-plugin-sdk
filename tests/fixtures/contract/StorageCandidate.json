@@ -1,0 +1,8 @@
+{
+  "type": "StorageCandidate",
+  "route": "StorageCandidates.items[]",
+  "example": {
+    "location": "fake://fake-data",
+    "label": "fake-data"
+  }
+}

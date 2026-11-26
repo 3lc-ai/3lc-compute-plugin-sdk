@@ -1,70 +1,77 @@
 # Copyright 2026 3LC Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The infrastructure-plugin base: the typed provider contract for remote nodes.
+"""The infrastructure-plugin base: the typed provider contract.
 
-An infrastructure plugin (``kind = "infrastructure"`` in its manifest) owns exactly the provider
-API: capabilities, create node, node state, delete node, and an optional preflight. The host's
-``InfraManager`` calls these through the worker proxy; everything else (node registry, lifecycle
-state machine, heartbeats, idle teardown) lives in the host. A created node is reached by its
-agent URL alone: the host talks to the node agent, and the agent proxies host traffic to the
-node's loopback-only workers.
+An infrastructure plugin (``kind = "infrastructure"`` in its manifest) owns exactly the provider's
+API. The host calls it through the worker proxy; everything else (the node registry, the
+lifecycle state machine, heartbeats, idle teardown, DNS names, grants) lives in the host.
 
-Subclass :class:`InfrastructurePlugin`, implement the four abstract methods, and the base mounts
-the ``/infra/*`` routes for the core. Add a facet base class
-(:class:`~tlc_plugin_sdk.infrastructure.StorageFacet`,
+Subclass :class:`InfrastructurePlugin`, implement :meth:`~InfrastructurePlugin.capabilities`, and
+add the groups the provider offers as mixins
+(:class:`~tlc_plugin_sdk.infrastructure.NodeProvider`,
+:class:`~tlc_plugin_sdk.infrastructure.DeploymentProvider`,
+:class:`~tlc_plugin_sdk.infrastructure.StorageFacet`,
 :class:`~tlc_plugin_sdk.infrastructure.CatalogFacet`,
-:class:`~tlc_plugin_sdk.infrastructure.WorkspaceFacet`,
-:class:`~tlc_plugin_sdk.infrastructure.LegacyOwnerCredentialsFacet`) and its routes are mounted
-and its id listed in ``capabilities.facets``. Set ``settings`` to a
+:class:`~tlc_plugin_sdk.infrastructure.DnsFacet`). The base mounts one ``/infra/*`` route per
+operation the class provides and lists exactly those in ``capabilities.operations``: a mixin's
+abstract methods always, an optional method when the class overrides it. Set ``settings`` to a
 :class:`~tlc_plugin_sdk.shared.settings.PluginSettings` and ``GET/POST /settings`` are mounted.
 """
 
 from __future__ import annotations
 
+import re
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from tlc_plugin_sdk.contract import HubPlugin
-from tlc_plugin_sdk.infrastructure import facets as _facets
-from tlc_plugin_sdk.infrastructure.errors import scrub
+from tlc_plugin_sdk.infrastructure.errors import NotSupported, scrub
+from tlc_plugin_sdk.infrastructure.facets import CatalogFacet, DeploymentProvider, DnsFacet, NodeProvider, StorageFacet
+from tlc_plugin_sdk.infrastructure.transitional import (
+    OPERATION_WORKSPACE_CREATE,
+    OPERATION_WORKSPACE_NAME_CHECK,
+    OPERATION_WORKSPACE_SWEEP,
+    WorkspaceFacet,
+)
 from tlc_plugin_sdk.infrastructure.types import (
-    FACET_CATALOG,
-    FACET_LEGACY_OWNER_CREDENTIALS,
-    FACET_STORAGE,
-    FACET_WORKSPACES,
+    CONTRACT_GENERATION,
+    FIELD_KEY_PATTERN,
+    OPERATIONS,
+    PROVIDER_PATTERN,
     CapabilitiesResponse,
-    ConnectionCheckRequest,
-    ConnectionCheckResponse,
     ConnectionNodeAccess,
-    CreateNodeRequest,
-    CreateNodeResponse,
-    NodeStateResponse,
-    PreflightResponse,
+    ConnectionVerification,
+    FormField,
+    Grant,
+    GrantRequest,
+    GrantUpdate,
+    GrantUpdateRequest,
+    NodeAccessRequest,
+    StorageCandidates,
+    VerifyRequest,
 )
 
 if TYPE_CHECKING:
     from tlc_plugin_sdk.shared.settings import PluginSettings
 
-__all__ = ["InfrastructurePlugin"]
+__all__ = ["InfrastructurePlugin", "capabilities_problems", "provided_operations"]
 
-#: Facet id → the mixin that implements it, in wire order.
-_FACET_CLASSES: tuple[tuple[str, type[Any]], ...] = (
-    (FACET_STORAGE, _facets.StorageFacet),
-    (FACET_CATALOG, _facets.CatalogFacet),
-    (FACET_WORKSPACES, _facets.WorkspaceFacet),
-    (FACET_LEGACY_OWNER_CREDENTIALS, _facets.LegacyOwnerCredentialsFacet),
-)
+_PROVIDER = re.compile(PROVIDER_PATTERN)
+_FIELD_KEY = re.compile(FIELD_KEY_PATTERN)
+_MAX_FIELD_LENGTH = 2048
+_MAX_RULES = 20
 
 
 class InfrastructurePlugin(HubPlugin):
     """Base class for infrastructure-provider plugins (``kind = "infrastructure"``).
 
-    A provider implements the four abstract methods below; the default
-    :meth:`get_route_handlers` mounts Litestar handlers for the core ``/infra/*`` routes, for
-    every facet in the class's bases, and for ``/settings`` when :attr:`settings` is set.
+    A provider implements :meth:`capabilities` and adds the mixins of the groups it offers. The
+    methods below the capabilities are the *connect an account* group: each is optional, and
+    overriding one mounts its route and lists its operation. A plugin may be any combination of
+    groups, including none besides capabilities.
 
-    To add plugin-private routes (an auth flow, a machine check), override
-    ``get_route_handlers`` and append to the default list::
+    To add plugin-private routes (an auth flow, a machine check, the data behind the plugin's own
+    page), override ``get_route_handlers`` and append to the default list::
 
         def get_route_handlers(self):
             return [*super().get_route_handlers(), my_private_route]
@@ -76,106 +83,142 @@ class InfrastructurePlugin(HubPlugin):
 
     settings: PluginSettings[Any] | None = None
 
-    # ── core, mandatory ──
+    # ── capabilities ──
 
     @abstractmethod
     def capabilities(self) -> CapabilitiesResponse:
-        """Report what this provider offers.
+        """``GET /infra/capabilities``: what this provider offers and how an account is connected to it.
 
-        Called via ``GET /infra/capabilities``. The ``node_types`` list populates the host's
-        create-node dialog. The SDK fills ``facets`` and ``storage`` from the class's facets
-        before answering; an author-set value of either is overwritten.
+        Never sent a Connection: anything it says about this host (``host``, whether a method is
+        ``available``) is read from the machine's own credential chain. The SDK fills ``storage``
+        and ``operations`` before answering, overwriting an author-set value of either, and
+        answers 502 for a declaration :func:`capabilities_problems` finds fault with.
         """
 
-    @abstractmethod
-    def create_node(self, request: CreateNodeRequest) -> CreateNodeResponse:
-        """Create a node (start the agent process on the provider's infrastructure).
+    def readiness(self) -> dict[str, Any]:
+        """``{"ready", "missing_fields"}`` for :meth:`capabilities`, from the settings layer.
 
-        Called via ``POST /infra/nodes``. The host supplies the ``node_id`` and ``token`` for
-        the agent; the provider starts the agent and returns the ``provider_id`` the host uses
-        for subsequent status/delete calls. A workspace (``request.flavor == "workspace"``)
-        answers ``services`` instead of ``agent_url``.
-
-        Raises:
-            ProviderError: With the provider's own sentence; any other exception answers 502.
-        """
-
-    @abstractmethod
-    def node_state(self, provider_id: str) -> NodeStateResponse:
-        """Query the state of a previously created node.
-
-        Called via ``GET /infra/nodes/{provider_id}``.
+        A provider that requires a Connection takes its account from the Connection, so before
+        answering the SDK settles the declaration with :func:`settle_readiness`: a missing setting
+        keyed like an account field stays listed but no longer keeps the provider not ready.
 
         Returns:
-            ``running`` if the agent is alive, ``pending`` while it starts, ``exited``,
-            ``terminated`` or ``gone`` if it is not, ``unknown`` if the provider cannot tell.
+            Keyword arguments for :class:`~tlc_plugin_sdk.infrastructure.CapabilitiesResponse`:
+            the settings still needed as prompts, and ``ready`` when no required one is missing.
+            A plugin without a settings layer is ready.
         """
+        if self.settings is None:
+            return {"ready": True, "missing_fields": []}
+        missing = self.settings.missing_fields(self.settings.load())
+        return {
+            "ready": not any(f.required for f in missing),
+            "missing_fields": [FormField.from_settings(f) for f in missing],
+        }
 
-    @abstractmethod
-    def delete_node(self, provider_id: str) -> NodeStateResponse:
-        """Terminate a node and clean up provider resources.
+    # ── connect an account (each optional) ──
 
-        Called via ``DELETE /infra/nodes/{provider_id}``. Must be idempotent — a repeated
-        delete on a stopped node returns ``terminated`` or ``gone``.
+    def describe_grant(self, request: GrantRequest) -> Grant:
+        """``POST /infra/connection/grant``: what a person runs in their own account (``connection.grant``).
+
+        Called with no Connection: it changes nothing and needs nothing of the account. It may
+        read this host's own identity to name what the grant trusts. ``action="update"`` answers
+        a link or files that change the existing grant in place, never a create link. The answer
+        carries the request's permissions in canonical form and the access fields to store on
+        the Connection.
+
+        Args:
+            request: The Connection the grant is for and what it should allow.
+
+        Returns:
+            The grant, for the person to apply. 3LC never applies it.
+
+        Raises:
+            NotSupported: By default (the route is then not mounted).
         """
+        msg = "This provider has no grant to describe."
+        raise NotSupported(msg)
 
-    # ── core, optional ──
+    def prepare_grant_update(self, request: GrantUpdateRequest) -> GrantUpdate:
+        """``POST /infra/connection/grant/update``: prepare a reviewed change (``connection.grant_update``).
 
-    def preflight(self, node_type: str = "", datacenter: str = "") -> PreflightResponse:
-        """Optional pre-start checks (funds, stock, quota, reachability).
+        For a provider whose cloud has a reviewed change (a change set). Runs under the
+        Connection and prepares, never executes. A provider without one does not implement this:
+        its update is ``describe_grant(action="update")``.
 
-        Called via ``GET /infra/preflight``. The default returns an unconditional pass;
-        override to run provider-specific checks.
+        Args:
+            request: The installed grant and the permissions asked for.
+
+        Returns:
+            Where the change stands.
+
+        Raises:
+            NotSupported: By default (the route is then not mounted).
         """
-        return PreflightResponse(ok=True, summary="no preflight checks")
+        msg = "This provider prepares no grant updates."
+        raise NotSupported(msg)
 
-    def preflight_with_context(
-        self, request: ConnectionCheckRequest, *, node_type: str = "", datacenter: str = ""
-    ) -> PreflightResponse:
-        """Preflight with the host's project root; older providers keep their existing hook."""
-        return self.preflight(node_type=node_type, datacenter=datacenter)
+    def verify_connection(self, request: VerifyRequest) -> ConnectionVerification:
+        """``POST /infra/connection/verify``: who the request's Connection is (``connection.verify``).
 
-    def connection_check(self) -> ConnectionCheckResponse:
-        """Who the request's Connection acts as (``GET /infra/connection/check``).
+        Runs under the Connection, after the SDK resolved it. Ask the provider's API who the
+        credential is and which account it is in; read back the installed grant when there is
+        one. A step that fails raises; a sample that could not be confirmed is a ``warn`` check; a
+        refused operation is an ``error`` check.
 
-        Runs only with a Connection on the request, after the SDK resolved it: the default
-        reports just that. Override to ask the provider who the resolved credential is (the AWS
-        plugin: ``sts:GetCallerIdentity``). A failure raises like any handler (a refused role is
-        already a 424 before this runs).
+        Args:
+            request: The storage roots to sample.
+
+        Returns:
+            The identity, the account as the cloud says it, and what was observed.
+
+        Raises:
+            NotSupported: By default (the route is then not mounted).
         """
-        return ConnectionCheckResponse(checked=["resolve"])
+        msg = "This provider verifies no Connections."
+        raise NotSupported(msg)
 
-    def connection_check_with_context(self, request: ConnectionCheckRequest) -> ConnectionCheckResponse:
-        """Check a Connection with the host's current diagnostic targets.
+    def connection_node_access(self, request: NodeAccessRequest, *, apply: bool = False) -> ConnectionNodeAccess:
+        """``GET``/``POST /infra/connection/node-access``: inspect or set up node access (``connection.node_access``).
 
-        The default delegates to ``connection_check()`` so existing provider overrides continue
-        to work unchanged. Override this hook when checks need the host's project-root context.
-        Do not fall back to worker-local configuration when a target is unavailable.
+        How a machine on its own sign-in sets up a scoped node identity directly, when it has
+        the rights to. The host authorizes Connection administration before applying a setup and
+        supplies its own storage roots. Inspection must not change anything in the account.
+
+        Args:
+            request: The host's storage roots, and for a setup the reviewed rules.
+            apply: ``False`` inspects (``GET``); ``True`` applies the displayed setup (``POST``).
+
+        Returns:
+            The setup and whether it is in place.
+
+        Raises:
+            NotSupported: By default (the routes are then not mounted).
         """
-        return self.connection_check()
+        msg = "This provider sets up no node access."
+        raise NotSupported(msg)
 
-    def connection_node_access(self, request: ConnectionCheckRequest, *, apply: bool = False) -> ConnectionNodeAccess:
-        """Inspect or explicitly configure node access for the request's Connection.
+    def storage_candidates(self) -> StorageCandidates:
+        """``GET /infra/storage/candidates``: the locations a rule editor can offer (``storage.candidates``).
 
-        The host authorizes Connection administration before applying setup, supplies its own
-        project root, and never accepts a caller's cloud policy. Inspection must not mutate cloud
-        resources. Providers opt in with ``connection_node_access`` in capabilities.
+        Runs under the Connection with a discovery-only grant and returns names, never contents.
+
+        Returns:
+            At most 2000 candidates, with ``truncated`` set when the account holds more.
+
+        Raises:
+            NotSupported: By default (the route is then not mounted).
         """
-        return ConnectionNodeAccess()
+        msg = "This provider lists no storage candidates."
+        raise NotSupported(msg)
 
-    def node_diagnostics(self, provider_id: str) -> NodeStateResponse:
-        """The node's state with startup diagnostics (``GET /infra/nodes/{id}?diagnostics=true``).
-
-        The default is :meth:`node_state`; override to fill the ``bootstrap_*`` fields from the
-        provider's console or boot log.
-        """
-        return self.node_state(provider_id)
+    # ── errors and settings ──
 
     def secret_values(self) -> list[str]:
         """Every value an error message must never echo.
 
-        The route layer scrubs these from every ``detail`` it answers. The default is the
-        settings layer's secrets when :attr:`settings` is set, else nothing.
+        The route layer scrubs these from every ``detail`` and ``remedy`` it answers, with the
+        request's credential and the request's own secrets. The default is the settings layer's
+        secrets when :attr:`settings` is set, else nothing.
 
         Returns:
             The values (empty ones excluded).
@@ -190,14 +233,13 @@ class InfrastructurePlugin(HubPlugin):
     def describe_error(self, exc: Exception) -> str:
         """The sentence a person reads for an exception the provider did not word (the 502 detail).
 
-        Every route the SDK mounts — the core, each facet's calls, the transfer and bundle
-        registries' plan, start and status, and the errors a registry's background job records —
-        answers an unexpected exception with this. The default is the exception's own text
-        scrubbed of :meth:`secret_values`; override to strip what a cloud SDK's message carries
-        (ARNs, request ids, endpoints). The route layer scrubs the result again, so an override
-        need not — and must not truncate or re-encode the text (quote, escape, base64): the SDK
-        scrubs whole secret values first and truncates after, and a cut or re-encoded secret is
-        no longer recognised.
+        Every route the SDK mounts, and the errors a transfer or bundle registry's background job
+        records, answers an unexpected exception with this. The default is the exception's own
+        text scrubbed of :meth:`secret_values`; override to strip what a cloud SDK's message
+        carries (resource names, request ids, endpoints). The route layer scrubs the result again,
+        so an override need not, and must not truncate or re-encode the text (quote, escape,
+        base64): the SDK scrubs whole secret values first and truncates after, and a cut or
+        re-encoded secret is no longer recognised.
 
         Args:
             exc: The exception.
@@ -222,16 +264,14 @@ class InfrastructurePlugin(HubPlugin):
             return {}
         return self.settings.redacted(settings)
 
-    # ── facets ──
+    # ── operations and routes ──
 
-    def implemented_facets(self) -> list[str]:
-        """The facet ids this class implements, in wire order (what ``capabilities.facets`` lists)."""
-        return [facet_id for facet_id, cls in _FACET_CLASSES if isinstance(self, cls)]
-
-    # ── routes ──
+    def operations(self) -> list[str]:
+        """The ids of the operations this class provides (what ``capabilities.operations`` lists)."""
+        return provided_operations(self)
 
     def get_route_handlers(self) -> list[Any]:
-        """Litestar handlers for the core ``/infra/*`` routes, every implemented facet, and ``/settings``.
+        """Litestar handlers for capabilities, every operation the class provides, and ``/settings``.
 
         Override and extend (``[*super().get_route_handlers(), ...]``) to add plugin-private routes.
         """
@@ -239,3 +279,166 @@ class InfrastructurePlugin(HubPlugin):
         from tlc_plugin_sdk.infrastructure.routes import build_infra_handlers
 
         return build_infra_handlers(self)
+
+
+def _overrides(plugin: object, base: type[Any], method: str) -> bool:
+    """Whether ``plugin``'s class provides ``method`` itself rather than inheriting ``base``'s default."""
+    return getattr(type(plugin), method, None) is not getattr(base, method)
+
+
+#: ``(operation, the group it belongs to, the optional method that provides it or "" for always)``.
+_PROVIDERS: tuple[tuple[str, type[Any], str], ...] = (
+    ("connection.grant", InfrastructurePlugin, "describe_grant"),
+    ("connection.grant_update", InfrastructurePlugin, "prepare_grant_update"),
+    ("connection.verify", InfrastructurePlugin, "verify_connection"),
+    ("connection.node_access", InfrastructurePlugin, "connection_node_access"),
+    ("storage.candidates", InfrastructurePlugin, "storage_candidates"),
+    ("node.create", NodeProvider, ""),
+    ("node.state", NodeProvider, ""),
+    ("node.delete", NodeProvider, ""),
+    ("node.check", NodeProvider, "check_node"),
+    ("node.diagnostics", NodeProvider, "node_diagnostics"),
+    ("catalog", CatalogFacet, ""),
+    ("catalog.locations", CatalogFacet, "locations"),
+    ("deployment.options", DeploymentProvider, "deployment_options"),
+    ("deployment.check", DeploymentProvider, "check_deployment"),
+    ("deployment.prepare", DeploymentProvider, "prepare_deployment"),
+    ("deployment.create", DeploymentProvider, ""),
+    ("deployment.state", DeploymentProvider, ""),
+    ("deployment.delete", DeploymentProvider, ""),
+    ("deployment.retain", DeploymentProvider, "retain_deployment"),
+    ("deployment.list", DeploymentProvider, "list_deployments"),
+    ("deployment.sweep", DeploymentProvider, "sweep_deployments"),
+    ("storage", StorageFacet, ""),
+    ("dns", DnsFacet, ""),
+)
+
+
+def provided_operations(plugin: InfrastructurePlugin) -> list[str]:
+    """The operations ``plugin``'s class provides, in the order of :data:`OPERATIONS`.
+
+    An operation is provided when the class has its group's mixin and, for an optional one,
+    overrides the method. The route layer mounts exactly these.
+
+    Args:
+        plugin: The plugin.
+
+    Returns:
+        The operation ids, the transitional ones last.
+    """
+    provided = {
+        operation
+        for operation, group, method in _PROVIDERS
+        if isinstance(plugin, group) and (not method or _overrides(plugin, group, method))
+    }
+    listed = [operation for operation in OPERATIONS if operation in provided]
+    # ── transitional ──
+    if isinstance(plugin, WorkspaceFacet):
+        if isinstance(plugin, NodeProvider):
+            listed.append(OPERATION_WORKSPACE_CREATE)
+        private = set(plugin.private_operations)
+        listed += [op for op in (OPERATION_WORKSPACE_NAME_CHECK, OPERATION_WORKSPACE_SWEEP) if op in private]
+    # ── end transitional ──
+    return listed
+
+
+def _field_problems(where: str, fields: list[FormField]) -> list[str]:
+    problems: list[str] = []
+    seen: set[str] = set()
+    for f in fields:
+        if not _FIELD_KEY.match(f.key):
+            problems.append(f"{where}: field key {f.key!r} does not match {FIELD_KEY_PATTERN}")
+        if f.key in seen:
+            problems.append(f"{where}: field key {f.key!r} is listed twice")
+        seen.add(f.key)
+        if f.secret != (f.kind == "secret"):
+            problems.append(f"{where}: field {f.key!r} must have secret true exactly when its kind is 'secret'")
+        if not 1 <= f.max_length <= _MAX_FIELD_LENGTH:
+            problems.append(f"{where}: field {f.key!r} has max_length outside 1..{_MAX_FIELD_LENGTH}")
+        if f.choices and f.kind != "select":
+            problems.append(f"{where}: field {f.key!r} lists choices and is not a select")
+    return problems
+
+
+def settle_readiness(caps: CapabilitiesResponse) -> None:
+    """Count the account's settings as satisfied when the Connection carries the account.
+
+    When ``caps.requires_connection`` is set, every call names a Connection, and that Connection
+    carries the account (its ``account.fields`` and ``account.defaults``). A missing setting with
+    the key of one of those fields is then listed as optional (``required=False``): a plugin's own
+    settings page may still offer it, for a Connection that leaves the account empty, but it no
+    longer keeps the provider not ready. ``ready`` turns true when that was all that kept it false:
+    no other required field is missing and ``not_ready_reason`` is empty. Without
+    ``requires_connection`` the declaration is left as it is.
+
+    Args:
+        caps: The declaration, changed in place.
+    """
+    if not caps.requires_connection or caps.account is None:
+        return
+    from_connection = {f.key for f in caps.account.fields} | {f.key for f in caps.account.defaults}
+    settled = False
+    for missing in caps.missing_fields:
+        if missing.key in from_connection and missing.required:
+            missing.required = False
+            settled = True
+    if settled and not caps.ready and not caps.not_ready_reason:
+        caps.ready = not any(f.required for f in caps.missing_fields)
+
+
+def capabilities_problems(plugin: InfrastructurePlugin, caps: CapabilitiesResponse) -> list[str]:
+    """What is wrong with a capabilities declaration, one sentence each; ``[]`` when it is valid.
+
+    The rules: ``provider`` matches :data:`~tlc_plugin_sdk.infrastructure.types.PROVIDER_PATTERN`;
+    ``contract`` is this generation; field keys are well formed and unique per list, and across
+    the account's fields, its defaults and each method's fields; a field is ``secret`` exactly when
+    its kind is; there is at most one access method per kind and at most one ``preferred``; every
+    permission option's key is unique; a storage schema allows 1 to 20 rules; ``nodes`` is set
+    exactly when the class is a ``NodeProvider`` and ``deployments`` exactly when it is a
+    ``DeploymentProvider``.
+
+    Args:
+        plugin: The plugin whose class the declaration must agree with.
+        caps: The declaration.
+
+    Returns:
+        The problems.
+    """
+    problems: list[str] = []
+    if not _PROVIDER.match(caps.provider):
+        problems.append(f"provider {caps.provider!r} does not match {PROVIDER_PATTERN}")
+    if caps.contract != CONTRACT_GENERATION:
+        problems.append(f"contract is {caps.contract!r}, not {CONTRACT_GENERATION}")
+    problems += _field_problems("missing_fields", caps.missing_fields)
+    account_fields: list[FormField] = []
+    if caps.account is not None:
+        problems += _field_problems("account.fields", caps.account.fields)
+        problems += _field_problems("account.defaults", caps.account.defaults)
+        account_fields = [*caps.account.fields, *caps.account.defaults]
+        shared = {f.key for f in caps.account.fields} & {f.key for f in caps.account.defaults}
+        problems += [f"account: field key {key!r} is both a field and a default" for key in sorted(shared)]
+    kinds: set[str] = set()
+    for method in caps.access_methods:
+        where = f"access_methods[{method.kind}]"
+        if method.kind in kinds:
+            problems.append(f"{where}: more than one access method of this kind")
+        kinds.add(method.kind)
+        problems += _field_problems(f"{where}.fields", method.fields)
+        clash = {f.key for f in method.fields} & {f.key for f in account_fields}
+        problems += [f"{where}: field key {key!r} is also an account field" for key in sorted(clash)]
+    if sum(1 for method in caps.access_methods if method.preferred) > 1:
+        problems.append("access_methods: more than one is preferred")
+    option_keys = [option.key for option in caps.permissions.options]
+    problems += [
+        f"permissions.options: key {key!r} is listed twice"
+        for key in sorted(set(option_keys))
+        if option_keys.count(key) > 1
+    ]
+    storage = caps.permissions.storage
+    if storage is not None and not 1 <= storage.max_rules <= _MAX_RULES:
+        problems.append(f"permissions.storage: max_rules is outside 1..{_MAX_RULES}")
+    if (caps.nodes is not None) != isinstance(plugin, NodeProvider):
+        problems.append("nodes must be set exactly when the class is a NodeProvider")
+    if (caps.deployments is not None) != isinstance(plugin, DeploymentProvider):
+        problems.append("deployments must be set exactly when the class is a DeploymentProvider")
+    return problems

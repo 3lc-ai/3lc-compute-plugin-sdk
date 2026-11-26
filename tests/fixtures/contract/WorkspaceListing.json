@@ -1,0 +1,16 @@
+{
+  "type": "WorkspaceListing",
+  "route": "GET /infra/workspaces (200)",
+  "example": {
+    "workspaces": [
+      {
+        "provider_id": "fake-ws-1",
+        "name": "fake-ws-1",
+        "owner": "ada@example.com",
+        "instance_type": "fake-cpu",
+        "state": "running",
+        "public_ip": ""
+      }
+    ]
+  }
+}

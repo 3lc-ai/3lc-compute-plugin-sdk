@@ -1,0 +1,9 @@
+{
+  "type": "StorageRoot",
+  "route": "VerifyRequest.storage_roots",
+  "example": {
+    "url": "fake://fake-data/projects",
+    "access": "read_write",
+    "role": "project_root"
+  }
+}

@@ -43,8 +43,9 @@ and the `TlcData` helper — is declared in `plugin-api.d.ts`.
 
 ## Infrastructure plugins
 
-The typed provider contract: the base, the facets a provider opts into, the wire dataclasses,
-the error family, the legacy request-credential context, and the conformance kit.
+The typed provider contract ([specified here](provider-contract.md)): the base, the groups of
+operations a provider opts into, the wire dataclasses, the error family, the transitional
+deployment surface, the shared deployment boot script, and the conformance kit with its reference provider.
 
 ```{eval-rst}
 .. automodule:: tlc_plugin_sdk.infrastructure.plugin
@@ -59,10 +60,16 @@ the error family, the legacy request-credential context, and the conformance kit
 .. automodule:: tlc_plugin_sdk.infrastructure.errors
    :members:
 
-.. automodule:: tlc_plugin_sdk.infrastructure.legacy
+.. automodule:: tlc_plugin_sdk.infrastructure.transitional
+   :members:
+
+.. automodule:: tlc_plugin_sdk.infrastructure.deployment_boot
    :members:
 
 .. automodule:: tlc_plugin_sdk.infrastructure.testing
+   :members:
+
+.. automodule:: tlc_plugin_sdk.connections
    :members:
 ```
 

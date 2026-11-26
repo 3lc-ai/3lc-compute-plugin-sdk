@@ -1,0 +1,234 @@
+{
+  "type": "CapabilitiesResponse",
+  "route": "GET /infra/capabilities (200)",
+  "example": {
+    "provider": "aws",
+    "display_name": "AWS",
+    "contract": 2,
+    "ready": true,
+    "not_ready_reason": "",
+    "missing_fields": [],
+    "requires_connection": true,
+    "account": {
+      "noun": "AWS account",
+      "fields": [
+        {
+          "key": "account_id",
+          "label": "AWS account ID",
+          "kind": "text",
+          "required": true,
+          "secret": false,
+          "help": "The 12-digit ID of the account 3LC is let into.",
+          "example": "123456789012",
+          "pattern": "^\\d{12}$",
+          "max_length": 12,
+          "choices": [],
+          "default": ""
+        }
+      ],
+      "defaults": [
+        {
+          "key": "location",
+          "label": "Default region",
+          "kind": "text",
+          "required": false,
+          "secret": false,
+          "help": "",
+          "example": "eu-west-1",
+          "pattern": "",
+          "max_length": 32,
+          "choices": [],
+          "default": ""
+        }
+      ],
+      "help": ""
+    },
+    "access_methods": [
+      {
+        "kind": "KEYLESS",
+        "label": "Uses access you grant to 3LC",
+        "summary": "You create a role in your account that trusts this Compute Service. No key is stored.",
+        "purposes": [
+          "deployments",
+          "nodes",
+          "storage"
+        ],
+        "available": true,
+        "unavailable_reason": "",
+        "preferred": true,
+        "fields": [
+          {
+            "key": "role_name",
+            "label": "Role name",
+            "kind": "text",
+            "required": true,
+            "secret": false,
+            "help": "The name of the role the grant creates.",
+            "example": "3lc-connection",
+            "pattern": "^[\\w+=,.@-]{1,53}$",
+            "max_length": 53,
+            "choices": [],
+            "default": "3lc-connection"
+          }
+        ],
+        "grants": true,
+        "paste_back": []
+      },
+      {
+        "kind": "AMBIENT",
+        "label": "Uses this machine's own sign-in",
+        "summary": "The Compute Service acts as the identity its machine already has.",
+        "purposes": [
+          "nodes",
+          "storage"
+        ],
+        "available": true,
+        "unavailable_reason": "",
+        "preferred": false,
+        "fields": [],
+        "grants": false,
+        "paste_back": []
+      }
+    ],
+    "host": {
+      "display": "arn:aws:iam::111122223333:role/3lc-launcher",
+      "matches": {
+        "setup_identity": "arn:aws:iam::111122223333:role/3lc-launcher"
+      },
+      "deployment_of": {}
+    },
+    "permissions": {
+      "options": [
+        {
+          "key": "allow_shared_ingress",
+          "label": "Create shared HTTPS access for deployments",
+          "purpose": "deployments",
+          "help": "Allows a shared load balancer and certificate.",
+          "default": true,
+          "operations": []
+        },
+        {
+          "key": "allow_diagnostics",
+          "label": "Allow detailed startup diagnostics",
+          "purpose": "deployments",
+          "help": "Allows a fixed command to read startup logs on opted-in deployments.",
+          "default": false,
+          "operations": []
+        },
+        {
+          "key": "deployments_start_nodes",
+          "label": "Deployments start their own GPU nodes",
+          "purpose": "deployments",
+          "help": "",
+          "default": true,
+          "operations": [
+            "node.create",
+            "node.describe",
+            "node.terminate"
+          ]
+        },
+        {
+          "key": "node_storage",
+          "label": "Give GPU nodes the Connection's storage access",
+          "purpose": "nodes",
+          "help": "",
+          "default": true,
+          "operations": []
+        },
+        {
+          "key": "discover_buckets",
+          "label": "List the names of the account's buckets",
+          "purpose": "storage",
+          "help": "Names only, never contents.",
+          "default": false,
+          "operations": [
+            "storage.discover"
+          ]
+        },
+        {
+          "key": "allow_bucket_creation",
+          "label": "Create buckets in the account",
+          "purpose": "storage",
+          "help": "Creating a bucket grants no access to its objects.",
+          "default": false,
+          "operations": [
+            "storage.create"
+          ]
+        }
+      ],
+      "storage": {
+        "scheme": "s3",
+        "example": "s3://my-bucket/projects",
+        "pattern": "^s3://[a-z0-9.*-]{1,63}(/.*)?$",
+        "access_modes": [
+          "read",
+          "read_write_no_delete",
+          "read_write"
+        ],
+        "help": "A bucket, or a folder in one. * matches any run of characters.",
+        "max_rules": 20
+      }
+    },
+    "nodes": {
+      "kinds": [
+        "gpu",
+        "cpu"
+      ],
+      "types": [
+        "g5.xlarge",
+        "g6.2xlarge"
+      ],
+      "type_label": "Instance type",
+      "pricing": [
+        "on_demand",
+        "spot"
+      ],
+      "storage_access": [
+        "identity"
+      ],
+      "type_connections": {}
+    },
+    "deployments": {
+      "certificate": "provider",
+      "shared_ingress": true,
+      "sslip": true
+    },
+    "storage": {
+      "kind": "bucket",
+      "label": "S3 bucket",
+      "creatable": true,
+      "upload": true,
+      "browse": true,
+      "download": true,
+      "bundle": true,
+      "delete": true,
+      "transfer": true,
+      "rename": true
+    },
+    "operations": [
+      "connection.grant",
+      "connection.grant_update",
+      "connection.verify",
+      "connection.node_access",
+      "storage.candidates",
+      "node.create",
+      "node.state",
+      "node.delete",
+      "node.check",
+      "node.diagnostics",
+      "catalog",
+      "catalog.locations",
+      "deployment.options",
+      "deployment.check",
+      "deployment.prepare",
+      "deployment.create",
+      "deployment.state",
+      "deployment.delete",
+      "deployment.retain",
+      "deployment.list",
+      "deployment.sweep",
+      "storage",
+      "dns"
+    ]
+  }
+}

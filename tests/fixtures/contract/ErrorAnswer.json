@@ -1,0 +1,10 @@
+{
+  "type": "ErrorAnswer",
+  "route": "POST /infra/nodes (400)",
+  "example": {
+    "detail": "'no-such-type' is not a configured node type",
+    "code": "invalid_request",
+    "remedy": "Choose one of the configured node types.",
+    "retry_after_s": null
+  }
+}

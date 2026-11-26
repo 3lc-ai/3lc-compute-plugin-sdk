@@ -1,0 +1,10 @@
+{
+  "type": "Location",
+  "route": "Locations.locations[]",
+  "example": {
+    "id": "fake-1",
+    "label": "Fake region 1",
+    "available": true,
+    "capacity": "High"
+  }
+}
