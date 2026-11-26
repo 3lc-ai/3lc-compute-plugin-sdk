@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - Unreleased
 
+- An infrastructure plugin can act with a stored credential. A node can act on a `SECRET`
+  Connection for a service the manifest declares: on the calls about that node the worker binds the
+  Connection's binding (`current_connection()`), its use (`current_use()`) and its value
+  (`current_credential(service)`), with no resolver to register. A `SECRET` binding without its
+  value, or with a value granted for another Connection or service, answers 424.
+  `CapabilitiesResponse.node_type_connections` names the Connection each node type acts on. Needs a
+  Compute Service 1.3 or later.
 - Add primary-table project transitions to the shared preset controller: derive the output
   project, retain same-project settings, reset defaults across projects with Undo, and preserve
   explicit saved setups. Scope drafts to the current source project and ignore stale/failed reads.
