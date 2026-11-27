@@ -168,6 +168,13 @@ other downstream gates are complete. Hosts independently verify authorized nativ
 job receipts and adopt only completed effects; the original failed attempt stays in
 history. Browser teardown still must never cancel remote work.
 
+An attempt may additionally attest `effect_complete: false` when a terminal worker
+job ended normally but the native operation stopped short (for example, at its
+cost cap). This allows a host `completed` receipt for that parent, while retaining
+the requirement for a verified, fully completed descendant. Omission does not
+make this assertion. Never use it for an active parent or a completed effect;
+the plugin must prove the persisted native outcome and settled requests first.
+
 For a wait step, a native status result may supply the generic `progress.label`
 and `subtitle` presentation fields (for example “Waiting for review” and the
 remaining count). The Hub renders these only for that execution's waiting action.
