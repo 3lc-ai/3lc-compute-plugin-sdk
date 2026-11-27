@@ -14,7 +14,8 @@
         "fake://fake-data/train"
       ],
       "data": [],
-      "create_root": false
+      "create_root": false,
+      "central": false
     },
     "zone": {
       "id": "Z0FAKE",

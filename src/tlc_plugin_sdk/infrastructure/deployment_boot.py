@@ -559,7 +559,8 @@ def render_deployment_script(
     ``mode`` is the Compute Service's mode; ``demo`` also gets a local, empty project root, the public
     tutorial projects and no default plugins. ``storage.root`` is written into both services' environment;
     an empty one writes none, so the services take the root the Config Service holds, else the core's
-    local default. ``storage.scan`` are folders to index. With ``bootstrap.record_id`` and
+    local default. ``storage.scan`` are folders to index. With ``storage.central`` neither is written:
+    the Config Service holds both as the deployment's settings, and they only bound the Object Service. With ``bootstrap.record_id`` and
     ``bootstrap.token`` the machine redeems the token at the Config Service before the services start and
     each service reads its own key from its own environment file; with both empty it redeems nothing.
     ``hostnames`` are the names Caddy serves; ``None`` names the deployment by its public address under
@@ -637,9 +638,12 @@ def render_deployment_script(
     # Explicit scan entries merge with central scan-urls; never copy the launcher's own scan roots.
     service_env.pop("TLC_SCAN_URLS", None)
     service_env.pop("TLC_CONFIG_PROJECT_SCAN_URLS", None)
-    if project_scan_urls:
+    # Settings the Config Service holds are read from it: an environment value would outrank them
+    # and pin the deployment to what it was launched with.
+    central = request.storage.central and mode != "demo"
+    if project_scan_urls and not central:
         service_env["TLC_SCAN_URLS"] = ",".join(project_scan_urls)
-    if project_root_url:
+    if project_root_url and not central:
         service_env["TLC_PROJECT_ROOT_URL"] = project_root_url
     elif mode == "demo":
         service_env["TLC_PROJECT_ROOT_URL"] = DEMO_PROJECT_ROOT
