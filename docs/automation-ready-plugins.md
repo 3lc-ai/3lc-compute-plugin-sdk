@@ -105,7 +105,15 @@ to attest completion without replaying successful work.
 
 ## 4. Give Home enough evidence to be useful
 
-Flow renders generic stages and status. Report facts for the **current operation**:
+Flow renders generic stages and status. A host template can declare a short
+`presentation.purpose` (maximum 180 characters), named stages and receipt-bound
+metrics. State the outcome in one sentence; a workflow name such as “Initial model”
+does not explain its purpose. Use concise stage names and the appropriate stage
+role (input, process, review, training, decision or release). Keep implementation
+steps inside stage details. The current stage is derived from the actual receipt,
+not a completion percentage or an inferred project lifecycle.
+
+Report facts for the **current operation**:
 
 | State | What the plugin supplies | Useful user action |
 |---|---|---|
@@ -164,3 +172,61 @@ Current examples: YOLO reuses a completed training recipe; Driftcatcher Inferenc
 reuses an observation configuration; Refine reports review/publication gates and
 scoped review/verification links. An image admission decision remains an image
 decision: annotations and revised datasets belong in native 3LC Tables.
+
+## Example: an enterprise report plugin
+
+Start with a useful manual result: select exact Run or Table revisions, generate
+the report, then open it. Save those source references, report settings and the
+output alongside the native job. A report must distinguish recorded measurements
+from generated interpretation and link back to its sources.
+
+Expose the same operation as a schema-declared MCP tool and native job so Flow can
+use it as a step. Report progress through the standard job contract and return a
+scoped `ui_link` to the saved report. A documented Markdown output can be read in
+Hub tool activity; other formats remain available through the plugin result page.
+Do not overload a Run URL with a PDF or report URL.
+
+Once the user has tried it, offer a reviewed automation draft for a supported
+trigger, such as a completed training run. The report generation and any external
+distribution are separate operations: generating a report does not authorize
+emailing or publishing it. Show destinations and approval points before enabling.
+The template-registration limitation in section 2 still applies; there is no
+automatic discovery of templates from a plugin manifest in this SDK version.
+
+The acceptance test is the user journey: manual report → saved result → reviewed
+draft → enabled workflow → visible progress → the exact report in Home history.
+Manual use must work without Flow. The plugin needs no customer-specific Home
+renderer or parallel scheduler.
+
+
+### Explain the stage and its evidence
+
+Flow template presentation may declare a short `purpose` for each stage. Explain
+the value of completing it (for example, "Confirm labels before these images enter
+the training set"), not the implementation. The current action supplies the actual
+status, blocker and destination.
+
+Metrics stay grouped with the action receipt that produced them, its stage and
+recorded time. A count must not float elsewhere as an unexplained project total.
+Use explicit labels and units: images screened, images admitted, annotation
+findings reviewed, or validation score. These are different milestones.
+
+An optional metric `denominator_path` and `ratio_label` can show a subset's share.
+Both paths resolve against the same result receipt. Declare the denominator only
+when it counts the same population; never combine a lifetime total, another
+execution, or the next unclaimed input pool. Zero, missing, invalid or smaller
+denominators produce no share. A selection share is not workflow progress.
+
+```json
+{
+  "id": "admitted", "label": "Selected for curation", "source": "step",
+  "step_id": "reserve", "path": "outputs.selected_images",
+  "denominator_path": "outputs.observed_images", "ratio_label": "of screened",
+  "format": "integer", "unit": "images", "scope": "execution"
+}
+```
+
+Meaningful progress is a saved result: a published Table revision, a completed
+training Run, or a passed release condition. Do not reward accepting annotations,
+infer success from a completed job, or imply that selected images already trained
+the model. Keep the exact artifact available for inspection.
