@@ -111,12 +111,13 @@ jobs:
           : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'release' environment}"
           : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'release' environment}"
 
-      # A staged build is the pre-release X.Y.Z.devN, N this workflow's run number, so it sorts
-      # below the X.Y.Z release and above every earlier staged build of the line.
+      # A staged build is the pre-release X.Y.Z.devN, N = run number * 100 + attempt, so it sorts
+      # below the X.Y.Z release, above every earlier staged build of the line, and a re-run of a run
+      # that already published gets a version of its own.
       - name: Number the staged build
         run: |
           BASE=$(uv version --frozen --output-format json | jq -r '.version')
-          STAGED_VERSION="${BASE}.dev${GITHUB_RUN_NUMBER}"
+          STAGED_VERSION="${BASE}.dev$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))"
           uv version --frozen "$STAGED_VERSION"
           echo "staged build version: $STAGED_VERSION"
 
