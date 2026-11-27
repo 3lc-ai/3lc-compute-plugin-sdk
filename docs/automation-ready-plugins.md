@@ -119,6 +119,38 @@ role (input, process, review, training, decision or release). Keep implementatio
 steps inside stage details. The current stage is derived from the actual receipt,
 not a completion percentage or an inferred project lifecycle.
 
+For an outcome-first stage detail, a host template can declare optional `artifacts`
+on a stage. Each binding is `{role, kind, label, step_id, source, path}`:
+
+```json
+[
+  {"role":"input","kind":"table","label":"Dataset to review","step_id":"train","source":"arguments","path":"train_table_url"},
+  {"role":"supporting","kind":"run","label":"Training evidence","step_id":"train","source":"result","path":"outputs.run_url"},
+  {"role":"output","kind":"table","label":"Reviewed table","step_id":"publish","source":"result","path":"table_url"}
+]
+```
+
+Declare at most four artifacts: one primary `input`, one primary `output`, and
+optional `supporting` artifacts. Kinds are `table` or `run`; labels are plain text
+up to 80 characters. `path` is a bounded dot-separated property path, not JSONPath,
+code, a URL template, or a recursive search. Reserved prototype properties are rejected.
+An output must bind to `result` of a step inside the stage. Inputs/supporting
+artifacts may also bind to an earlier workflow step. `arguments` means the saved,
+resolved action arguments, never unexecuted plan placeholders.
+
+Resolve only the selected execution's exact actions, including explicitly preserved
+recovery receipts. Show result bindings only after their producing action succeeds.
+Missing, failed, ambiguous or wrong-kind values are not artifacts; do not search
+other fields or another execution for a substitute. Keep the no-result state
+explicit. A trained Run can support Fix Run; it is not its resulting dataset.
+Labeling from scratch has no invented training evidence. Reference files are not
+Tables or Runs and should retain their declared native tool destination instead.
+
+These descriptors change presentation only. They do not alter execution, approve
+publication, or make a future result exist. Old configurations can omit them; older
+services may reject the new fields, so template configuration must feature-detect
+the offered schema rather than require a compatibility-floor increase.
+
 Report facts for the **current operation**:
 
 | State | What the plugin supplies | Useful user action |
