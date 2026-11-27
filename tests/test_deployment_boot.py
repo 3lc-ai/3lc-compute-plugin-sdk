@@ -163,6 +163,16 @@ def test_storage_settings_and_allowed_urls() -> None:
     assert "/srv/3lc/projects/x" not in object_service_allowed_urls("/srv/3lc/projects/x")
 
 
+def test_central_storage_settings_are_not_written_and_still_bound_the_object_service() -> None:
+    storage = DeploymentStorage(root="abfs://projects/root", scan=["abfs://data/a"], central=True)
+    written = _env_file(_render(_request(storage=storage), storage_schemes=["abfs://"]))
+    assert "TLC_PROJECT_ROOT_URL" not in written
+    assert "TLC_SCAN_URLS" not in written
+    assert written["TLC_SERVICE_ALLOWED_URLS"] == '"abfs://,/srv/3lc/projects,/root/.local/share/3LC/projects"'
+    demo = _env_file(_render(_request(mode="demo", storage=storage)))
+    assert demo["TLC_PROJECT_ROOT_URL"] == '"abfs://projects/root"'
+
+
 def test_demo_mode_has_a_local_root_the_public_examples_and_no_default_plugins() -> None:
     script = _render(_request(mode="demo"))
     written = _env_file(script)

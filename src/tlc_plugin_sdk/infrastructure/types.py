@@ -1520,12 +1520,16 @@ class DeploymentStorage(Wire):
         scan: Read-only folders to index.
         data: Read-only dataset locations.
         create_root: Create the root's container when it does not exist.
+        central: The Config Service holds ``root`` and ``scan`` as the deployment's own settings. The
+            machine's environment names neither, so its services follow those settings and a later
+            change to them; the provider still grants reach to both and bounds the Object Service by them.
     """
 
     root: str = ""
     scan: list[str] = field(default_factory=list)
     data: list[str] = field(default_factory=list)
     create_root: bool = False
+    central: bool = False
 
 
 @dataclass

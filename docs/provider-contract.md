@@ -884,6 +884,8 @@ class DeploymentStorage:
     scan: list[str] = field(default_factory=list)   # read-only folders to index
     data: list[str] = field(default_factory=list)   # read-only dataset locations
     create_root: bool = False          # create the root's container when it does not exist
+    central: bool = False              # the Config Service holds root and scan as the deployment's settings:
+                                       # the machine's environment names neither
 
 
 @dataclass

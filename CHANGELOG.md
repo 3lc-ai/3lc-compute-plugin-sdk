@@ -25,6 +25,9 @@ for the 0.7 infrastructure or Connections surface needs porting: the document's 
   (`Offer`) replaces the GPU and CPU catalogs, and `locations` replaces datacenters.
 - Deployments: options, check, prepare, create, state, delete, retain, list and sweep, with the
   launcher's DNS zone written through `DnsFacet`. `FakeProvider` implements them all.
+  `DeploymentStorage.central` says the Config Service holds the root and the scan folders as the
+  deployment's own settings: the boot script then writes neither into the machine's environment,
+  and keeps bounding the Object Service by them.
 - The Connection binding carries `account`, `access`, `defaults`, `permissions` and `grant_ref`
   and names no vendor. `register_resolver(provider, resolver)` takes a `ResolveRequest` and
   returns the plugin's own credential class (`ProviderCredential`); `credential_as(cls)` reads it
