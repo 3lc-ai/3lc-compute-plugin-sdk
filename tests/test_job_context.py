@@ -184,6 +184,26 @@ def test_worker_success_is_done_completed() -> None:
     assert _terminal_event(run_job) == {"event": "done", "status": "completed", "job_id": "j"}
 
 
+def test_controlled_stop_output_never_changes_the_failed_terminal_event(tmp_path: Path) -> None:
+    from tlc_plugin_sdk.worker import _Job
+
+    message = "Limit reached; saved work remains available."
+    attention = {"kind": "controlled_stop", "label": "Limit reached", "message": message}
+
+    def run_job(ctx: JobContext) -> None:
+        ctx.output("attention", attention)
+        ctx.fail(message)
+
+    job = _Job("controlled-stop", {}, tmp_path, _FakePlugin(run_job))
+    job._run()
+    events = []
+    while not job.events.empty():
+        events.append(job.events.get())
+    assert events[-2]["event"] == "output" and events[-2]["value"] == attention
+    assert events[-1] == {"event": "error", "message": message, "job_id": "controlled-stop"}
+    assert not any(event["event"] == "done" for event in events)
+
+
 def _ctx_with(params: dict[str, Any]) -> JobContext:
     return JobContext("job-1", params, Path("/tmp"), sink=lambda _e: None, cancel_event=threading.Event())
 

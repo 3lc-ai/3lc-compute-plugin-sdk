@@ -675,6 +675,15 @@ export interface PluginApi {
 
 // ── window.PluginJobs — SDK-injected job-tracker client ────────────────────────
 
+/** Optional presentation for an incomplete job that stopped at a verified limit or policy. */
+export interface PluginJobAttention {
+  kind: 'controlled_stop';
+  /** Plain text, 1–80 characters. Presentation only; never a new job status. */
+  label: string;
+  /** Plain text, 1–600 characters; must exactly equal the failed job's error. */
+  message: string;
+}
+
 /** The opaque generic job object delivered to `PluginJobs` handlers. */
 export interface PluginJobUpdate {
   /** 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'. */
@@ -690,6 +699,8 @@ export interface PluginJobUpdate {
   waiting_reason?: string;
   /** Failure message on a failed job (host >= 0.6); empty/absent otherwise. */
   error?: string;
+  /** Ignore attention unless status is failed and its bounded message equals error. */
+  outputs?: { attention?: PluginJobAttention; [key: string]: any };
   progress?: { percent?: number; label?: string; timing?: any };
   metrics?: Array<{ label?: string; value?: any }>;
   run_url?: string;

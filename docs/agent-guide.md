@@ -148,6 +148,16 @@ Keep all credentials and network transport in trusted parent code. The existing
 `data_broker`/`data_access` modules provide read-only native 3LC access through a
 bounded parent-side RPC channel; do not pass broker credentials into generated code.
 
+### Controlled job stops
+
+For a verified controlled stop, use the optional generic `attention` job output
+documented in the plugin guide: `{kind: "controlled_stop", label, message}` followed
+immediately by `ctx.fail(message)`. Keep the terminal failure and exact error; this
+is presentation, not completion or permission to retry. Never infer a cost/policy
+stop from exception text. The label is at most 80 characters and message at most
+600; consumers ignore it unless the failed job's error exactly matches message.
+No new SDK runtime method or host endpoint is required.
+
 ### Native continuation receipts
 
 A job tool may declare `job.continuation`, an optional **GET** route using the same

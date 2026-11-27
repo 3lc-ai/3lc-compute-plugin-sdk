@@ -1269,6 +1269,7 @@ class MyGpuPlugin(ComputePlugin):
 | `ctx.metric(label, value)` | Scalar metric card on the generic panel. |
 | `ctx.log(message)` | A log line for the job. |
 | `ctx.result(url)` | The canonical result link the Open button opens — a run *or* a table URL (last write wins). |
+| `ctx.output(name, value)` | Named JSON output retained in the job record, including optional generic presentation metadata below. |
 | `ctx.fail(message)` | Fail the job with a clean, user-facing message (raises `JobFailed`; reported verbatim, no type prefix). |
 | `ctx.emit(name, payload)` | A **custom** event for the plugin's OWN rich UI (see below). |
 
@@ -1279,6 +1280,30 @@ own `JobManager`. There is **no** `get_active_jobs()` / `cancel_job()` on the co
 The `progress` / `metric` / `result` calls above are what populate that generic panel —
 translated to the frontend's plugin-agnostic schema by the host, so no plugin-specific
 field ever reaches the frontend.
+
+**Controlled stops (SDK contract 0.7.20).** A verified limit or policy stop may explain
+why work is incomplete without presenting it as an unexpected crash. Immediately
+before failing, record this optional output:
+
+```python
+message = "Cost limit reached. Saved work is retained; review the limit in the tool before continuing."
+ctx.output("attention", {"kind": "controlled_stop", "label": "Cost limit reached", "message": message})
+ctx.fail(message)
+```
+
+`label` is nonempty plain text, at most 80 characters; `message` is nonempty plain
+text, at most 600 characters, and must exactly match the subsequent `ctx.fail`
+message. The Hub uses this presentation only for a **failed** job with that exact
+error. A later different exception, malformed metadata, or a running/completed job
+keeps its normal presentation. Emit it only after your own authoritative state
+confirms the controlled stop, never by matching an exception's wording. Preserve
+native result/review links separately. No action is resumed automatically.
+
+This does not add a job status: `status` stays `failed`, the CPU/GPU slot is
+released, and orchestration must not advance as if the requested work completed.
+Older hosts already carry the named output; older frontends show the ordinary
+failure and its useful message. Do not rewrite historical jobs or claim unsaved
+work was retained.
 
 **A cancel always ends the job — poll `ctx.cancelled` so it ends cleanly.** Cancel is
 cooperative first: the worker sets `ctx.cancelled` and your loop returns at its next

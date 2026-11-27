@@ -172,6 +172,14 @@ response. `track` and `on` return unsubscribe functions. Render by job ID and ma
 terminal rendering idempotent: list snapshots and live events can overlap. A
 missing network update does not mean a job failed. Recover state with `list`.
 
+A failed job may carry `outputs.attention` with `kind: "controlled_stop"`, a
+nonempty plain-text `label` (at most 80 characters) and `message` (at most 600).
+Use this optional presentation only when `message` exactly equals `job.error`.
+Otherwise render the normal error, including when a later exception differs.
+The machine status remains `failed`; never invoke success handling, advance an
+automation, or restart work because this annotation is present. Render as text,
+not HTML. Older jobs simply omit the annotation.
+
 The runtime obtains one-use, namespace-bound socket tickets through the Hub and
 renews established connections in place, with jitter and transient retries. It
 refreshes job snapshots after reconnect and gives concurrent live updates precedence.
