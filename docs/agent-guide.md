@@ -185,6 +185,19 @@ the requirement for a verified, fully completed descendant. Omission does not
 make this assertion. Never use it for an active parent or a completed effect;
 the plugin must prove the persisted native outcome and settled requests first.
 
+A person can also complete the same task by starting a separate native operation.
+For that case only, version 2 adds `relationship: "independent_completion"` and
+`completion_revision`, a positive integer identifying the current native review
+revision. Supply exactly two attempts: the stopped original and the later completed
+operation. Retain their real parent fields; the second must have no parent. Never
+invent a continuation chain. Verify identical immutable scope, owner and policies,
+a later creation time, no descendants of either operation, settled requests, and
+complete coverage of the original task. Active or partially completed independent
+work cannot be adopted. The resolver must revalidate the current source, instructions
+and decisions; the host re-reads the proof before commit and independently verifies
+both authorized job receipts. Both original records remain unchanged. Review and
+publication gates still run separately. Hosts without version 2 support reject it.
+
 For a wait step, a native status result may supply the generic `progress.label`
 and `subtitle` presentation fields (for example “Waiting for review” and the
 remaining count). The Hub renders these only for that execution's waiting action.
