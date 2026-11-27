@@ -2065,10 +2065,17 @@ For a job, declare `idempotentHint: true` and `destructiveHint: false` only when
 repeating the exact inputs cannot duplicate effects or overwrite an existing result.
 A content-addressed artifact builder must validate and reuse an existing artifact,
 including after a lost response. This does not authorize automatic retries: Flow
-requires a verified terminal failure, an explicit repeat-safe confirmation and a
-fresh action approval. Running, completed and unknown jobs are never replayed.
-Outputs from the failed attempt remain in history. A retry that refreshes inputs
-cannot use this guarantee to bypass partial-output reconciliation.
+requires a verified terminal failure, or explicit reconciliation of a request that
+returned no job receipt, followed by repeat-safe confirmation and a fresh action
+approval. Running or completed jobs are never replayed; an unknown outcome must
+be reconciled first. Outputs from a failed attempt remain in history. A retry
+that changes inputs cannot use this guarantee to bypass reconciliation.
+
+Host-generated data preparation can be renewed after a service restart. Flow asks
+for approval to prepare again and to resume the job. Only the preparation receipt
+may change; the model, tables, compute target and other job arguments remain exact.
+Plugin authors should declare data inputs and use the generated preparation tools,
+rather than storing preparation IDs as permanent dataset references.
 
 Successful results are returned as `structuredContent` and compatible JSON text.
 A native non-object result is wrapped as `{"result": value}`; declare that shape
