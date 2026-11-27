@@ -91,11 +91,17 @@ Observe external input with a read-only status tool. Report what is being watche
 how many eligible inputs are ready, the threshold, and why it is waiting. A browser
 tab must not be required for observation or execution.
 
-Use a stable input key for a frozen batch and consume it only according to the
+Use a stable input identifier for a frozen batch and consume it only according to the
 native persisted result. A retry, page refresh or service restart must not admit
 the same batch twice. Do not reinterpret an in-progress batch using a newly changed
 folder listing or model. Specify whether existing inputs are baselined or included
 when an automation is enabled; never silently replay historical data.
+
+Name nonsecret digests `input_id` or `observation_id`. Avoid credential-shaped
+field names such as `input_key`: the host redacts those fields before persisting
+results and binding the next action. Test the identifier through durable result
+redaction, not only the plugin’s status endpoint. Never weaken credential masking
+to preserve a workflow identifier.
 
 Keep original attempts and receipts. An error before any mutating request and an
 unknown outcome after a lost response need different recovery paths. Never claim
