@@ -2061,6 +2061,15 @@ conservatively as destructive, non-idempotent and open-world. Safety annotations
 are advisory: a POST or job still requires write authority even if it claims to
 be read-only. Use required properties and concrete types in output schemas.
 
+For a job, declare `idempotentHint: true` and `destructiveHint: false` only when
+repeating the exact inputs cannot duplicate effects or overwrite an existing result.
+A content-addressed artifact builder must validate and reuse an existing artifact,
+including after a lost response. This does not authorize automatic retries: Flow
+requires a verified terminal failure, an explicit repeat-safe confirmation and a
+fresh action approval. Running, completed and unknown jobs are never replayed.
+Outputs from the failed attempt remain in history. A retry that refreshes inputs
+cannot use this guarantee to bypass partial-output reconciliation.
+
 Successful results are returned as `structuredContent` and compatible JSON text.
 A native non-object result is wrapped as `{"result": value}`; declare that shape
 in its output schema. Job tools return a submission receipt or, with `wait`, the
