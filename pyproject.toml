@@ -52,7 +52,8 @@ dependencies = [
     # venv resolves fresh at install time and every worker depends on this SDK, so the broken release
     # is excluded here rather than in each plugin.
     "multidict!=7.2.0",
-    "3lc[pandas]>=3.5.0.dev154037,<4.0.0",
+    # The floor names the line; the release job writes the release floor (scripts/release_floors.py).
+    "3lc[pandas]>=3.5.0.dev0,<4.0.0",
 ]
 
 [project.urls]

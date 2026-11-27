@@ -5,7 +5,7 @@ name: Release
 # commit, then push a tag `vX.Y.Z` that matches the version.
 #
 # Manual runs build POC wheels for the private staging index (CloudRepo `prereleases`).
-# Build-only is the default; publishing is an explicit input. Build stamps never reach PyPI.
+# Build-only is the default; publishing is an explicit input. Staged builds never reach PyPI.
 
 on:
   push:
@@ -46,6 +46,12 @@ jobs:
           TAG="${GITHUB_REF_NAME#v}"
           echo "pyproject=$PKG tag=$TAG"
           [ "$PKG" = "$TAG" ] || { echo "::error::tag $GITHUB_REF_NAME ($TAG) != pyproject version $PKG"; exit 1; }
+
+      # In source the 3lc floor names the line (>=X.Y.Z.dev0). The release requires the release:
+      # this writes >=X.Y.Z, and refuses a pre-release or build-stamped 3lc requirement, or a
+      # 3lc X.Y.Z that is not on PyPI.
+      - name: Write the release floors
+        run: uv run --no-project --with "packaging>=24" python scripts/release_floors.py pyproject.toml
 
       # --no-sources strips [tool.uv.sources] so the released wheel never bakes in a dev
       # index/path override (the published artifact resolves deps from PyPI).
@@ -105,12 +111,12 @@ jobs:
           : "${UV_PUBLISH_USERNAME:?set the CLOUDREPO_USERNAME secret on the 'release' environment}"
           : "${UV_PUBLISH_PASSWORD:?set the CLOUDREPO_PASSWORD secret on the 'release' environment}"
 
-      # The UTC stamp sorts after existing timestamped POC builds. Run + attempt distinguish
-      # concurrent builds and reruns, while numeric segments satisfy ordinary SDK ranges.
-      - name: Stamp build-numbered version
+      # A staged build is the pre-release X.Y.Z.devN, N this workflow's run number, so it sorts
+      # below the X.Y.Z release and above every earlier staged build of the line.
+      - name: Number the staged build
         run: |
           BASE=$(uv version --frozen --output-format json | jq -r '.version')
-          STAGED_VERSION="${BASE}.$(date -u +%Y%m%d%H%M%S).${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          STAGED_VERSION="${BASE}.dev${GITHUB_RUN_NUMBER}"
           uv version --frozen "$STAGED_VERSION"
           echo "staged build version: $STAGED_VERSION"
 
